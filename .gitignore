@@ -1,0 +1,4 @@
+venv/
+env.sh
+*.env
+.env
