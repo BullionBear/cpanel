@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]
 
+    # Email Settings
+    SMTP_URL: str = "smtp.hostinger.com:465"
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_EMAIL: str = ""
+    SMTP_FROM_NAME: str = "CPanel"
+
     class Config:
         env_file_encoding = "utf-8"
         case_sensitive = True
