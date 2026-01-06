@@ -24,13 +24,13 @@ class UserRepository:
         """Get user by email."""
         return self.db.query(User).filter(User.email == email).first()
 
-    def create(self, username: str, email: str, hashed_password: str) -> User:
+    def create(self, username: str, email: str, hashed_password: str, is_active: bool = False) -> User:
         """Create a new user."""
         user = User(
             username=username,
             email=email,
             hash_password=hashed_password,
-            is_active=True,
+            is_active=is_active,
         )
         self.db.add(user)
         self.db.commit()
@@ -41,8 +41,8 @@ class UserRepository:
         """Update user's last login timestamp."""
         user = self.get_by_id(user_id)
         if user:
-            from datetime import datetime
-            user.last_login = datetime.utcnow()
+            from datetime import datetime, timezone
+            user.last_login = datetime.now(timezone.utc)
             self.db.commit()
             self.db.refresh(user)
         return user
@@ -65,4 +65,13 @@ class UserRepository:
     def list_all(self, skip: int = 0, limit: int = 100) -> list[User]:
         """List all users with pagination."""
         return self.db.query(User).offset(skip).limit(limit).all()
+
+    def activate_user(self, user_id: int) -> Optional[User]:
+        """Activate a user by setting is_active to True."""
+        user = self.get_by_id(user_id)
+        if user:
+            user.is_active = True
+            self.db.commit()
+            self.db.refresh(user)
+        return user
 

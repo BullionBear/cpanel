@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "CPanel API"
     VERSION: str = "1.0.0"
     DEBUG: bool = False
+    HOST_URL: str = "http://localhost:8000"  # Base URL for activation links
 
     # Security
     SECRET_KEY: str = "your-secret-key-change-in-production"
