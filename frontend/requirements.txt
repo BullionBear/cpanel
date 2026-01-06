@@ -1,0 +1,3 @@
+# Frontend dependencies are managed via npm/package.json
+# Install with: npm install
+
