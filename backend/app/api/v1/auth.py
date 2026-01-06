@@ -84,14 +84,42 @@ async def register(
         is_active=False,  # User must activate via /activate endpoint
     )
     
-    # Send welcome email to newly registered user
-    email_subject = "Welcome to CPanel - Activate Your Account"
+    # Generate activation token (30 minutes expiry)
+    expires_delta = timedelta(minutes=30)
+    token_data = {
+        "sub": str(user.id),
+        "username": user.username,
+        "email": user.email,
+        "is_active": False,
+        "type": "activation",
+    }
+    activation_token = create_access_token(data=token_data, expires_delta=expires_delta)
+    
+    # Calculate expired_at datetime
+    expired_at = datetime.now(timezone.utc) + expires_delta
+    
+    # Save token to database
+    access_repo = AccessRepository(db)
+    access_repo.create(
+        user_id=user.id,
+        access_token=activation_token,
+        expired_at=expired_at,
+    )
+    
+    # Create activation URL
+    activation_url = f"{settings.HOST_URL}{settings.API_V1_PREFIX}/auth/activate?token={activation_token}"
+    
+    # Send activation email
+    email_subject = "Activate Your CPanel Account"
     email_body = f"""
 Hello {user_data.username},
 
 Thank you for registering with CPanel!
 
-To activate your account, please log in using your credentials. You will receive an activation link via email after logging in.
+Please click the link below to activate your account:
+{activation_url}
+
+This activation link will expire in 30 minutes.
 
 If you did not create this account, please ignore this email.
 
@@ -102,10 +130,12 @@ CPanel Team
     email_html = f"""
     <html>
       <body>
-        <h2>Welcome to CPanel</h2>
+        <h2>Activate Your CPanel Account</h2>
         <p>Hello {user_data.username},</p>
         <p>Thank you for registering with CPanel!</p>
-        <p>To activate your account, please <strong>log in</strong> using your credentials. You will receive an activation link via email after logging in.</p>
+        <p>Please click the link below to activate your account:</p>
+        <p><a href="{activation_url}">{activation_url}</a></p>
+        <p><em>This activation link will expire in 30 minutes.</em></p>
         <p>If you did not create this account, please ignore this email.</p>
         <hr>
         <p><em>Best regards,<br>CPanel Team</em></p>
@@ -129,7 +159,7 @@ CPanel Team
     )
 
 
-@router.post("/login", response_model=Token)
+@router.post("/login")
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
@@ -137,8 +167,8 @@ async def login(
     """
     Login endpoint.
     
-    For activated users: JWT token expires in 7 days
-    For inactive users: JWT token expires in 30 minutes (for activation)
+    For activated users: Returns JWT token (expires in 7 days)
+    For inactive users: Sends activation email with token, returns success message (no token in response)
     """
     user_repo = UserRepository(db)
     access_repo = AccessRepository(db)
@@ -158,39 +188,59 @@ async def login(
             detail="Incorrect username or password"
         )
     
-    # Determine token expiry based on user activation status
-    if user.is_active:
-        # Activated user: 7 days
-        expires_delta = timedelta(days=7)
-    else:
-        # Inactive user: 30 minutes (for activation)
-        expires_delta = timedelta(minutes=30)
-    
-    # Create JWT token
-    token_data = {
-        "sub": str(user.id),
-        "username": user.username,
-        "email": user.email,
-        "is_active": user.is_active,
-    }
-    access_token = create_access_token(data=token_data, expires_delta=expires_delta)
-    
-    # Calculate expired_at datetime
-    expired_at = datetime.now(timezone.utc) + expires_delta
-    
-    # Save token to database
-    access_repo.create(
-        user_id=user.id,
-        access_token=access_token,
-        expired_at=expired_at,
-    )
-    
     # Update last_login
     user_repo.update_last_login(user.id)
     
-    # Send activation email if user is inactive
-    if not user.is_active:
-        activation_url = f"{settings.HOST_URL}{settings.API_V1_PREFIX}/auth/activate?token={access_token}"
+    if user.is_active:
+        # Activated user: Create access token (7 days) and return it
+        expires_delta = timedelta(days=7)
+        token_data = {
+            "sub": str(user.id),
+            "username": user.username,
+            "email": user.email,
+            "is_active": True,
+            "type": "access",
+        }
+        access_token = create_access_token(data=token_data, expires_delta=expires_delta)
+        
+        # Calculate expired_at datetime
+        expired_at = datetime.now(timezone.utc) + expires_delta
+        
+        # Save token to database
+        access_repo.create(
+            user_id=user.id,
+            access_token=access_token,
+            expired_at=expired_at,
+        )
+        
+        # Return token for active users
+        return Token(access_token=access_token, token_type="bearer")
+    else:
+        # Inactive user: Create activation token (30 minutes) and send via email, don't return token
+        expires_delta = timedelta(minutes=30)
+        token_data = {
+            "sub": str(user.id),
+            "username": user.username,
+            "email": user.email,
+            "is_active": False,
+            "type": "activation",
+        }
+        activation_token = create_access_token(data=token_data, expires_delta=expires_delta)
+        
+        # Calculate expired_at datetime
+        expired_at = datetime.now(timezone.utc) + expires_delta
+        
+        # Save token to database
+        access_repo.create(
+            user_id=user.id,
+            access_token=activation_token,
+            expired_at=expired_at,
+        )
+        
+        # Create activation URL
+        activation_url = f"{settings.HOST_URL}{settings.API_V1_PREFIX}/auth/activate?token={activation_token}"
+        
+        # Send activation email
         email_subject = "Activate Your CPanel Account"
         email_body = f"""
 Hello {user.username},
@@ -229,8 +279,12 @@ CPanel Team
             body=email_body,
             html_body=email_html,
         )
-    
-    return Token(access_token=access_token, token_type="bearer")
+        
+        # Return success message without token for inactive users
+        return {
+            "message": "Login successful. Please check your email for activation link.",
+            "is_active": False,
+        }
 
 
 @router.get("/me", response_model=UserResponse)
