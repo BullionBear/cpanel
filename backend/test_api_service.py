@@ -195,6 +195,203 @@ def test_invalid_credentials():
     return True
 
 
+def test_binance_balance():
+    """Test Binance balance retrieval."""
+    print("\n" + "="*60)
+    print("Testing Binance Balance Retrieval")
+    print("="*60)
+    
+    service = ApiService()
+    
+    try:
+        balance = service.get_balance(
+            exchange='BINANCE',
+            api_key=BINANCE_API_KEY,
+            api_secret=BINANCE_API_SECRET,
+            passphrase=None
+        )
+        print("✓ Binance balance retrieval: SUCCESS")
+        print(f"  Found {len(balance)} wallet(s)")
+        for wallet in balance:
+            wallet_type = wallet.get('wallet', 'UNKNOWN')
+            balances = wallet.get('balance', [])
+            print(f"  - {wallet_type}: {len(balances)} token(s)")
+            # Show first 3 tokens as sample
+            for token_balance in balances[:3]:
+                token = token_balance.get('token', '')
+                total = token_balance.get('total', '0')
+                print(f"    • {token}: {total}")
+            if len(balances) > 3:
+                print(f"    ... and {len(balances) - 3} more")
+        return True
+        
+    except NetworkError as e:
+        print(f"✗ Binance balance retrieval: FAILED - Network Error")
+        print(f"  Error: {e.message}")
+        return False
+    except ExchangeError as e:
+        print(f"✗ Binance balance retrieval: FAILED - Exchange Error")
+        print(f"  Error: {e.message}")
+        if e.error_code is not None:
+            print(f"  Error Code: {e.error_code}")
+        return False
+    except Exception as e:
+        print(f"✗ Binance balance retrieval: UNEXPECTED ERROR")
+        print(f"  Error: {str(e)}")
+        print(f"  Type: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def test_bybit_balance():
+    """Test Bybit balance retrieval."""
+    print("\n" + "="*60)
+    print("Testing Bybit Balance Retrieval")
+    print("="*60)
+    
+    service = ApiService()
+    
+    try:
+        balance = service.get_balance(
+            exchange='BYBIT',
+            api_key=BYBIT_API_KEY,
+            api_secret=BYBIT_API_SECRET,
+            passphrase=None
+        )
+        print("✓ Bybit balance retrieval: SUCCESS")
+        print(f"  Found {len(balance)} wallet(s)")
+        for wallet in balance:
+            wallet_type = wallet.get('wallet', 'UNKNOWN')
+            balances = wallet.get('balance', [])
+            print(f"  - {wallet_type}: {len(balances)} token(s)")
+            # Show first 3 tokens as sample
+            for token_balance in balances[:3]:
+                token = token_balance.get('token', '')
+                total = token_balance.get('total', '0')
+                print(f"    • {token}: {total}")
+            if len(balances) > 3:
+                print(f"    ... and {len(balances) - 3} more")
+        return True
+        
+    except NetworkError as e:
+        print(f"✗ Bybit balance retrieval: FAILED - Network Error")
+        print(f"  Error: {e.message}")
+        return False
+    except ExchangeError as e:
+        print(f"✗ Bybit balance retrieval: FAILED - Exchange Error")
+        print(f"  Error: {e.message}")
+        if e.error_code is not None:
+            print(f"  Error Code: {e.error_code}")
+        return False
+    except Exception as e:
+        print(f"✗ Bybit balance retrieval: UNEXPECTED ERROR")
+        print(f"  Error: {str(e)}")
+        print(f"  Type: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def test_balance_format():
+    """Test that balance format is correct."""
+    print("\n" + "="*60)
+    print("Testing Balance Format Validation")
+    print("="*60)
+    
+    service = ApiService()
+    
+    # Test Binance format
+    print("\n1. Testing Binance balance format:")
+    try:
+        balance = service.get_balance(
+            exchange='BINANCE',
+            api_key=BINANCE_API_KEY,
+            api_secret=BINANCE_API_SECRET
+        )
+        
+        # Validate format
+        if not isinstance(balance, list):
+            print("   ✗ Balance is not a list")
+            return False
+        
+        for wallet in balance:
+            if 'wallet' not in wallet or 'balance' not in wallet:
+                print("   ✗ Wallet missing 'wallet' or 'balance' key")
+                return False
+            
+            wallet_type = wallet['wallet']
+            if wallet_type not in ['SPOT', 'MARGIN', 'FUTURES', 'UNIFIED', 'FUNDING']:
+                print(f"   ✗ Invalid wallet type: {wallet_type}")
+                return False
+            
+            if not isinstance(wallet['balance'], list):
+                print("   ✗ Balance is not a list")
+                return False
+            
+            for token_balance in wallet['balance']:
+                required_keys = ['token', 'total', 'frozen', 'available']
+                for key in required_keys:
+                    if key not in token_balance:
+                        print(f"   ✗ Token balance missing '{key}' key")
+                        return False
+                    if not isinstance(token_balance[key], str):
+                        print(f"   ✗ Token balance '{key}' is not a string")
+                        return False
+        
+        print("   ✓ Binance balance format is correct")
+        return True
+        
+    except Exception as e:
+        print(f"   ✗ Error validating format: {str(e)}")
+        return False
+    
+    # Test Bybit format
+    print("\n2. Testing Bybit balance format:")
+    try:
+        balance = service.get_balance(
+            exchange='BYBIT',
+            api_key=BYBIT_API_KEY,
+            api_secret=BYBIT_API_SECRET
+        )
+        
+        # Validate format (same as Binance)
+        if not isinstance(balance, list):
+            print("   ✗ Balance is not a list")
+            return False
+        
+        for wallet in balance:
+            if 'wallet' not in wallet or 'balance' not in wallet:
+                print("   ✗ Wallet missing 'wallet' or 'balance' key")
+                return False
+            
+            wallet_type = wallet['wallet']
+            if wallet_type not in ['SPOT', 'MARGIN', 'FUTURES', 'UNIFIED', 'FUNDING']:
+                print(f"   ✗ Invalid wallet type: {wallet_type}")
+                return False
+            
+            if not isinstance(wallet['balance'], list):
+                print("   ✗ Balance is not a list")
+                return False
+            
+            for token_balance in wallet['balance']:
+                required_keys = ['token', 'total', 'frozen', 'available']
+                for key in required_keys:
+                    if key not in token_balance:
+                        print(f"   ✗ Token balance missing '{key}' key")
+                        return False
+                    if not isinstance(token_balance[key], str):
+                        print(f"   ✗ Token balance '{key}' is not a string")
+                        return False
+        
+        print("   ✓ Bybit balance format is correct")
+        return True
+        
+    except Exception as e:
+        print(f"   ✗ Error validating format: {str(e)}")
+        return False
+
+
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("API Service Test Suite")
@@ -216,6 +413,11 @@ if __name__ == "__main__":
     
     # Test exception handling
     test_invalid_credentials()
+    
+    # Test balance retrieval
+    results.append(("Binance Balance", test_binance_balance()))
+    results.append(("Bybit Balance", test_bybit_balance()))
+    results.append(("Balance Format", test_balance_format()))
     
     # Summary
     print("\n" + "="*60)
