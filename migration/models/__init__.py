@@ -8,6 +8,10 @@ Base = declarative_base()
 from .user import User  # noqa: E402
 from .access import Access  # noqa: E402
 from .api import API  # noqa: E402
+from .exchange import Exchange  # noqa: E402
+from .product import Product  # noqa: E402
+from .token import Token  # noqa: E402
+from .symbol import Symbol  # noqa: E402
 
-__all__ = ["Base", "User", "Access", "API"]
+__all__ = ["Base", "User", "Access", "API", "Exchange", "Product", "Token", "Symbol"]
 
