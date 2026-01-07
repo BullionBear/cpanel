@@ -4,10 +4,44 @@ import binance as bn
 from pybit.unified_trading import HTTP as BybitHTTP
 from pybit.exceptions import FailedRequestError
 import logging
+from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from app.models import API
 from app.repositories.api_repository import APIRepository
 
 logger = logging.getLogger(__name__)
+
+# TTL Cache for exchange info (24 hours)
+class TTLCache:
+    """Simple TTL cache implementation."""
+    def __init__(self, ttl_seconds: int = 86400):  # 24 hours default
+        self.cache: Dict[str, tuple[Any, datetime]] = {}
+        self.ttl_seconds = ttl_seconds
+    
+    def get(self, key: str) -> Optional[Any]:
+        """Get value from cache if not expired."""
+        if key not in self.cache:
+            return None
+        
+        value, expiry = self.cache[key]
+        if datetime.now(timezone.utc) > expiry:
+            # Expired, remove from cache
+            del self.cache[key]
+            return None
+        
+        return value
+    
+    def set(self, key: str, value: Any) -> None:
+        """Set value in cache with TTL."""
+        expiry = datetime.now(timezone.utc) + timedelta(seconds=self.ttl_seconds)
+        self.cache[key] = (value, expiry)
+    
+    def clear(self) -> None:
+        """Clear all cache entries."""
+        self.cache.clear()
+
+# Global cache instance (24 hours TTL)
+_exchange_info_cache = TTLCache(ttl_seconds=86400)  # 24 hours
 
 EXCHANGES = Literal['BINANCE', 'BYBIT']
 WALLETS = Literal['SPOT', 'MARGIN', 'FUTURES', 'UNIFIED', 'FUNDING']
@@ -412,14 +446,26 @@ class ApiService:
         """
         Get symbol information from Binance.
         
+        Uses cached exchange info to reduce API calls (24 hour TTL).
+        
         Raises:
             NetworkError: If there's a network or connection error
             ExchangeError: If symbol doesn't exist or there's an API error
         """
         try:
-            # Binance public endpoint doesn't require API key
-            client = bn.Client()
-            exchange_info = client.get_exchange_info()
+            # Check cache first
+            cache_key = f"binance_exchange_info"
+            exchange_info = _exchange_info_cache.get(cache_key)
+            
+            if exchange_info is None:
+                # Cache miss, fetch from API
+                logger.info("Fetching Binance exchange info from API (cache miss)")
+                client = bn.Client()
+                exchange_info = client.get_exchange_info()
+                # Cache the result
+                _exchange_info_cache.set(cache_key, exchange_info)
+            else:
+                logger.debug("Using cached Binance exchange info")
             
             if not exchange_info or 'symbols' not in exchange_info:
                 raise ExchangeError(
@@ -503,17 +549,68 @@ class ApiService:
         """
         Get symbol information from Bybit.
         
+        Uses cached instruments info to reduce API calls (24 hour TTL).
+        
         Raises:
             NetworkError: If there's a network or connection error
             ExchangeError: If symbol doesn't exist or there's an API error
         """
         try:
-            # Bybit public endpoint doesn't require API key
-            client = BybitHTTP(testnet=False)
+            # Check cache first - Bybit returns all instruments, so we cache the full response
+            cache_key = "bybit_instruments_spot"
+            cached_response = _exchange_info_cache.get(cache_key)
             
-            # Get instruments info for spot
-            response = client.get_instruments_info(category="spot", symbol=symbol)
+            if cached_response is None:
+                # Cache miss, fetch from API
+                logger.info("Fetching Bybit instruments info from API (cache miss)")
+                client = BybitHTTP(testnet=False)
+                # Get all instruments (without symbol filter to cache full list)
+                response = client.get_instruments_info(category="spot")
+                
+                if response and response.get('retCode') == 0:
+                    # Cache the result
+                    _exchange_info_cache.set(cache_key, response)
+                else:
+                    # If full list fails, try with symbol
+                    response = client.get_instruments_info(category="spot", symbol=symbol)
+            else:
+                logger.debug("Using cached Bybit instruments info")
+                response = cached_response
+                # Filter for the specific symbol from cached data
+                result = response.get('result', {})
+                list_data = result.get('list', [])
+                symbol_info = next((s for s in list_data if s.get('symbol') == symbol), None)
+                
+                if symbol_info:
+                    # Found in cache, return early
+                    base_asset = symbol_info.get('baseCoin', '')
+                    quote_asset = symbol_info.get('quoteCoin', '')
+                    price_precision = symbol_info.get('priceScale', 2)
+                    size_precision = 8
+                    
+                    lot_size_filter = symbol_info.get('lotSizeFilter', {})
+                    if lot_size_filter:
+                        qty_step = lot_size_filter.get('qtyStep', '1')
+                        if '.' in qty_step:
+                            size_precision = len(qty_step.split('.')[-1].rstrip('0'))
+                        else:
+                            size_precision = 0
+                    
+                    return {
+                        "symbol": symbol,
+                        "base_asset": base_asset,
+                        "quote_asset": quote_asset,
+                        "price_precision": price_precision,
+                        "size_precision": size_precision,
+                        "exists": True
+                    }
+                else:
+                    # Symbol not found in cached data, fetch fresh
+                    logger.info(f"Symbol {symbol} not found in cache, fetching from API")
+                    client = BybitHTTP(testnet=False)
+                    response = client.get_instruments_info(category="spot", symbol=symbol)
             
+            # Process response (either from cache or fresh API call)
             if not response or response.get('retCode') != 0:
                 ret_msg = response.get('retMsg', 'Unknown error') if response else 'Empty response'
                 raise ExchangeError(
