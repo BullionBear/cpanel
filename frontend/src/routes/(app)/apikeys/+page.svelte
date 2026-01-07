@@ -1,0 +1,426 @@
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import { getAPIKeys, deleteAPIKey, type APIKey } from '$lib/api';
+	import RegisterAPIKeyModal from '../../../components/RegisterAPIKeyModal.svelte';
+
+	let apiKeys: APIKey[] = [];
+	let loading = true;
+	let error: string | null = null;
+	let deletingId: number | null = null;
+	let showMenuId: number | null = null;
+	let showRegisterModal = false;
+
+	onMount(() => {
+		loadAPIKeys();
+		
+		// Close menu when clicking outside (only on client)
+		if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+			const handleClickOutside = (event: MouseEvent) => {
+				const target = event.target as HTMLElement;
+				if (target && !target.closest('.api-actions')) {
+					showMenuId = null;
+				}
+			};
+			
+			document.addEventListener('click', handleClickOutside);
+			return () => {
+				document.removeEventListener('click', handleClickOutside);
+			};
+		}
+		return undefined;
+	});
+
+	async function loadAPIKeys() {
+		loading = true;
+		error = null;
+		try {
+			apiKeys = await getAPIKeys();
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to load API keys';
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function handleDelete(id: number) {
+		if (!confirm('Are you sure you want to delete this API key?')) {
+			return;
+		}
+
+		deletingId = id;
+		showMenuId = null;
+		try {
+			await deleteAPIKey(id);
+			await loadAPIKeys();
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to delete API key';
+		} finally {
+			deletingId = null;
+		}
+	}
+
+	function toggleMenu(id: number, event: MouseEvent) {
+		event.stopPropagation();
+		showMenuId = showMenuId === id ? null : id;
+	}
+
+	function handleRegister() {
+		showRegisterModal = true;
+	}
+
+	function handleModalClose() {
+		showRegisterModal = false;
+	}
+
+	function handleModalSuccess() {
+		// Reload API keys after successful registration
+		loadAPIKeys();
+	}
+
+	// Group APIs by exchange
+	$: groupedAPIs = apiKeys.reduce((acc, api) => {
+		const exchange = api.exchange.toUpperCase();
+		if (!acc[exchange]) {
+			acc[exchange] = [];
+		}
+		acc[exchange].push(api);
+		return acc;
+	}, {} as Record<string, APIKey[]>);
+
+	$: exchanges = Object.keys(groupedAPIs).sort();
+</script>
+
+<div class="api-page">
+	<div class="page-header">
+		<h1>API Keys</h1>
+		<button class="register-btn" on:click={handleRegister}>
+			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+				<path d="M12 5V19M5 12H19" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+			</svg>
+			Register
+		</button>
+	</div>
+
+	{#if loading}
+		<div class="loading">Loading API keys...</div>
+	{:else if error}
+		<div class="error">{error}</div>
+	{:else if apiKeys.length === 0}
+		<div class="empty-state">
+			<p>No API keys registered yet.</p>
+			<button class="register-btn" on:click={handleRegister}>
+				<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+					<path d="M12 5V19M5 12H19" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+				</svg>
+				Register Your First API Key
+			</button>
+		</div>
+	{:else}
+		<div class="api-list">
+			{#each exchanges as exchange}
+				<div class="exchange-group">
+					<h2 class="exchange-title">{exchange}</h2>
+					<div class="api-items">
+						{#each groupedAPIs[exchange] as api (api.id)}
+							<div class="api-item">
+								<div class="api-info">
+									<h3 class="api-name">{api.name}</h3>
+									<p class="api-meta">
+										Created: {new Date(api.created_at).toLocaleDateString()}
+										{#if api.master_is && api.master_is !== api.id}
+											<span class="sub-account">Sub-account</span>
+										{/if}
+									</p>
+								</div>
+								<div class="api-actions">
+									<button 
+										class="menu-btn" 
+										on:click={(e) => toggleMenu(api.id, e)}
+										disabled={deletingId === api.id}
+									>
+										<svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+											<circle cx="12" cy="5" r="2" fill="currentColor"/>
+											<circle cx="12" cy="12" r="2" fill="currentColor"/>
+											<circle cx="12" cy="19" r="2" fill="currentColor"/>
+										</svg>
+									</button>
+									{#if showMenuId === api.id}
+										<div class="menu-dropdown">
+											<button 
+												class="menu-item delete" 
+												on:click={() => handleDelete(api.id)}
+												disabled={deletingId === api.id}
+											>
+												<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+													<path d="M3 6H5H21M8 6V4C8 3.46957 8.21071 2.96086 8.58579 2.58579C8.96086 2.21071 9.46957 2 10 2H14C14.5304 2 15.0391 2.21071 15.4142 2.58579C15.7893 2.96086 16 3.46957 16 4V6M19 6V20C19 20.5304 18.7893 21.0391 18.4142 21.4142C18.0391 21.7893 17.5304 22 17 22H7C6.46957 22 5.96086 21.7893 5.58579 21.4142C5.21071 21.0391 5 20.5304 5 20V6H19Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+												</svg>
+												{deletingId === api.id ? 'Deleting...' : 'Remove'}
+											</button>
+										</div>
+									{/if}
+								</div>
+							</div>
+						{/each}
+					</div>
+				</div>
+			{/each}
+		</div>
+	{/if}
+
+	<RegisterAPIKeyModal 
+		bind:isOpen={showRegisterModal} 
+		on:close={handleModalClose}
+		on:success={handleModalSuccess}
+	/>
+</div>
+
+<style>
+	.api-page {
+		max-width: 1200px;
+		margin: 0 auto;
+	}
+
+	.page-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 32px;
+	}
+
+	.page-header h1 {
+		margin: 0;
+		font-size: 28px;
+		font-weight: 600;
+		color: #1f2937;
+	}
+
+	.register-btn {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 10px 20px;
+		background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+		color: white;
+		border: none;
+		border-radius: 8px;
+		font-size: 14px;
+		font-weight: 500;
+		cursor: pointer;
+		transition: all 0.2s;
+	}
+
+	.register-btn:hover {
+		transform: translateY(-1px);
+		box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+	}
+
+	.register-btn svg {
+		stroke: currentColor;
+	}
+
+	.loading, .error {
+		text-align: center;
+		padding: 40px;
+		color: #6b7280;
+	}
+
+	.error {
+		color: #ef4444;
+		background: #fef2f2;
+		border: 1px solid #fecaca;
+		border-radius: 8px;
+		padding: 16px;
+	}
+
+	.empty-state {
+		text-align: center;
+		padding: 60px 20px;
+		background: white;
+		border-radius: 12px;
+		border: 2px dashed #e5e7eb;
+	}
+
+	.empty-state p {
+		margin: 0 0 24px 0;
+		color: #6b7280;
+		font-size: 16px;
+	}
+
+	.api-list {
+		display: flex;
+		flex-direction: column;
+		gap: 32px;
+	}
+
+	.exchange-group {
+		background: white;
+		border-radius: 12px;
+		border: 1px solid #e5e7eb;
+		overflow: visible;
+		position: relative;
+	}
+
+	.exchange-title {
+		margin: 0;
+		padding: 20px 24px;
+		font-size: 20px;
+		font-weight: 600;
+		color: #1f2937;
+		background: #f9fafb;
+		border-bottom: 1px solid #e5e7eb;
+	}
+
+	.api-items {
+		display: flex;
+		flex-direction: column;
+		overflow: visible;
+	}
+
+	.api-item {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 20px 24px;
+		border-bottom: 1px solid #e5e7eb;
+		transition: background 0.2s;
+	}
+
+	.api-item:last-child {
+		border-bottom: none;
+	}
+
+	.api-item:hover {
+		background: #f9fafb;
+	}
+
+	.api-info {
+		flex: 1;
+	}
+
+	.api-name {
+		margin: 0 0 8px 0;
+		font-size: 16px;
+		font-weight: 600;
+		color: #1f2937;
+	}
+
+	.api-meta {
+		margin: 0;
+		font-size: 14px;
+		color: #6b7280;
+		display: flex;
+		align-items: center;
+		gap: 12px;
+	}
+
+	.sub-account {
+		display: inline-block;
+		padding: 2px 8px;
+		background: #dbeafe;
+		color: #1e40af;
+		border-radius: 4px;
+		font-size: 12px;
+		font-weight: 500;
+	}
+
+	.api-actions {
+		position: relative;
+		z-index: 1;
+	}
+
+	.menu-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 36px;
+		height: 36px;
+		border: none;
+		background: transparent;
+		border-radius: 6px;
+		cursor: pointer;
+		color: #6b7280;
+		transition: all 0.2s;
+	}
+
+	.menu-btn:hover {
+		background: #f3f4f6;
+		color: #374151;
+	}
+
+	.menu-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.menu-dropdown {
+		position: absolute;
+		top: 100%;
+		right: 0;
+		margin-top: 8px;
+		background: white;
+		border: 1px solid #e5e7eb;
+		border-radius: 8px;
+		box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+		min-width: 160px;
+		z-index: 1000;
+	}
+
+	.menu-item {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		width: 100%;
+		padding: 12px 16px;
+		border: none;
+		background: transparent;
+		color: #374151;
+		font-size: 14px;
+		text-align: left;
+		cursor: pointer;
+		transition: background 0.2s;
+	}
+
+	.menu-item:hover:not(:disabled) {
+		background: #f3f4f6;
+	}
+
+	.menu-item:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.menu-item.delete {
+		color: #ef4444;
+	}
+
+	.menu-item.delete:hover:not(:disabled) {
+		background: #fef2f2;
+	}
+
+	.menu-item svg {
+		stroke: currentColor;
+	}
+
+	@media (max-width: 768px) {
+		.page-header {
+			flex-direction: column;
+			align-items: flex-start;
+			gap: 16px;
+		}
+
+		.register-btn {
+			width: 100%;
+			justify-content: center;
+		}
+
+		.api-item {
+			flex-direction: column;
+			align-items: flex-start;
+			gap: 16px;
+		}
+
+		.api-actions {
+			align-self: flex-end;
+		}
+	}
+</style>
