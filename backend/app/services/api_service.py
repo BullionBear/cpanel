@@ -375,6 +375,223 @@ class ApiService:
                 original_error=e
             )
 
+    def get_symbol_info(self, exchange: EXCHANGES, symbol: str, api_key: Optional[str] = None, api_secret: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get symbol information from the specified exchange.
+        
+        Args:
+            exchange: Exchange name (BINANCE or BYBIT)
+            symbol: Symbol name (e.g., "BTCUSDT")
+            api_key: Optional API key (not required for public endpoints)
+            api_secret: Optional API secret (not required for public endpoints)
+        
+        Returns:
+            Dictionary with symbol information:
+            {
+                "symbol": str,
+                "base_asset": str,  # Base token (e.g., "BTC")
+                "quote_asset": str,  # Quote token (e.g., "USDT")
+                "price_precision": int,  # Price decimal places
+                "size_precision": int,  # Size/quantity decimal places
+                "exists": bool  # Whether symbol exists on exchange
+            }
+        
+        Raises:
+            NetworkError: If there's a network or connection error
+            ExchangeError: If there's an exchange API error
+        """
+        match exchange:
+            case 'BINANCE':
+                return self.get_binance_symbol_info(symbol)
+            case 'BYBIT':
+                return self.get_bybit_symbol_info(symbol)
+            case _:
+                raise ValueError(f"Invalid exchange: {exchange}")
+    
+    def get_binance_symbol_info(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get symbol information from Binance.
+        
+        Raises:
+            NetworkError: If there's a network or connection error
+            ExchangeError: If symbol doesn't exist or there's an API error
+        """
+        try:
+            # Binance public endpoint doesn't require API key
+            client = bn.Client()
+            exchange_info = client.get_exchange_info()
+            
+            if not exchange_info or 'symbols' not in exchange_info:
+                raise ExchangeError(
+                    "Invalid response from Binance exchange info",
+                    exchange="BINANCE",
+                    error_code=None
+                )
+            
+            # Find the symbol
+            symbol_info = None
+            for s in exchange_info['symbols']:
+                if s['symbol'] == symbol and s['status'] == 'TRADING':
+                    symbol_info = s
+                    break
+            
+            if not symbol_info:
+                raise ExchangeError(
+                    f"Symbol {symbol} not found or not trading on Binance",
+                    exchange="BINANCE",
+                    error_code=None
+                )
+            
+            # Extract base and quote assets
+            base_asset = symbol_info.get('baseAsset', '')
+            quote_asset = symbol_info.get('quoteAsset', '')
+            
+            # Calculate price precision from tickSize
+            filters = symbol_info.get('filters', [])
+            price_precision = 8  # Default
+            size_precision = 8  # Default
+            
+            for filter_item in filters:
+                if filter_item.get('filterType') == 'PRICE_FILTER':
+                    tick_size_str = filter_item.get('tickSize', '1')
+                    # Count decimal places
+                    if '.' in tick_size_str:
+                        price_precision = len(tick_size_str.split('.')[-1].rstrip('0'))
+                    else:
+                        price_precision = 0
+                elif filter_item.get('filterType') == 'LOT_SIZE':
+                    step_size_str = filter_item.get('stepSize', '1')
+                    # Count decimal places
+                    if '.' in step_size_str:
+                        size_precision = len(step_size_str.split('.')[-1].rstrip('0'))
+                    else:
+                        size_precision = 0
+            
+            return {
+                "symbol": symbol,
+                "base_asset": base_asset,
+                "quote_asset": quote_asset,
+                "price_precision": price_precision,
+                "size_precision": size_precision,
+                "exists": True
+            }
+            
+        except ExchangeError:
+            raise
+        except bn.exceptions.BinanceAPIException as e:
+            raise ExchangeError(
+                str(e),
+                exchange="BINANCE",
+                error_code=e.code,
+                original_error=e
+            )
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(
+                f"Network error while connecting to Binance: {str(e)}",
+                exchange="BINANCE",
+                original_error=e
+            )
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error getting Binance symbol info: {str(e)}",
+                exchange="BINANCE",
+                error_code=None,
+                original_error=e
+            )
+    
+    def get_bybit_symbol_info(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get symbol information from Bybit.
+        
+        Raises:
+            NetworkError: If there's a network or connection error
+            ExchangeError: If symbol doesn't exist or there's an API error
+        """
+        try:
+            # Bybit public endpoint doesn't require API key
+            client = BybitHTTP(testnet=False)
+            
+            # Get instruments info for spot
+            response = client.get_instruments_info(category="spot", symbol=symbol)
+            
+            if not response or response.get('retCode') != 0:
+                ret_msg = response.get('retMsg', 'Unknown error') if response else 'Empty response'
+                raise ExchangeError(
+                    f"Symbol {symbol} not found on Bybit: {ret_msg}",
+                    exchange="BYBIT",
+                    error_code=response.get('retCode') if response else None
+                )
+            
+            result = response.get('result', {})
+            list_data = result.get('list', [])
+            
+            if not list_data:
+                raise ExchangeError(
+                    f"Symbol {symbol} not found on Bybit",
+                    exchange="BYBIT",
+                    error_code=None
+                )
+            
+            symbol_info = list_data[0]
+            
+            # Extract base and quote assets
+            base_asset = symbol_info.get('baseCoin', '')
+            quote_asset = symbol_info.get('quoteCoin', '')
+            
+            # Get precision from priceScale and lotSizeFilter
+            price_precision = symbol_info.get('priceScale', 2)  # Default to 2
+            size_precision = 8  # Default
+            
+            # Try to get from lotSizeFilter
+            lot_size_filter = symbol_info.get('lotSizeFilter', {})
+            if lot_size_filter:
+                qty_step = lot_size_filter.get('qtyStep', '1')
+                if '.' in qty_step:
+                    size_precision = len(qty_step.split('.')[-1].rstrip('0'))
+                else:
+                    size_precision = 0
+            
+            return {
+                "symbol": symbol,
+                "base_asset": base_asset,
+                "quote_asset": quote_asset,
+                "price_precision": price_precision,
+                "size_precision": size_precision,
+                "exists": True
+            }
+            
+        except ExchangeError:
+            raise
+        except FailedRequestError as e:
+            error_str = str(e)
+            error_code = None
+            if "ErrCode:" in error_str:
+                try:
+                    code_part = error_str.split("ErrCode:")[1].split(")")[0].strip()
+                    error_code = int(code_part)
+                except (ValueError, IndexError):
+                    pass
+            
+            raise ExchangeError(
+                error_str,
+                exchange="BYBIT",
+                error_code=error_code,
+                original_error=e
+            )
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(
+                f"Network error while connecting to Bybit: {str(e)}",
+                exchange="BYBIT",
+                original_error=e
+            )
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error getting Bybit symbol info: {str(e)}",
+                exchange="BYBIT",
+                error_code=None,
+                original_error=e
+            )
+
     def verify_bybit_api(self, api_key: str, api_secret: str, passphrase: Optional[str] = None):
         """
         Verify Bybit API credentials.
