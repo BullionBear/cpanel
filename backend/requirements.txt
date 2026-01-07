@@ -10,4 +10,5 @@ passlib[bcrypt]>=1.7.4
 python-multipart>=0.0.6
 email-validator>=2.0.0
 aiosmtplib>=1.0.0
-
+python-binance>=1.0.0
+pybit>=5.0.0

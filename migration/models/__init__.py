@@ -7,6 +7,7 @@ Base = declarative_base()
 # Import all models here so Alembic can detect them
 from .user import User  # noqa: E402
 from .access import Access  # noqa: E402
+from .api import API  # noqa: E402
 
-__all__ = ["Base", "User", "Access"]
+__all__ = ["Base", "User", "Access", "API"]
 
