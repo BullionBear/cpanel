@@ -206,7 +206,7 @@ class ApiService:
 
     def get_bybit_balance(self, api_key: str, api_secret: str, passphrase: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        Get normalized balance from Bybit (UNIFIED, FUNDING, SPOT).
+        Get normalized balance from Bybit (UNIFIED, FUNDING).
         
         Returns normalized balance format.
         
@@ -232,17 +232,25 @@ class ApiService:
                             coins = account.get('coin', [])
                             unified_balances = []
                             for coin_data in coins:
-                                wallet_balance = float(coin_data.get('walletBalance', 0))
-                                available_balance = float(coin_data.get('availableToWithdraw', 0))
-                                frozen = wallet_balance - available_balance
+                                # Handle empty strings and convert to float safely
+                                wallet_balance_str = coin_data.get('walletBalance', '0') or '0'
+                                available_balance_str = coin_data.get('availableToWithdraw', '0') or '0'
                                 
-                                if wallet_balance > 0:
-                                    unified_balances.append({
-                                        "token": coin_data.get('coin', ''),
-                                        "total": str(wallet_balance),
-                                        "frozen": str(frozen),
-                                        "available": str(available_balance)
-                                    })
+                                try:
+                                    wallet_balance = float(wallet_balance_str)
+                                    available_balance = float(available_balance_str)
+                                    frozen = wallet_balance - available_balance
+                                    
+                                    if wallet_balance > 0:
+                                        unified_balances.append({
+                                            "token": coin_data.get('coin', ''),
+                                            "total": str(wallet_balance),
+                                            "frozen": str(frozen),
+                                            "available": str(available_balance)
+                                        })
+                                except (ValueError, TypeError) as e:
+                                    logger.warning(f"Failed to parse UNIFIED balance for coin {coin_data.get('coin', 'unknown')}: {e}")
+                                    continue
                             
                             if unified_balances:
                                 result.append({
@@ -252,65 +260,43 @@ class ApiService:
             except Exception as e:
                 logger.warning(f"Failed to get Bybit UNIFIED balance: {e}")
             
-            # Get FUNDING balance
+            # Get FUNDING balance (uses get_coins_balance endpoint)
             try:
-                funding_response = client.get_wallet_balance(accountType="FUND")
+                # Bybit FUNDING uses get_coins_balance endpoint with accountType="FUND"
+                funding_response = client.get_coins_balance(accountType="FUND")
                 if funding_response and funding_response.get('retCode') == 0:
-                    funding_list = funding_response.get('result', {}).get('list', [])
-                    if funding_list:
-                        for account in funding_list:
-                            coins = account.get('coin', [])
-                            funding_balances = []
-                            for coin_data in coins:
-                                wallet_balance = float(coin_data.get('walletBalance', 0))
-                                available_balance = float(coin_data.get('availableToWithdraw', 0))
-                                frozen = wallet_balance - available_balance
+                    funding_balances_list = funding_response.get('result', {}).get('balance', [])
+                    if funding_balances_list:
+                        funding_balances = []
+                        for coin_data in funding_balances_list:
+                            # Handle empty strings and convert to float safely
+                            wallet_balance_str = coin_data.get('walletBalance', '0') or '0'
+                            transfer_balance_str = coin_data.get('transferBalance', '0') or '0'
+                            
+                            try:
+                                wallet_balance = float(wallet_balance_str)
+                                transfer_balance = float(transfer_balance_str)
+                                # For FUNDING, frozen = walletBalance - transferBalance
+                                frozen = wallet_balance - transfer_balance
                                 
                                 if wallet_balance > 0:
                                     funding_balances.append({
                                         "token": coin_data.get('coin', ''),
                                         "total": str(wallet_balance),
                                         "frozen": str(frozen),
-                                        "available": str(available_balance)
+                                        "available": str(transfer_balance)
                                     })
-                            
-                            if funding_balances:
-                                result.append({
-                                    "wallet": "FUNDING",
-                                    "balance": funding_balances
-                                })
+                            except (ValueError, TypeError) as e:
+                                logger.warning(f"Failed to parse FUNDING balance for coin {coin_data.get('coin', 'unknown')}: {e}")
+                                continue
+                        
+                        if funding_balances:
+                            result.append({
+                                "wallet": "FUNDING",
+                                "balance": funding_balances
+                            })
             except Exception as e:
                 logger.warning(f"Failed to get Bybit FUNDING balance: {e}")
-            
-            # Get SPOT balance (if available)
-            try:
-                spot_response = client.get_wallet_balance(accountType="SPOT")
-                if spot_response and spot_response.get('retCode') == 0:
-                    spot_list = spot_response.get('result', {}).get('list', [])
-                    if spot_list:
-                        for account in spot_list:
-                            coins = account.get('coin', [])
-                            spot_balances = []
-                            for coin_data in coins:
-                                wallet_balance = float(coin_data.get('walletBalance', 0))
-                                available_balance = float(coin_data.get('availableToWithdraw', 0))
-                                frozen = wallet_balance - available_balance
-                                
-                                if wallet_balance > 0:
-                                    spot_balances.append({
-                                        "token": coin_data.get('coin', ''),
-                                        "total": str(wallet_balance),
-                                        "frozen": str(frozen),
-                                        "available": str(available_balance)
-                                    })
-                            
-                            if spot_balances:
-                                result.append({
-                                    "wallet": "SPOT",
-                                    "balance": spot_balances
-                                })
-            except Exception as e:
-                logger.warning(f"Failed to get Bybit SPOT balance: {e}")
             
             return result
             

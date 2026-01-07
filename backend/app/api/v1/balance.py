@@ -35,7 +35,7 @@ class BalanceResponse(BaseModel):
     wallets: List[WalletBalance]
 
 
-@router.get("/api/{api_id}", response_model=BalanceResponse)
+@router.get("/{api_id}", response_model=BalanceResponse)
 async def get_balance_by_api_id(
     api_id: int,
     current_user: User = Depends(get_current_user),
