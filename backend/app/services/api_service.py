@@ -45,6 +45,8 @@ _exchange_info_cache = TTLCache(ttl_seconds=86400)  # 24 hours
 
 EXCHANGES = Literal['BINANCE', 'BYBIT']
 WALLETS = Literal['SPOT', 'MARGIN', 'FUTURES', 'UNIFIED', 'FUNDING']
+ORDER_TYPES = Literal['MARKET', 'LIMIT']
+ORDER_SIDES = Literal['BUY', 'SELL']
 
 # Custom Exceptions for API Verification
 class NetworkError(Exception):
@@ -684,6 +686,234 @@ class ApiService:
         except Exception as e:
             raise ExchangeError(
                 f"Unexpected error getting Bybit symbol info: {str(e)}",
+                exchange="BYBIT",
+                error_code=None,
+                original_error=e
+            )
+
+    def create_order(
+        self,
+        exchange: EXCHANGES,
+        api_key: str,
+        api_secret: str,
+        symbol: str,
+        side: ORDER_SIDES,
+        order_type: ORDER_TYPES,
+        quantity: str,
+        price: Optional[str] = None,
+        passphrase: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create an order on the specified exchange.
+        
+        Args:
+            exchange: Exchange name (BINANCE or BYBIT)
+            api_key: API key
+            api_secret: API secret
+            symbol: Symbol name (e.g., "BTCUSDT")
+            side: Order side (BUY or SELL)
+            order_type: Order type (MARKET or LIMIT)
+            quantity: Order quantity (as string)
+            price: Order price (as string, required for LIMIT orders)
+        
+        Returns:
+            Dictionary with order information from exchange
+        
+        Raises:
+            NetworkError: If there's a network or connection error
+            ExchangeError: If there's an exchange API error (includes error code and message)
+        """
+        match exchange:
+            case 'BINANCE':
+                return self.create_binance_order(api_key, api_secret, symbol, side, order_type, quantity, price)
+            case 'BYBIT':
+                return self.create_bybit_order(api_key, api_secret, symbol, side, order_type, quantity, price)
+            case _:
+                raise ValueError(f"Invalid exchange: {exchange}")
+    
+    def create_binance_order(
+        self,
+        api_key: str,
+        api_secret: str,
+        symbol: str,
+        side: ORDER_SIDES,
+        order_type: ORDER_TYPES,
+        quantity: str,
+        price: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create an order on Binance.
+        
+        Raises:
+            NetworkError: If there's a network or connection error
+            ExchangeError: If there's a Binance API error (includes error code and message)
+        """
+        try:
+            client = bn.Client(api_key, api_secret)
+            
+            # Convert side to Binance format (BUY -> BUY, SELL -> SELL)
+            binance_side = side
+            # Convert order type to Binance format
+            binance_order_type = "MARKET" if order_type == "MARKET" else "LIMIT"
+            
+            # Build order parameters
+            order_params = {
+                "symbol": symbol,
+                "side": binance_side,
+                "type": binance_order_type,
+                "quantity": quantity,
+            }
+            
+            # Add price for LIMIT orders
+            if order_type == "LIMIT":
+                if price is None:
+                    raise ExchangeError(
+                        "Price is required for LIMIT orders",
+                        exchange="BINANCE",
+                        error_code=None
+                    )
+                order_params["price"] = price
+                order_params["timeInForce"] = "GTC"  # Good Till Cancel
+            
+            # Place the order
+            order_result = client.create_order(**order_params)
+            
+            return {
+                "order_id": str(order_result.get('orderId', '')),
+                "symbol": order_result.get('symbol', symbol),
+                "side": order_result.get('side', side),
+                "type": order_result.get('type', order_type),
+                "quantity": order_result.get('executedQty', quantity),
+                "price": order_result.get('price', price),
+                "status": order_result.get('status', ''),
+                "client_order_id": order_result.get('clientOrderId', ''),
+                "exchange_response": order_result
+            }
+            
+        except bn.exceptions.BinanceAPIException as e:
+            error_code = e.code
+            error_message = str(e.message) if hasattr(e, 'message') else str(e)
+            raise ExchangeError(
+                error_message,
+                exchange="BINANCE",
+                error_code=error_code,
+                original_error=e
+            )
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(
+                f"Network error while connecting to Binance: {str(e)}",
+                exchange="BINANCE",
+                original_error=e
+            )
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error creating Binance order: {str(e)}",
+                exchange="BINANCE",
+                error_code=None,
+                original_error=e
+            )
+    
+    def create_bybit_order(
+        self,
+        api_key: str,
+        api_secret: str,
+        symbol: str,
+        side: ORDER_SIDES,
+        order_type: ORDER_TYPES,
+        quantity: str,
+        price: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Create an order on Bybit.
+        
+        Raises:
+            NetworkError: If there's a network or connection error
+            ExchangeError: If there's a Bybit API error (includes error code and message)
+        """
+        try:
+            client = BybitHTTP(
+                api_key=api_key,
+                api_secret=api_secret,
+                testnet=False,
+            )
+            
+            # Convert side to Bybit format (BUY -> Buy, SELL -> Sell)
+            bybit_side = "Buy" if side == "BUY" else "Sell"
+            # Convert order type to Bybit format
+            bybit_order_type = "Market" if order_type == "MARKET" else "Limit"
+            
+            # Build order parameters
+            order_params = {
+                "category": "spot",
+                "symbol": symbol,
+                "side": bybit_side,
+                "orderType": bybit_order_type,
+                "qty": quantity,
+            }
+            
+            # Add price for LIMIT orders
+            if order_type == "LIMIT":
+                if price is None:
+                    raise ExchangeError(
+                        "Price is required for LIMIT orders",
+                        exchange="BYBIT",
+                        error_code=None
+                    )
+                order_params["price"] = price
+            
+            # Place the order
+            response = client.place_order(**order_params)
+            
+            if not response or response.get('retCode') != 0:
+                ret_msg = response.get('retMsg', 'Unknown error') if response else 'Empty response'
+                raise ExchangeError(
+                    f"Failed to create order on Bybit: {ret_msg}",
+                    exchange="BYBIT",
+                    error_code=response.get('retCode') if response else None
+                )
+            
+            result = response.get('result', {})
+            order_id = result.get('orderId', '')
+            
+            return {
+                "order_id": str(order_id),
+                "symbol": symbol,
+                "side": side,
+                "type": order_type,
+                "quantity": quantity,
+                "price": price,
+                "status": "New",
+                "client_order_id": result.get('orderLinkId', ''),
+                "exchange_response": response
+            }
+            
+        except ExchangeError:
+            raise
+        except FailedRequestError as e:
+            error_str = str(e)
+            error_code = None
+            if "ErrCode:" in error_str:
+                try:
+                    code_part = error_str.split("ErrCode:")[1].split(")")[0].strip()
+                    error_code = int(code_part)
+                except (ValueError, IndexError):
+                    pass
+            
+            raise ExchangeError(
+                error_str,
+                exchange="BYBIT",
+                error_code=error_code,
+                original_error=e
+            )
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(
+                f"Network error while connecting to Bybit: {str(e)}",
+                exchange="BYBIT",
+                original_error=e
+            )
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error creating Bybit order: {str(e)}",
                 exchange="BYBIT",
                 error_code=None,
                 original_error=e
