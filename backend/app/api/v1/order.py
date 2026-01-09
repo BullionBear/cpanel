@@ -50,9 +50,10 @@ class OrderResponse(BaseModel):
     side: str
     type: str
     quantity: str
-    price: Optional[str]
-    status: str
-    client_order_id: Optional[str] = None
+    price: str  # Always string, "-1" for MARKET orders
+    status: str  # Normalized: NEW, FILLED, PARTIAL_FILLED, REJECT, CANCEL
+    client_order_id: str
+    account_id: int
 
 
 @router.post("", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
@@ -122,9 +123,10 @@ async def create_order(
             side=order_result.get('side', order_data.side),
             type=order_result.get('type', order_data.type),
             quantity=order_result.get('quantity', order_data.qty),
-            price=order_result.get('price', order_data.price),
-            status=order_result.get('status', ''),
-            client_order_id=order_result.get('client_order_id')
+            price=order_result.get('price', '-1'),  # Already normalized by service
+            status=order_result.get('status', 'NEW'),  # Already normalized by service
+            client_order_id=order_result.get('client_order_id', ''),
+            account_id=order_data.account_id
         )
         
     except NetworkError as e:

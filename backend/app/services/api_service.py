@@ -4,12 +4,171 @@ import binance as bn
 from pybit.unified_trading import HTTP as BybitHTTP
 from pybit.exceptions import FailedRequestError
 import logging
+import random
+import string
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from app.models import API
 from app.repositories.api_repository import APIRepository
 
 logger = logging.getLogger(__name__)
+
+# Normalized order statuses
+ORDER_STATUS = Literal['NEW', 'FILLED', 'PARTIAL_FILLED', 'REJECT', 'CANCEL']
+ENDING_STATUSES = {'FILLED', 'REJECT', 'CANCEL'}
+
+def generate_client_order_id() -> str:
+    """
+    Generate custom client order ID in format: cpanel-yyyymmdd-hhmmss-{6 digit random alphabet string}
+    
+    Returns:
+        Client order ID string
+    """
+    now = datetime.now(timezone.utc)
+    date_str = now.strftime("%Y%m%d")
+    time_str = now.strftime("%H%M%S")
+    random_str = ''.join(random.choices(string.ascii_uppercase + string.ascii_lowercase, k=6))
+    return f"cpanel-{date_str}-{time_str}-{random_str}"
+
+def normalize_order_status(exchange: str, status: str) -> str:
+    """
+    Normalize order status from exchange-specific to standard format.
+    
+    Args:
+        exchange: Exchange name (BINANCE or BYBIT)
+        status: Exchange-specific status string
+    
+    Returns:
+        Normalized status: NEW, FILLED, PARTIAL_FILLED, REJECT, CANCEL
+    """
+    status_upper = status.upper() if status else ""
+    
+    # Binance status mapping
+    binance_status_map = {
+        'NEW': 'NEW',
+        'PARTIALLY_FILLED': 'PARTIAL_FILLED',
+        'FILLED': 'FILLED',
+        'CANCELED': 'CANCEL',
+        'PENDING_CANCEL': 'CANCEL',
+        'REJECTED': 'REJECT',
+        'EXPIRED': 'CANCEL',
+    }
+    
+    # Bybit status mapping
+    bybit_status_map = {
+        'NEW': 'NEW',
+        'PARTIALLYFILLED': 'PARTIAL_FILLED',
+        'FILLED': 'FILLED',
+        'CANCELED': 'CANCEL',
+        'REJECTED': 'REJECT',
+    }
+    
+    if exchange.upper() == 'BINANCE':
+        return binance_status_map.get(status_upper, 'NEW')
+    elif exchange.upper() == 'BYBIT':
+        return bybit_status_map.get(status_upper, 'NEW')
+    
+    return 'NEW'  # Default
+
+def normalize_numeric_string(value: Optional[str]) -> str:
+    """
+    Normalize numeric string by removing trailing zeros after decimal point.
+    
+    Examples:
+        "1.00" -> "1"
+        "1.00000000" -> "1"
+        "0.50" -> "0.5"
+        "100.00" -> "100"
+        "-1" -> "-1" (special case, keep as is)
+        None -> "-1"
+        "0" -> "-1" (zero becomes -1)
+    
+    Args:
+        value: Numeric string or None
+    
+    Returns:
+        Normalized numeric string
+    """
+    if value is None:
+        return "-1"
+    
+    value_stripped = value.strip() if isinstance(value, str) else str(value)
+    
+    # Handle special case "-1"
+    if value_stripped == "-1":
+        return "-1"
+    
+    # Check if it's zero or null
+    try:
+        value_float = float(value_stripped)
+        if value_float == 0.0:
+            return "-1"
+    except (ValueError, TypeError):
+        # If not a valid number, return as is
+        return value_stripped
+    
+    # Check if it's a string representation of zero
+    if value_stripped in ['0', '0.0', '0.00', '0.000', '0.0000', '0.00000', '0.000000', '0.0000000', '0.00000000']:
+        return "-1"
+    
+    # Remove trailing zeros after decimal point
+    if '.' in value_stripped:
+        # Split into integer and decimal parts
+        parts = value_stripped.split('.')
+        integer_part = parts[0]
+        decimal_part = parts[1].rstrip('0')  # Remove trailing zeros
+        
+        if decimal_part:
+            # If there are remaining decimal digits, keep the decimal point
+            return f"{integer_part}.{decimal_part}"
+        else:
+            # If all decimal digits were zeros, return just the integer part
+            return integer_part
+    
+    return value_stripped
+
+def normalize_price(price: Optional[str]) -> str:
+    """
+    Normalize price: convert 0, "0", "0.0000", or null to "-1", then trim trailing zeros.
+    
+    Args:
+        price: Price string or None
+    
+    Returns:
+        Normalized price string ("-1" for null/zero, trimmed version otherwise)
+    """
+    return normalize_numeric_string(price)
+
+def normalize_quantity(quantity: Optional[str]) -> str:
+    """
+    Normalize quantity: trim trailing zeros after decimal point.
+    
+    Args:
+        quantity: Quantity string or None
+    
+    Returns:
+        Normalized quantity string (trimmed version)
+    """
+    if quantity is None:
+        return "0"
+    
+    quantity_stripped = quantity.strip() if isinstance(quantity, str) else str(quantity)
+    
+    # Remove trailing zeros after decimal point
+    if '.' in quantity_stripped:
+        # Split into integer and decimal parts
+        parts = quantity_stripped.split('.')
+        integer_part = parts[0]
+        decimal_part = parts[1].rstrip('0')  # Remove trailing zeros
+        
+        if decimal_part:
+            # If there are remaining decimal digits, keep the decimal point
+            return f"{integer_part}.{decimal_part}"
+        else:
+            # If all decimal digits were zeros, return just the integer part
+            return integer_part
+    
+    return quantity_stripped
 
 # TTL Cache for exchange info (24 hours)
 class TTLCache:
@@ -691,6 +850,213 @@ class ApiService:
                 original_error=e
             )
 
+    def get_order_status(
+        self,
+        exchange: EXCHANGES,
+        api_key: str,
+        api_secret: str,
+        symbol: str,
+        order_id: Optional[str] = None,
+        client_order_id: Optional[str] = None,
+        passphrase: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Get order status from exchange.
+        
+        Args:
+            exchange: Exchange name (BINANCE or BYBIT)
+            api_key: API key
+            api_secret: API secret
+            symbol: Symbol name
+            order_id: Exchange order ID
+            client_order_id: Client order ID
+            passphrase: Optional passphrase
+        
+        Returns:
+            Dictionary with order status information
+        
+        Raises:
+            NetworkError: If there's a network or connection error
+            ExchangeError: If there's an exchange API error
+        """
+        match exchange:
+            case 'BINANCE':
+                return self.get_binance_order_status(api_key, api_secret, symbol, order_id, client_order_id)
+            case 'BYBIT':
+                return self.get_bybit_order_status(api_key, api_secret, symbol, order_id, client_order_id, passphrase)
+            case _:
+                raise ValueError(f"Invalid exchange: {exchange}")
+    
+    def get_binance_order_status(
+        self,
+        api_key: str,
+        api_secret: str,
+        symbol: str,
+        order_id: Optional[str] = None,
+        client_order_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get order status from Binance."""
+        try:
+            client = bn.Client(api_key, api_secret)
+            
+            if client_order_id:
+                order = client.get_order(symbol=symbol, origClientOrderId=client_order_id)
+            elif order_id:
+                order = client.get_order(symbol=symbol, orderId=int(order_id))
+            else:
+                raise ExchangeError(
+                    "Either order_id or client_order_id must be provided",
+                    exchange="BINANCE",
+                    error_code=None
+                )
+            
+            return {
+                "order_id": str(order.get('orderId', '')),
+                "status": order.get('status', ''),
+                "symbol": order.get('symbol', symbol),
+                "side": order.get('side', ''),
+                "type": order.get('type', ''),
+                "quantity": order.get('executedQty', ''),
+                "price": order.get('price', ''),
+            }
+        except bn.exceptions.BinanceAPIException as e:
+            raise ExchangeError(
+                str(e),
+                exchange="BINANCE",
+                error_code=e.code,
+                original_error=e
+            )
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(
+                f"Network error while connecting to Binance: {str(e)}",
+                exchange="BINANCE",
+                original_error=e
+            )
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error getting Binance order status: {str(e)}",
+                exchange="BINANCE",
+                error_code=None,
+                original_error=e
+            )
+    
+    def get_bybit_order_status(
+        self,
+        api_key: str,
+        api_secret: str,
+        symbol: str,
+        order_id: Optional[str] = None,
+        client_order_id: Optional[str] = None,
+        passphrase: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get order status from Bybit."""
+        try:
+            client = BybitHTTP(
+                api_key=api_key,
+                api_secret=api_secret,
+                testnet=False,
+            )
+            
+            # Try open orders first
+            if client_order_id:
+                response = client.get_open_orders(
+                    category="spot",
+                    symbol=symbol,
+                    orderLinkId=client_order_id
+                )
+            elif order_id:
+                response = client.get_open_orders(
+                    category="spot",
+                    symbol=symbol,
+                    orderId=order_id
+                )
+            else:
+                raise ExchangeError(
+                    "Either order_id or client_order_id must be provided",
+                    exchange="BYBIT",
+                    error_code=None
+                )
+            
+            # If not found in open orders, try order history
+            if response and response.get('retCode') == 0:
+                result = response.get('result', {})
+                list_data = result.get('list', [])
+                if not list_data:
+                    # Try order history
+                    if client_order_id:
+                        response = client.get_order_history(
+                            category="spot",
+                            symbol=symbol,
+                            orderLinkId=client_order_id
+                        )
+                    elif order_id:
+                        response = client.get_order_history(
+                            category="spot",
+                            symbol=symbol,
+                            orderId=order_id
+                        )
+            
+            if not response or response.get('retCode') != 0:
+                ret_msg = response.get('retMsg', 'Unknown error') if response else 'Empty response'
+                raise ExchangeError(
+                    f"Failed to get order status from Bybit: {ret_msg}",
+                    exchange="BYBIT",
+                    error_code=response.get('retCode') if response else None
+                )
+            
+            result = response.get('result', {})
+            list_data = result.get('list', [])
+            
+            if not list_data:
+                raise ExchangeError(
+                    f"Order not found on Bybit",
+                    exchange="BYBIT",
+                    error_code=None
+                )
+            
+            order = list_data[0]
+            
+            return {
+                "order_id": str(order.get('orderId', '')),
+                "status": order.get('orderStatus', ''),
+                "symbol": order.get('symbol', symbol),
+                "side": order.get('side', ''),
+                "type": order.get('orderType', ''),
+                "quantity": order.get('qty', ''),
+                "price": order.get('price', ''),
+            }
+        except ExchangeError:
+            raise
+        except FailedRequestError as e:
+            error_str = str(e)
+            error_code = None
+            if "ErrCode:" in error_str:
+                try:
+                    code_part = error_str.split("ErrCode:")[1].split(")")[0].strip()
+                    error_code = int(code_part)
+                except (ValueError, IndexError):
+                    pass
+            
+            raise ExchangeError(
+                error_str,
+                exchange="BYBIT",
+                error_code=error_code,
+                original_error=e
+            )
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(
+                f"Network error while connecting to Bybit: {str(e)}",
+                exchange="BYBIT",
+                original_error=e
+            )
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error getting Bybit order status: {str(e)}",
+                exchange="BYBIT",
+                error_code=None,
+                original_error=e
+            )
+
     def create_order(
         self,
         exchange: EXCHANGES,
@@ -727,7 +1093,7 @@ class ApiService:
             case 'BINANCE':
                 return self.create_binance_order(api_key, api_secret, symbol, side, order_type, quantity, price)
             case 'BYBIT':
-                return self.create_bybit_order(api_key, api_secret, symbol, side, order_type, quantity, price)
+                return self.create_bybit_order(api_key, api_secret, symbol, side, order_type, quantity, price, passphrase)
             case _:
                 raise ValueError(f"Invalid exchange: {exchange}")
     
@@ -756,12 +1122,16 @@ class ApiService:
             # Convert order type to Binance format
             binance_order_type = "MARKET" if order_type == "MARKET" else "LIMIT"
             
+            # Generate custom client order ID
+            client_order_id = generate_client_order_id()
+            
             # Build order parameters
             order_params = {
                 "symbol": symbol,
                 "side": binance_side,
                 "type": binance_order_type,
                 "quantity": quantity,
+                "newClientOrderId": client_order_id,  # Use custom client order ID
             }
             
             # Add price for LIMIT orders
@@ -778,15 +1148,39 @@ class ApiService:
             # Place the order
             order_result = client.create_order(**order_params)
             
+            # Normalize status
+            raw_status = order_result.get('status', '')
+            normalized_status = normalize_order_status('BINANCE', raw_status)
+            
+            # Normalize price
+            raw_price = order_result.get('price', price)
+            normalized_price = normalize_price(raw_price)
+            
+            # Normalize quantity
+            raw_quantity = order_result.get('executedQty', quantity)
+            normalized_quantity = normalize_quantity(raw_quantity)
+            
+            # If status is not ending, fetch actual status
+            if normalized_status not in ENDING_STATUSES:
+                try:
+                    status_info = self.get_binance_order_status(
+                        api_key, api_secret, symbol,
+                        order_id=str(order_result.get('orderId', '')),
+                        client_order_id=client_order_id
+                    )
+                    normalized_status = normalize_order_status('BINANCE', status_info.get('status', raw_status))
+                except Exception as e:
+                    logger.warning(f"Failed to fetch order status for {client_order_id}: {e}")
+            
             return {
                 "order_id": str(order_result.get('orderId', '')),
                 "symbol": order_result.get('symbol', symbol),
                 "side": order_result.get('side', side),
                 "type": order_result.get('type', order_type),
-                "quantity": order_result.get('executedQty', quantity),
-                "price": order_result.get('price', price),
-                "status": order_result.get('status', ''),
-                "client_order_id": order_result.get('clientOrderId', ''),
+                "quantity": normalized_quantity,
+                "price": normalized_price,
+                "status": normalized_status,
+                "client_order_id": client_order_id,
                 "exchange_response": order_result
             }
             
@@ -821,7 +1215,8 @@ class ApiService:
         side: ORDER_SIDES,
         order_type: ORDER_TYPES,
         quantity: str,
-        price: Optional[str] = None
+        price: Optional[str] = None,
+        passphrase: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Create an order on Bybit.
@@ -837,6 +1232,9 @@ class ApiService:
                 testnet=False,
             )
             
+            # Generate custom client order ID
+            client_order_id = generate_client_order_id()
+            
             # Convert side to Bybit format (BUY -> Buy, SELL -> Sell)
             bybit_side = "Buy" if side == "BUY" else "Sell"
             # Convert order type to Bybit format
@@ -849,6 +1247,7 @@ class ApiService:
                 "side": bybit_side,
                 "orderType": bybit_order_type,
                 "qty": quantity,
+                "orderLinkId": client_order_id,  # Use custom client order ID
             }
             
             # Add price for LIMIT orders
@@ -875,15 +1274,40 @@ class ApiService:
             result = response.get('result', {})
             order_id = result.get('orderId', '')
             
+            # Get initial status from response
+            raw_status = result.get('orderStatus', 'New')
+            normalized_status = normalize_order_status('BYBIT', raw_status)
+            
+            # Normalize price
+            raw_price = result.get('price', price)
+            normalized_price = normalize_price(raw_price)
+            
+            # Normalize quantity
+            raw_quantity = result.get('qty', quantity)
+            normalized_quantity = normalize_quantity(raw_quantity)
+            
+            # If status is not ending, fetch actual status
+            if normalized_status not in ENDING_STATUSES:
+                try:
+                    status_info = self.get_bybit_order_status(
+                        api_key, api_secret, symbol,
+                        order_id=str(order_id),
+                        client_order_id=client_order_id,
+                        passphrase=passphrase
+                    )
+                    normalized_status = normalize_order_status('BYBIT', status_info.get('status', raw_status))
+                except Exception as e:
+                    logger.warning(f"Failed to fetch order status for {client_order_id}: {e}")
+            
             return {
                 "order_id": str(order_id),
                 "symbol": symbol,
                 "side": side,
                 "type": order_type,
-                "quantity": quantity,
-                "price": price,
-                "status": "New",
-                "client_order_id": result.get('orderLinkId', ''),
+                "quantity": normalized_quantity,
+                "price": normalized_price,
+                "status": normalized_status,
+                "client_order_id": client_order_id,
                 "exchange_response": response
             }
             
