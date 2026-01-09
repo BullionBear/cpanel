@@ -1172,6 +1172,17 @@ class ApiService:
                 except Exception as e:
                     logger.warning(f"Failed to fetch order status for {client_order_id}: {e}")
             
+            # Get timestamps from order result or use current time
+            # Binance returns time in milliseconds, convert to seconds
+            order_time_ms = order_result.get('transactTime', order_result.get('time', None))
+            if order_time_ms:
+                created_at = int(order_time_ms / 1000)  # Convert milliseconds to seconds
+            else:
+                created_at = int(datetime.now(timezone.utc).timestamp())
+            
+            # Updated_at is same as created_at for new orders
+            updated_at = created_at
+            
             return {
                 "order_id": str(order_result.get('orderId', '')),
                 "symbol": order_result.get('symbol', symbol),
@@ -1181,6 +1192,8 @@ class ApiService:
                 "price": normalized_price,
                 "status": normalized_status,
                 "client_order_id": client_order_id,
+                "created_at": created_at,
+                "updated_at": updated_at,
                 "exchange_response": order_result
             }
             
@@ -1299,6 +1312,17 @@ class ApiService:
                 except Exception as e:
                     logger.warning(f"Failed to fetch order status for {client_order_id}: {e}")
             
+            # Get timestamps from order result or use current time
+            # Bybit returns createdTime in milliseconds, convert to seconds
+            result_time_ms = result.get('createdTime', None)
+            if result_time_ms:
+                created_at = int(result_time_ms / 1000)  # Convert milliseconds to seconds
+            else:
+                created_at = int(datetime.now(timezone.utc).timestamp())
+            
+            # Updated_at is same as created_at for new orders
+            updated_at = created_at
+            
             return {
                 "order_id": str(order_id),
                 "symbol": symbol,
@@ -1308,6 +1332,8 @@ class ApiService:
                 "price": normalized_price,
                 "status": normalized_status,
                 "client_order_id": client_order_id,
+                "created_at": created_at,
+                "updated_at": updated_at,
                 "exchange_response": response
             }
             

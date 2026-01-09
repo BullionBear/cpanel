@@ -54,6 +54,8 @@ class OrderResponse(BaseModel):
     status: str  # Normalized: NEW, FILLED, PARTIAL_FILLED, REJECT, CANCEL
     client_order_id: str
     account_id: int
+    created_at: int  # Unix timestamp (seconds since epoch)
+    updated_at: int  # Unix timestamp (seconds since epoch)
 
 
 @router.post("", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
@@ -126,7 +128,9 @@ async def create_order(
             price=order_result.get('price', '-1'),  # Already normalized by service
             status=order_result.get('status', 'NEW'),  # Already normalized by service
             client_order_id=order_result.get('client_order_id', ''),
-            account_id=order_data.account_id
+            account_id=order_data.account_id,
+            created_at=order_result.get('created_at', 0),
+            updated_at=order_result.get('updated_at', 0)
         )
         
     except NetworkError as e:
