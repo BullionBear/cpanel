@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from app.models import API
 from app.repositories.api_repository import APIRepository
+from app.utils import trim_decimal_string
 
 logger = logging.getLogger(__name__)
 
@@ -107,25 +108,15 @@ def normalize_numeric_string(value: Optional[str]) -> str:
         # If not a valid number, return as is
         return value_stripped
     
-    # Check if it's a string representation of zero
-    if value_stripped in ['0', '0.0', '0.00', '0.000', '0.0000', '0.00000', '0.000000', '0.0000000', '0.00000000']:
+    # Use utility function to trim trailing zeros first
+    trimmed_value = trim_decimal_string(value_stripped)
+    
+    # Check if it's zero (using trimmed version for comparison)
+    if trimmed_value in ['0', '']:
         return "-1"
     
-    # Remove trailing zeros after decimal point
-    if '.' in value_stripped:
-        # Split into integer and decimal parts
-        parts = value_stripped.split('.')
-        integer_part = parts[0]
-        decimal_part = parts[1].rstrip('0')  # Remove trailing zeros
-        
-        if decimal_part:
-            # If there are remaining decimal digits, keep the decimal point
-            return f"{integer_part}.{decimal_part}"
-        else:
-            # If all decimal digits were zeros, return just the integer part
-            return integer_part
-    
-    return value_stripped
+    # Return trimmed value
+    return trimmed_value if trimmed_value else "-1"
 
 def normalize_price(price: Optional[str]) -> str:
     """
@@ -147,28 +138,18 @@ def normalize_quantity(quantity: Optional[str]) -> str:
         quantity: Quantity string or None
     
     Returns:
-        Normalized quantity string (trimmed version)
+        Normalized quantity string (trimmed version). Returns "0" if input is None.
     """
     if quantity is None:
         return "0"
     
     quantity_stripped = quantity.strip() if isinstance(quantity, str) else str(quantity)
     
-    # Remove trailing zeros after decimal point
-    if '.' in quantity_stripped:
-        # Split into integer and decimal parts
-        parts = quantity_stripped.split('.')
-        integer_part = parts[0]
-        decimal_part = parts[1].rstrip('0')  # Remove trailing zeros
-        
-        if decimal_part:
-            # If there are remaining decimal digits, keep the decimal point
-            return f"{integer_part}.{decimal_part}"
-        else:
-            # If all decimal digits were zeros, return just the integer part
-            return integer_part
+    # Use utility function to trim trailing zeros
+    trimmed = trim_decimal_string(quantity_stripped)
     
-    return quantity_stripped
+    # Return trimmed value, or "0" if empty after trimming
+    return trimmed if trimmed else "0"
 
 # TTL Cache for exchange info (24 hours)
 class TTLCache:
