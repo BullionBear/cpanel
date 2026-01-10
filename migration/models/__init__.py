@@ -12,6 +12,7 @@ from .exchange import Exchange  # noqa: E402
 from .product import Product  # noqa: E402
 from .token import Token  # noqa: E402
 from .symbol import Symbol  # noqa: E402
+from .user_preference import UserPreference  # noqa: E402
 
-__all__ = ["Base", "User", "Access", "API", "Exchange", "Product", "Token", "Symbol"]
+__all__ = ["Base", "User", "Access", "API", "Exchange", "Product", "Token", "Symbol", "UserPreference"]
 

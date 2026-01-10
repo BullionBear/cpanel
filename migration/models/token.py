@@ -4,7 +4,7 @@ from . import Base
 
 
 class Token(Base):
-    __tablename__ = "token"
+    __tablename__ = "ref_token"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String, nullable=False)

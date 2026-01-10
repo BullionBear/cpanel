@@ -4,7 +4,7 @@ from . import Base
 
 
 class Exchange(Base):
-    __tablename__ = "exchange"
+    __tablename__ = "ref_exchange"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String, nullable=False)

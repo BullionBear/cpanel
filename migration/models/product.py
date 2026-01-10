@@ -4,7 +4,7 @@ from . import Base
 
 
 class Product(Base):
-    __tablename__ = "product"
+    __tablename__ = "ref_product"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String, nullable=False)

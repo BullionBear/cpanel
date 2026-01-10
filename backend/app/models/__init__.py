@@ -55,21 +55,21 @@ except ImportError:
         updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     class Exchange(Base):  # type: ignore
-        __tablename__ = "exchange"
+        __tablename__ = "ref_exchange"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
         name = Column(String, nullable=False)
         slug = Column(String, unique=True, nullable=False, index=True)
 
     class Product(Base):  # type: ignore
-        __tablename__ = "product"
+        __tablename__ = "ref_product"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
         name = Column(String, nullable=False)
         slug = Column(String, unique=True, nullable=False, index=True)
 
     class Token(Base):  # type: ignore
-        __tablename__ = "token"
+        __tablename__ = "ref_token"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
         name = Column(String, nullable=False)
@@ -80,10 +80,10 @@ except ImportError:
 
         id = Column(Integer, primary_key=True, autoincrement=True)
         name = Column(String, nullable=False)
-        exchange_id = Column(Integer, ForeignKey("exchange.id"), nullable=False, index=True)
-        product_id = Column(Integer, ForeignKey("product.id"), nullable=False, index=True)
-        base_id = Column(Integer, ForeignKey("token.id"), nullable=False, index=True)
-        quote_id = Column(Integer, ForeignKey("token.id"), nullable=False, index=True)
+        exchange_id = Column(Integer, ForeignKey("ref_exchange.id"), nullable=False, index=True)
+        product_id = Column(Integer, ForeignKey("ref_product.id"), nullable=False, index=True)
+        base_id = Column(Integer, ForeignKey("ref_token.id"), nullable=False, index=True)
+        quote_id = Column(Integer, ForeignKey("ref_token.id"), nullable=False, index=True)
         price_precision = Column(Integer, nullable=False)
         size_precision = Column(Integer, nullable=False)
         universal_ticker = Column(String, nullable=False, unique=True, index=True)
