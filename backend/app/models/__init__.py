@@ -14,6 +14,7 @@ try:
     from product import Product  # noqa: E402
     from token import Token  # noqa: E402
     from symbol import Symbol  # noqa: E402
+    from user_preference import UserPreference  # noqa: E402
 except ImportError:
     # Fallback: define User model here if migration models not available
     from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
@@ -95,5 +96,15 @@ except ImportError:
         base_token = relationship("Token", foreign_keys=[base_id], backref="base_symbols")
         quote_token = relationship("Token", foreign_keys=[quote_id], backref="quote_symbols")
 
-__all__ = ["User", "Access", "API", "Exchange", "Product", "Token", "Symbol"]
+    class UserPreference(Base):  # type: ignore
+        __tablename__ = "user_preference"
+
+        id = Column(Integer, primary_key=True, autoincrement=True)
+        user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+        layout = Column(String, nullable=False)
+        version = Column(Integer, nullable=False)
+        from sqlalchemy.dialects.postgresql import JSONB
+        preference = Column(JSONB, nullable=False)
+
+__all__ = ["User", "Access", "API", "Exchange", "Product", "Token", "Symbol", "UserPreference"]
 
