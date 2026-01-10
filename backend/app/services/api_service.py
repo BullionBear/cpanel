@@ -1057,6 +1057,247 @@ class ApiService:
                 original_error=e
             )
 
+    def get_open_orders(
+        self,
+        exchange: EXCHANGES,
+        api_key: str,
+        api_secret: str,
+        symbol: Optional[str] = None,
+        passphrase: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all open orders from the specified exchange.
+        
+        Args:
+            exchange: Exchange name (BINANCE or BYBIT)
+            api_key: API key
+            api_secret: API secret
+            symbol: Optional symbol to filter orders (if None, returns all open orders)
+            passphrase: Optional passphrase for API
+        
+        Returns:
+            List of normalized order dictionaries
+        
+        Raises:
+            NetworkError: If there's a network or connection error
+            ExchangeError: If there's an exchange API error
+        """
+        match exchange:
+            case 'BINANCE':
+                return self.get_binance_open_orders(api_key, api_secret, symbol)
+            case 'BYBIT':
+                return self.get_bybit_open_orders(api_key, api_secret, symbol, passphrase)
+            case _:
+                raise ValueError(f"Invalid exchange: {exchange}")
+    
+    def get_binance_open_orders(
+        self,
+        api_key: str,
+        api_secret: str,
+        symbol: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get all open orders from Binance."""
+        try:
+            client = bn.Client(api_key, api_secret)
+            
+            # Get open orders (optionally filtered by symbol)
+            if symbol:
+                open_orders = client.get_open_orders(symbol=symbol)
+            else:
+                open_orders = client.get_open_orders()
+            
+            normalized_orders = []
+            for order in open_orders:
+                # Normalize status
+                raw_status = order.get('status', '')
+                normalized_status = normalize_order_status('BINANCE', raw_status)
+                
+                # Normalize price
+                raw_price = order.get('price', '0')
+                normalized_price = normalize_price(raw_price)
+                
+                # Normalize quantity
+                raw_quantity = order.get('origQty', '0')
+                normalized_quantity = normalize_quantity(raw_quantity)
+                
+                # Get timestamps
+                order_time_ms = order.get('time', None)
+                if order_time_ms:
+                    created_at = int(order_time_ms / 1000)
+                else:
+                    created_at = int(datetime.now(timezone.utc).timestamp())
+                
+                update_time_ms = order.get('updateTime', order_time_ms)
+                if update_time_ms:
+                    updated_at = int(update_time_ms / 1000)
+                else:
+                    updated_at = created_at
+                
+                # Extract client order ID (may be our custom format or Binance's)
+                client_order_id = order.get('clientOrderId', '')
+                
+                normalized_orders.append({
+                    "order_id": str(order.get('orderId', '')),
+                    "symbol": order.get('symbol', ''),
+                    "side": order.get('side', ''),
+                    "type": order.get('type', ''),
+                    "quantity": normalized_quantity,
+                    "price": normalized_price,
+                    "status": normalized_status,
+                    "client_order_id": client_order_id,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                })
+            
+            return normalized_orders
+            
+        except bn.exceptions.BinanceAPIException as e:
+            error_code = e.code
+            error_message = str(e.message) if hasattr(e, 'message') else str(e)
+            raise ExchangeError(
+                error_message,
+                exchange="BINANCE",
+                error_code=error_code,
+                original_error=e
+            )
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(
+                f"Network error while connecting to Binance: {str(e)}",
+                exchange="BINANCE",
+                original_error=e
+            )
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error getting Binance open orders: {str(e)}",
+                exchange="BINANCE",
+                error_code=None,
+                original_error=e
+            )
+    
+    def get_bybit_open_orders(
+        self,
+        api_key: str,
+        api_secret: str,
+        symbol: Optional[str] = None,
+        passphrase: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get all open orders from Bybit."""
+        try:
+            client = BybitHTTP(
+                api_key=api_key,
+                api_secret=api_secret,
+                testnet=False,
+            )
+            
+            # Get open orders (optionally filtered by symbol)
+            params = {"category": "spot"}
+            if symbol:
+                params["symbol"] = symbol
+            
+            response = client.get_open_orders(**params)
+            
+            if not response or response.get('retCode') != 0:
+                ret_msg = response.get('retMsg', 'Unknown error') if response else 'Empty response'
+                raise ExchangeError(
+                    f"Failed to get open orders from Bybit: {ret_msg}",
+                    exchange="BYBIT",
+                    error_code=response.get('retCode') if response else None
+                )
+            
+            result = response.get('result', {})
+            list_data = result.get('list', [])
+            
+            normalized_orders = []
+            for order in list_data:
+                # Normalize status
+                raw_status = order.get('orderStatus', '')
+                normalized_status = normalize_order_status('BYBIT', raw_status)
+                
+                # Normalize price
+                raw_price = order.get('price', '0')
+                normalized_price = normalize_price(raw_price)
+                
+                # Normalize quantity
+                raw_quantity = order.get('qty', '0')
+                normalized_quantity = normalize_quantity(raw_quantity)
+                
+                # Get timestamps
+                order_time_ms = order.get('createdTime', None)
+                if order_time_ms:
+                    created_at = int(order_time_ms / 1000)
+                else:
+                    created_at = int(datetime.now(timezone.utc).timestamp())
+                
+                update_time_ms = order.get('updatedTime', order_time_ms)
+                if update_time_ms:
+                    updated_at = int(update_time_ms / 1000)
+                else:
+                    updated_at = created_at
+                
+                # Extract client order ID
+                client_order_id = order.get('orderLinkId', '')
+                
+                # Convert side format (Buy -> BUY, Sell -> SELL)
+                side = order.get('side', '')
+                if side == 'Buy':
+                    side = 'BUY'
+                elif side == 'Sell':
+                    side = 'SELL'
+                
+                # Convert order type format (Market -> MARKET, Limit -> LIMIT)
+                order_type = order.get('orderType', '')
+                if order_type == 'Market':
+                    order_type = 'MARKET'
+                elif order_type == 'Limit':
+                    order_type = 'LIMIT'
+                
+                normalized_orders.append({
+                    "order_id": str(order.get('orderId', '')),
+                    "symbol": order.get('symbol', ''),
+                    "side": side,
+                    "type": order_type,
+                    "quantity": normalized_quantity,
+                    "price": normalized_price,
+                    "status": normalized_status,
+                    "client_order_id": client_order_id,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                })
+            
+            return normalized_orders
+            
+        except ExchangeError:
+            raise
+        except FailedRequestError as e:
+            error_str = str(e)
+            error_code = None
+            if "ErrCode:" in error_str:
+                try:
+                    code_part = error_str.split("ErrCode:")[1].split(")")[0].strip()
+                    error_code = int(code_part)
+                except (ValueError, IndexError):
+                    pass
+            
+            raise ExchangeError(
+                error_str,
+                exchange="BYBIT",
+                error_code=error_code,
+                original_error=e
+            )
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(
+                f"Network error while connecting to Bybit: {str(e)}",
+                exchange="BYBIT",
+                original_error=e
+            )
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error getting Bybit open orders: {str(e)}",
+                exchange="BYBIT",
+                error_code=None,
+                original_error=e
+            )
+
     def create_order(
         self,
         exchange: EXCHANGES,

@@ -1,6 +1,6 @@
 """Order router."""
-from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Optional, List
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, field_validator
 
@@ -150,4 +150,77 @@ async def create_order(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create order: {str(e)}"
+        )
+
+
+@router.get("/open", response_model=List[OrderResponse])
+async def get_open_orders(
+    account_id: int = Query(..., description="API key ID (account ID)"),
+    symbol: Optional[str] = Query(None, description="Optional symbol to filter orders"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get all open orders for a given API key.
+    
+    Returns a list of open orders from the exchange associated with the API key.
+    """
+    # Get API key and verify ownership
+    api_repo = APIRepository(db)
+    api = api_repo.get_by_user_and_id(current_user.id, account_id)
+    
+    if not api:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"API key with ID {account_id} not found or does not belong to you"
+        )
+    
+    # Get open orders using API service
+    api_service = ApiService()
+    exchange_slug = api.exchange.upper()
+    
+    try:
+        open_orders = api_service.get_open_orders(
+            exchange=exchange_slug,  # type: ignore
+            api_key=api.api_key,
+            api_secret=api.api_secret,
+            symbol=symbol,
+            passphrase=api.passphrase
+        )
+        
+        # Convert to OrderResponse format
+        return [
+            OrderResponse(
+                order_id=order.get('order_id', ''),
+                symbol=order.get('symbol', ''),
+                side=order.get('side', ''),
+                type=order.get('type', ''),
+                quantity=order.get('quantity', '0'),
+                price=order.get('price', '-1'),
+                status=order.get('status', 'NEW'),
+                client_order_id=order.get('client_order_id', ''),
+                account_id=account_id,
+                created_at=order.get('created_at', 0),
+                updated_at=order.get('updated_at', 0)
+            )
+            for order in open_orders
+        ]
+        
+    except NetworkError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Network error while fetching open orders: {e.message}"
+        )
+    except ExchangeError as e:
+        error_detail = f"Exchange error: {e.message}"
+        if e.error_code is not None:
+            error_detail += f" (Error code: {e.error_code})"
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_detail
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get open orders: {str(e)}"
         )
