@@ -58,6 +58,14 @@ class OrderResponse(BaseModel):
     updated_at: int  # Unix timestamp (seconds since epoch)
 
 
+class OrderCancel(BaseModel):
+    """Order cancellation request model."""
+    account_id: int = Field(..., description="API key ID (account ID)")
+    symbol_id: int = Field(..., description="Symbol ID")
+    order_id: Optional[str] = Field(None, description="Exchange order ID (optional if client_order_id provided)")
+    client_order_id: Optional[str] = Field(None, description="Client order ID (optional if order_id provided)")
+
+
 @router.post("", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
 async def create_order(
     order_data: OrderCreate,
@@ -156,7 +164,7 @@ async def create_order(
 @router.get("/open", response_model=List[OrderResponse])
 async def get_open_orders(
     account_id: int = Query(..., description="API key ID (account ID)"),
-    symbol: Optional[str] = Query(None, description="Optional symbol to filter orders"),
+    symbol_id: Optional[int] = Query(None, description="Optional symbol ID to filter orders"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -164,6 +172,7 @@ async def get_open_orders(
     Get all open orders for a given API key.
     
     Returns a list of open orders from the exchange associated with the API key.
+    Optionally filtered by symbol_id.
     """
     # Get API key and verify ownership
     api_repo = APIRepository(db)
@@ -175,6 +184,28 @@ async def get_open_orders(
             detail=f"API key with ID {account_id} not found or does not belong to you"
         )
     
+    # If symbol_id is provided, get symbol and verify it matches the exchange
+    symbol_name = None
+    if symbol_id:
+        symbol_repo = SymbolRepository(db)
+        symbol = symbol_repo.get(symbol_id)
+        
+        if not symbol:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Symbol with ID {symbol_id} not found"
+            )
+        
+        # Verify symbol matches the exchange
+        exchange_slug = api.exchange.upper()
+        if symbol.exchange.slug.upper() != exchange_slug:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Symbol belongs to exchange '{symbol.exchange.slug}', but API key is for '{exchange_slug}'"
+            )
+        
+        symbol_name = symbol.name
+    
     # Get open orders using API service
     api_service = ApiService()
     exchange_slug = api.exchange.upper()
@@ -184,7 +215,7 @@ async def get_open_orders(
             exchange=exchange_slug,  # type: ignore
             api_key=api.api_key,
             api_secret=api.api_secret,
-            symbol=symbol,
+            symbol=symbol_name,
             passphrase=api.passphrase
         )
         
@@ -223,4 +254,98 @@ async def get_open_orders(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get open orders: {str(e)}"
+        )
+
+
+@router.delete("", response_model=OrderResponse)
+async def cancel_order(
+    cancel_data: OrderCancel,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Cancel an order.
+    
+    Requires either order_id or client_order_id, and verifies API key ownership.
+    """
+    # Validate that at least one identifier is provided
+    if not cancel_data.order_id and not cancel_data.client_order_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either order_id or client_order_id must be provided"
+        )
+    
+    # Get API key and verify ownership
+    api_repo = APIRepository(db)
+    api = api_repo.get_by_user_and_id(current_user.id, cancel_data.account_id)
+    
+    if not api:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"API key with ID {cancel_data.account_id} not found or does not belong to you"
+        )
+    
+    # Get symbol and verify it exists and matches the exchange
+    symbol_repo = SymbolRepository(db)
+    symbol = symbol_repo.get(cancel_data.symbol_id)
+    
+    if not symbol:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Symbol with ID {cancel_data.symbol_id} not found"
+        )
+    
+    # Verify symbol matches the exchange
+    exchange_slug = api.exchange.upper()
+    if symbol.exchange.slug.upper() != exchange_slug:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Symbol belongs to exchange '{symbol.exchange.slug}', but API key is for '{exchange_slug}'"
+        )
+    
+    # Cancel order using API service
+    api_service = ApiService()
+    
+    try:
+        cancel_result = api_service.cancel_order(
+            exchange=exchange_slug,  # type: ignore
+            api_key=api.api_key,
+            api_secret=api.api_secret,
+            symbol=symbol.name,
+            order_id=cancel_data.order_id,
+            client_order_id=cancel_data.client_order_id,
+            passphrase=api.passphrase
+        )
+        
+        return OrderResponse(
+            order_id=cancel_result.get('order_id', ''),
+            symbol=cancel_result.get('symbol', symbol.name),
+            side=cancel_result.get('side', ''),
+            type=cancel_result.get('type', ''),
+            quantity=cancel_result.get('quantity', '0'),
+            price=cancel_result.get('price', '-1'),
+            status=cancel_result.get('status', 'CANCEL'),
+            client_order_id=cancel_result.get('client_order_id', cancel_data.client_order_id or ''),
+            account_id=cancel_data.account_id,
+            created_at=cancel_result.get('created_at', 0),
+            updated_at=cancel_result.get('updated_at', 0)
+        )
+        
+    except NetworkError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Network error while canceling order: {e.message}"
+        )
+    except ExchangeError as e:
+        error_detail = f"Exchange error: {e.message}"
+        if e.error_code is not None:
+            error_detail += f" (Error code: {e.error_code})"
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_detail
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to cancel order: {str(e)}"
         )

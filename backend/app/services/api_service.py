@@ -1196,12 +1196,22 @@ class ApiService:
             
             response = client.get_open_orders(**params)
             
-            if not response or response.get('retCode') != 0:
-                ret_msg = response.get('retMsg', 'Unknown error') if response else 'Empty response'
+            # Bybit returns retCode 0 even when there are no open orders
+            # Only raise error if retCode is not 0 (error condition)
+            if not response:
+                raise ExchangeError(
+                    "Empty response from Bybit API",
+                    exchange="BYBIT",
+                    error_code=None
+                )
+            
+            ret_code = response.get('retCode')
+            if ret_code != 0:
+                ret_msg = response.get('retMsg', 'Unknown error')
                 raise ExchangeError(
                     f"Failed to get open orders from Bybit: {ret_msg}",
                     exchange="BYBIT",
-                    error_code=response.get('retCode') if response else None
+                    error_code=ret_code
                 )
             
             result = response.get('result', {})
@@ -1222,15 +1232,22 @@ class ApiService:
                 normalized_quantity = normalize_quantity(raw_quantity)
                 
                 # Get timestamps
+                # Bybit returns timestamps as strings, convert to int first
                 order_time_ms = order.get('createdTime', None)
                 if order_time_ms:
-                    created_at = int(order_time_ms / 1000)
+                    try:
+                        created_at = int(float(order_time_ms) / 1000)  # Convert string to float, then to int
+                    except (ValueError, TypeError):
+                        created_at = int(datetime.now(timezone.utc).timestamp())
                 else:
                     created_at = int(datetime.now(timezone.utc).timestamp())
                 
                 update_time_ms = order.get('updatedTime', order_time_ms)
                 if update_time_ms:
-                    updated_at = int(update_time_ms / 1000)
+                    try:
+                        updated_at = int(float(update_time_ms) / 1000)  # Convert string to float, then to int
+                    except (ValueError, TypeError):
+                        updated_at = created_at
                 else:
                     updated_at = created_at
                 
@@ -1293,6 +1310,281 @@ class ApiService:
         except Exception as e:
             raise ExchangeError(
                 f"Unexpected error getting Bybit open orders: {str(e)}",
+                exchange="BYBIT",
+                error_code=None,
+                original_error=e
+            )
+
+    def cancel_order(
+        self,
+        exchange: EXCHANGES,
+        api_key: str,
+        api_secret: str,
+        symbol: str,
+        order_id: Optional[str] = None,
+        client_order_id: Optional[str] = None,
+        passphrase: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Cancel an order on the specified exchange.
+        
+        Args:
+            exchange: Exchange name (BINANCE or BYBIT)
+            api_key: API key
+            api_secret: API secret
+            symbol: Symbol name (e.g., "BTCUSDT")
+            order_id: Exchange order ID (optional if client_order_id provided)
+            client_order_id: Client order ID (optional if order_id provided)
+            passphrase: Optional passphrase for API
+        
+        Returns:
+            Dictionary with normalized order information after cancellation
+        
+        Raises:
+            NetworkError: If there's a network or connection error
+            ExchangeError: If there's an exchange API error
+        """
+        match exchange:
+            case 'BINANCE':
+                return self.cancel_binance_order(api_key, api_secret, symbol, order_id, client_order_id)
+            case 'BYBIT':
+                return self.cancel_bybit_order(api_key, api_secret, symbol, order_id, client_order_id)
+            case _:
+                raise ValueError(f"Invalid exchange: {exchange}")
+    
+    def cancel_binance_order(
+        self,
+        api_key: str,
+        api_secret: str,
+        symbol: str,
+        order_id: Optional[str] = None,
+        client_order_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Cancel an order on Binance."""
+        try:
+            client = bn.Client(api_key, api_secret)
+            
+            # Build cancel parameters
+            cancel_params = {"symbol": symbol}
+            
+            if client_order_id:
+                cancel_params["origClientOrderId"] = client_order_id
+            elif order_id:
+                cancel_params["orderId"] = int(order_id)
+            else:
+                raise ExchangeError(
+                    "Either order_id or client_order_id must be provided",
+                    exchange="BINANCE",
+                    error_code=None
+                )
+            
+            # Cancel the order
+            cancel_result = client.cancel_order(**cancel_params)
+            
+            # Normalize status
+            raw_status = cancel_result.get('status', '')
+            normalized_status = normalize_order_status('BINANCE', raw_status)
+            
+            # Normalize price
+            raw_price = cancel_result.get('price', '0')
+            normalized_price = normalize_price(raw_price)
+            
+            # Normalize quantity
+            raw_quantity = cancel_result.get('origQty', '0')
+            normalized_quantity = normalize_quantity(raw_quantity)
+            
+            # Get timestamps
+            order_time_ms = cancel_result.get('time', None)
+            if order_time_ms:
+                created_at = int(order_time_ms / 1000)
+            else:
+                created_at = int(datetime.now(timezone.utc).timestamp())
+            
+            update_time_ms = cancel_result.get('updateTime', order_time_ms)
+            if update_time_ms:
+                updated_at = int(update_time_ms / 1000)
+            else:
+                updated_at = created_at
+            
+            # Extract client order ID
+            client_order_id_result = cancel_result.get('clientOrderId', client_order_id or '')
+            
+            return {
+                "order_id": str(cancel_result.get('orderId', order_id or '')),
+                "symbol": cancel_result.get('symbol', symbol),
+                "side": cancel_result.get('side', ''),
+                "type": cancel_result.get('type', ''),
+                "quantity": normalized_quantity,
+                "price": normalized_price,
+                "status": normalized_status,
+                "client_order_id": client_order_id_result,
+                "created_at": created_at,
+                "updated_at": updated_at,
+                "exchange_response": cancel_result
+            }
+            
+        except bn.exceptions.BinanceAPIException as e:
+            error_code = e.code
+            error_message = str(e.message) if hasattr(e, 'message') else str(e)
+            raise ExchangeError(
+                error_message,
+                exchange="BINANCE",
+                error_code=error_code,
+                original_error=e
+            )
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(
+                f"Network error while connecting to Binance: {str(e)}",
+                exchange="BINANCE",
+                original_error=e
+            )
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error canceling Binance order: {str(e)}",
+                exchange="BINANCE",
+                error_code=None,
+                original_error=e
+            )
+    
+    def cancel_bybit_order(
+        self,
+        api_key: str,
+        api_secret: str,
+        symbol: str,
+        order_id: Optional[str] = None,
+        client_order_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Cancel an order on Bybit."""
+        try:
+            client = BybitHTTP(
+                api_key=api_key,
+                api_secret=api_secret,
+                testnet=False,
+            )
+            
+            # Build cancel parameters
+            cancel_params = {
+                "category": "spot",
+                "symbol": symbol,
+            }
+            
+            if client_order_id:
+                cancel_params["orderLinkId"] = client_order_id
+            elif order_id:
+                cancel_params["orderId"] = order_id
+            else:
+                raise ExchangeError(
+                    "Either order_id or client_order_id must be provided",
+                    exchange="BYBIT",
+                    error_code=None
+                )
+            
+            # Cancel the order
+            response = client.cancel_order(**cancel_params)
+            
+            if not response or response.get('retCode') != 0:
+                ret_msg = response.get('retMsg', 'Unknown error') if response else 'Empty response'
+                raise ExchangeError(
+                    f"Failed to cancel order on Bybit: {ret_msg}",
+                    exchange="BYBIT",
+                    error_code=response.get('retCode') if response else None
+                )
+            
+            result = response.get('result', {})
+            
+            # Get order details from result
+            order_id_result = result.get('orderId', order_id or '')
+            
+            # Normalize status (should be CANCELED after cancellation)
+            raw_status = result.get('orderStatus', 'Canceled')
+            normalized_status = normalize_order_status('BYBIT', raw_status)
+            
+            # Normalize price
+            raw_price = result.get('price', '0')
+            normalized_price = normalize_price(raw_price)
+            
+            # Normalize quantity
+            raw_quantity = result.get('qty', '0')
+            normalized_quantity = normalize_quantity(raw_quantity)
+            
+            # Get timestamps
+            # Bybit returns timestamps as strings, convert to int first
+            order_time_ms = result.get('createdTime', None)
+            if order_time_ms:
+                try:
+                    created_at = int(float(order_time_ms) / 1000)  # Convert string to float, then to int
+                except (ValueError, TypeError):
+                    created_at = int(datetime.now(timezone.utc).timestamp())
+            else:
+                created_at = int(datetime.now(timezone.utc).timestamp())
+            
+            update_time_ms = result.get('updatedTime', order_time_ms)
+            if update_time_ms:
+                try:
+                    updated_at = int(float(update_time_ms) / 1000)  # Convert string to float, then to int
+                except (ValueError, TypeError):
+                    updated_at = int(datetime.now(timezone.utc).timestamp())
+            else:
+                updated_at = int(datetime.now(timezone.utc).timestamp())
+            
+            # Extract client order ID
+            client_order_id_result = result.get('orderLinkId', client_order_id or '')
+            
+            # Convert side format (Buy -> BUY, Sell -> SELL)
+            side = result.get('side', '')
+            if side == 'Buy':
+                side = 'BUY'
+            elif side == 'Sell':
+                side = 'SELL'
+            
+            # Convert order type format (Market -> MARKET, Limit -> LIMIT)
+            order_type = result.get('orderType', '')
+            if order_type == 'Market':
+                order_type = 'MARKET'
+            elif order_type == 'Limit':
+                order_type = 'LIMIT'
+            
+            return {
+                "order_id": str(order_id_result),
+                "symbol": result.get('symbol', symbol),
+                "side": side,
+                "type": order_type,
+                "quantity": normalized_quantity,
+                "price": normalized_price,
+                "status": normalized_status,
+                "client_order_id": client_order_id_result,
+                "created_at": created_at,
+                "updated_at": updated_at,
+                "exchange_response": response
+            }
+            
+        except ExchangeError:
+            raise
+        except FailedRequestError as e:
+            error_str = str(e)
+            error_code = None
+            if "ErrCode:" in error_str:
+                try:
+                    code_part = error_str.split("ErrCode:")[1].split(")")[0].strip()
+                    error_code = int(code_part)
+                except (ValueError, IndexError):
+                    pass
+            
+            raise ExchangeError(
+                error_str,
+                exchange="BYBIT",
+                error_code=error_code,
+                original_error=e
+            )
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(
+                f"Network error while connecting to Bybit: {str(e)}",
+                exchange="BYBIT",
+                original_error=e
+            )
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error canceling Bybit order: {str(e)}",
                 exchange="BYBIT",
                 error_code=None,
                 original_error=e
@@ -1554,10 +1846,13 @@ class ApiService:
                     logger.warning(f"Failed to fetch order status for {client_order_id}: {e}")
             
             # Get timestamps from order result or use current time
-            # Bybit returns createdTime in milliseconds, convert to seconds
+            # Bybit returns createdTime as string in milliseconds, convert to seconds
             result_time_ms = result.get('createdTime', None)
             if result_time_ms:
-                created_at = int(result_time_ms / 1000)  # Convert milliseconds to seconds
+                try:
+                    created_at = int(float(result_time_ms) / 1000)  # Convert string to float, then to int
+                except (ValueError, TypeError):
+                    created_at = int(datetime.now(timezone.utc).timestamp())
             else:
                 created_at = int(datetime.now(timezone.utc).timestamp())
             
