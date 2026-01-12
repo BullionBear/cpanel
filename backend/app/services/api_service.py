@@ -410,18 +410,19 @@ class ApiService:
                             for coin_data in coins:
                                 # Handle empty strings and convert to float safely
                                 wallet_balance_str = coin_data.get('walletBalance', '0') or '0'
-                                available_balance_str = coin_data.get('availableToWithdraw', '0') or '0'
+                                locked_str = coin_data.get('locked', '0') or '0'
                                 
                                 try:
                                     wallet_balance = float(wallet_balance_str)
-                                    available_balance = float(available_balance_str)
-                                    frozen = wallet_balance - available_balance
+                                    locked = float(locked_str)
+                                    # Available = walletBalance - locked (locked includes open orders)
+                                    available_balance = wallet_balance - locked
                                     
                                     if wallet_balance > 0:
                                         unified_balances.append({
                                             "token": coin_data.get('coin', ''),
                                             "total": str(wallet_balance),
-                                            "frozen": str(frozen),
+                                            "frozen": str(locked),
                                             "available": str(available_balance)
                                         })
                                 except (ValueError, TypeError) as e:
