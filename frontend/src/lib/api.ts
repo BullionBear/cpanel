@@ -273,3 +273,106 @@ export async function getSymbols(limit: number = 100): Promise<SymbolInfo[]> {
 		throw error;
 	}
 }
+
+export interface OrderCreate {
+	symbol_id: number;
+	account_id: number;
+	type: 'LIMIT' | 'MARKET';
+	price?: string;
+	qty: string;
+	side: 'BUY' | 'SELL';
+}
+
+export interface OrderResponse {
+	order_id: string;
+	symbol: string;
+	side: string;
+	type: string;
+	quantity: string;
+	price: string;
+	status: string;
+	client_order_id: string;
+	account_id: number;
+	created_at: number;
+	updated_at: number;
+}
+
+export async function createOrder(data: OrderCreate): Promise<OrderResponse> {
+	const token = localStorage.getItem('access_token');
+	if (!token) {
+		throw new Error('Not authenticated');
+	}
+
+	try {
+		const response = await fetch(`${API_BASE_URL}/order`, {
+			method: 'POST',
+			headers: {
+				'Authorization': `Bearer ${token}`,
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify(data)
+		});
+
+		if (response.ok) {
+			return await response.json();
+		} else if (response.status === 401) {
+			localStorage.removeItem('access_token');
+			throw new Error('Unauthorized');
+		}
+		const error = await response.json();
+		throw new Error(error.detail || 'Failed to create order');
+	} catch (error) {
+		console.error('Failed to create order:', error);
+		throw error;
+	}
+}
+
+export interface TokenBalance {
+	token: string;
+	total: string;
+	frozen: string;
+	available: string;
+}
+
+export interface WalletBalance {
+	wallet: string;
+	balance: TokenBalance[];
+}
+
+export interface BalanceResponse {
+	api_id: number;
+	name: string;
+	exchange: string;
+	wallets: WalletBalance[];
+}
+
+export async function getBalances(apiIds: number[]): Promise<BalanceResponse[]> {
+	const token = localStorage.getItem('access_token');
+	if (!token) {
+		throw new Error('Not authenticated');
+	}
+
+	try {
+		const idParam = apiIds.join(',');
+		const response = await fetch(`${API_BASE_URL}/balance?id=${idParam}`, {
+			headers: {
+				'Authorization': `Bearer ${token}`
+			}
+		});
+
+		if (response.ok) {
+			return await response.json();
+		} else if (response.status === 401) {
+			localStorage.removeItem('access_token');
+			throw new Error('Unauthorized');
+		} else if (response.status === 404) {
+			// No balances found, return empty array
+			return [];
+		}
+		const error = await response.json();
+		throw new Error(error.detail || 'Failed to fetch balances');
+	} catch (error) {
+		console.error('Failed to get balances:', error);
+		throw error;
+	}
+}

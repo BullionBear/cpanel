@@ -31,6 +31,7 @@ class WalletBalance(BaseModel):
 class BalanceResponse(BaseModel):
     """Balance response model."""
     api_id: int
+    name: str
     exchange: str
     wallets: List[WalletBalance]
 
@@ -76,6 +77,7 @@ def _get_balance_for_api(api, api_service: ApiService) -> BalanceResponse:
     
     return BalanceResponse(
         api_id=api.id,
+        name=api.name,
         exchange=api.exchange,
         wallets=wallets
     )
