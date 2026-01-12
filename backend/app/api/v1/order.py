@@ -54,6 +54,7 @@ class OrderResponse(BaseModel):
     status: str  # Normalized: NEW, FILLED, PARTIAL_FILLED, REJECT, CANCEL
     client_order_id: str
     account_id: int
+    account_name: str
     created_at: int  # Unix timestamp (seconds since epoch)
     updated_at: int  # Unix timestamp (seconds since epoch)
 
@@ -137,6 +138,7 @@ async def create_order(
             status=order_result.get('status', 'NEW'),  # Already normalized by service
             client_order_id=order_result.get('client_order_id', ''),
             account_id=order_data.account_id,
+            account_name=api.name,
             created_at=order_result.get('created_at', 0),
             updated_at=order_result.get('updated_at', 0)
         )
@@ -161,31 +163,75 @@ async def create_order(
         )
 
 
+def _get_open_orders_for_api(
+    api,
+    api_service: ApiService,
+    symbol_name: Optional[str] = None,
+) -> List[OrderResponse]:
+    """
+    Helper function to get open orders for a single API and convert to response model.
+    
+    Args:
+        api: API model instance
+        api_service: ApiService instance
+        symbol_name: Optional symbol name to filter orders
+        
+    Returns:
+        List of OrderResponse objects
+        
+    Raises:
+        NetworkError: If network error occurs
+        ExchangeError: If exchange error occurs
+    """
+    exchange_slug = api.exchange.upper()
+    
+    open_orders = api_service.get_open_orders(
+        exchange=exchange_slug,  # type: ignore
+        api_key=api.api_key,
+        api_secret=api.api_secret,
+        symbol=symbol_name,
+        passphrase=api.passphrase
+    )
+    
+    # Convert to OrderResponse format
+    return [
+        OrderResponse(
+            order_id=order.get('order_id', ''),
+            symbol=order.get('symbol', ''),
+            side=order.get('side', ''),
+            type=order.get('type', ''),
+            quantity=order.get('quantity', '0'),
+            price=order.get('price', '-1'),
+            status=order.get('status', 'NEW'),
+            client_order_id=order.get('client_order_id', ''),
+            account_id=api.id,
+            account_name=api.name,
+            created_at=order.get('created_at', 0),
+            updated_at=order.get('updated_at', 0)
+        )
+        for order in open_orders
+    ]
+
+
 @router.get("/open", response_model=List[OrderResponse])
 async def get_open_orders(
-    account_id: int = Query(..., description="API key ID (account ID)"),
+    account_id: Optional[int] = Query(None, description="Optional API key ID (account ID). If not provided, returns orders for all user accounts"),
     symbol_id: Optional[int] = Query(None, description="Optional symbol ID to filter orders"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Get all open orders for a given API key.
+    Get all open orders.
     
-    Returns a list of open orders from the exchange associated with the API key.
+    If account_id is provided, returns open orders for that specific API key.
+    If account_id is not provided, returns open orders for all API keys belonging to the current user.
     Optionally filtered by symbol_id.
     """
-    # Get API key and verify ownership
     api_repo = APIRepository(db)
-    api = api_repo.get_by_user_and_id(current_user.id, account_id)
+    api_service = ApiService()
     
-    if not api:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"API key with ID {account_id} not found or does not belong to you"
-        )
-    
-    # If symbol_id is provided, get symbol and verify it matches the exchange
-    symbol_name = None
+    # If symbol_id is provided, get symbol info (we'll validate against each exchange)
+    symbol = None
     if symbol_id:
         symbol_repo = SymbolRepository(db)
         symbol = symbol_repo.get(symbol_id)
@@ -195,66 +241,70 @@ async def get_open_orders(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Symbol with ID {symbol_id} not found"
             )
+    
+    all_orders = []
+    
+    if account_id:
+        # Single API key mode - existing behavior
+        api = api_repo.get_by_user_and_id(current_user.id, account_id)
         
-        # Verify symbol matches the exchange
-        exchange_slug = api.exchange.upper()
-        if symbol.exchange.slug.upper() != exchange_slug:
+        if not api:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Symbol belongs to exchange '{symbol.exchange.slug}', but API key is for '{exchange_slug}'"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"API key with ID {account_id} not found or does not belong to you"
             )
         
-        symbol_name = symbol.name
-    
-    # Get open orders using API service
-    api_service = ApiService()
-    exchange_slug = api.exchange.upper()
-    
-    try:
-        open_orders = api_service.get_open_orders(
-            exchange=exchange_slug,  # type: ignore
-            api_key=api.api_key,
-            api_secret=api.api_secret,
-            symbol=symbol_name,
-            passphrase=api.passphrase
-        )
+        # If symbol_id is provided, verify it matches the exchange
+        symbol_name = None
+        if symbol:
+            exchange_slug = api.exchange.upper()
+            if symbol.exchange.slug.upper() != exchange_slug:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Symbol belongs to exchange '{symbol.exchange.slug}', but API key is for '{exchange_slug}'"
+                )
+            symbol_name = symbol.name
         
-        # Convert to OrderResponse format
-        return [
-            OrderResponse(
-                order_id=order.get('order_id', ''),
-                symbol=order.get('symbol', ''),
-                side=order.get('side', ''),
-                type=order.get('type', ''),
-                quantity=order.get('quantity', '0'),
-                price=order.get('price', '-1'),
-                status=order.get('status', 'NEW'),
-                client_order_id=order.get('client_order_id', ''),
-                account_id=account_id,
-                created_at=order.get('created_at', 0),
-                updated_at=order.get('updated_at', 0)
-            )
-            for order in open_orders
-        ]
+        # Get open orders for this API
+        try:
+            orders = _get_open_orders_for_api(api, api_service, symbol_name)
+            all_orders.extend(orders)
+        except NetworkError:
+            # Skip on network errors
+            pass
+        except ExchangeError:
+            # Skip on exchange errors
+            pass
+    else:
+        # All accounts mode - get all API keys for the user
+        apis = api_repo.query(user_id=current_user.id)
         
-    except NetworkError as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Network error while fetching open orders: {e.message}"
-        )
-    except ExchangeError as e:
-        error_detail = f"Exchange error: {e.message}"
-        if e.error_code is not None:
-            error_detail += f" (Error code: {e.error_code})"
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=error_detail
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get open orders: {str(e)}"
-        )
+        if not apis:
+            return []
+        
+        # Get open orders for each API
+        for api in apis:
+            symbol_name = None
+            if symbol:
+                # Only include orders from this API if symbol matches the exchange
+                exchange_slug = api.exchange.upper()
+                if symbol.exchange.slug.upper() == exchange_slug:
+                    symbol_name = symbol.name
+                else:
+                    # Skip this API if symbol doesn't match its exchange
+                    continue
+            
+            try:
+                orders = _get_open_orders_for_api(api, api_service, symbol_name)
+                all_orders.extend(orders)
+            except NetworkError:
+                # Skip APIs with network errors
+                continue
+            except ExchangeError:
+                # Skip APIs with exchange errors
+                continue
+    
+    return all_orders
 
 
 @router.delete("", response_model=OrderResponse)
@@ -327,6 +377,7 @@ async def cancel_order(
             status=cancel_result.get('status', 'CANCEL'),
             client_order_id=cancel_result.get('client_order_id', cancel_data.client_order_id or ''),
             account_id=cancel_data.account_id,
+            account_name=api.name,
             created_at=cancel_result.get('created_at', 0),
             updated_at=cancel_result.get('updated_at', 0)
         )

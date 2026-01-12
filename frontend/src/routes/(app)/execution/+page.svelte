@@ -5,6 +5,7 @@
 	import Marquee from '../../../components/Marquee.svelte';
 	import OrderPanel from '../../../components/OrderPanel.svelte';
 	import BalancePanel from '../../../components/BalancePanel.svelte';
+	import OpenOrdersPanel from '../../../components/OpenOrdersPanel.svelte';
 
 	onMount(async () => {
 		// Check authentication
@@ -26,12 +27,7 @@
 			<OrderPanel />
 			<BalancePanel />
 		</div>
-		<div class="info-section">
-			<div class="placeholder-card">
-				<h2>Open Orders</h2>
-				<p>Open orders will appear here.</p>
-			</div>
-		</div>
+		<OpenOrdersPanel />
 	</div>
 </div>
 
@@ -62,32 +58,6 @@
 	.panels-row :global(.balance-panel) {
 		flex: 1;
 		min-width: 0;
-	}
-
-	.info-section {
-		display: flex;
-		flex-direction: column;
-		gap: 24px;
-	}
-
-	.placeholder-card {
-		background: white;
-		border-radius: 12px;
-		border: 1px solid #e5e7eb;
-		padding: 20px;
-	}
-
-	.placeholder-card h2 {
-		margin: 0 0 12px 0;
-		font-size: 18px;
-		font-weight: 600;
-		color: #1f2937;
-	}
-
-	.placeholder-card p {
-		margin: 0;
-		color: #6b7280;
-		font-size: 14px;
 	}
 
 	@media (max-width: 900px) {

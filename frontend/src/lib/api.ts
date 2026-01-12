@@ -376,3 +376,84 @@ export async function getBalances(apiIds: number[]): Promise<BalanceResponse[]> 
 		throw error;
 	}
 }
+
+export interface OpenOrder {
+	order_id: string;
+	symbol: string;
+	side: string;
+	type: string;
+	quantity: string;
+	price: string;
+	status: string;
+	client_order_id: string;
+	account_id: number;
+	account_name: string;
+	created_at: number;
+	updated_at: number;
+}
+
+export async function getOpenOrders(): Promise<OpenOrder[]> {
+	const token = localStorage.getItem('access_token');
+	if (!token) {
+		throw new Error('Not authenticated');
+	}
+
+	try {
+		const response = await fetch(`${API_BASE_URL}/order/open`, {
+			headers: {
+				'Authorization': `Bearer ${token}`
+			}
+		});
+
+		if (response.ok) {
+			return await response.json();
+		} else if (response.status === 401) {
+			localStorage.removeItem('access_token');
+			throw new Error('Unauthorized');
+		} else if (response.status === 404) {
+			return [];
+		}
+		const error = await response.json();
+		throw new Error(error.detail || 'Failed to fetch open orders');
+	} catch (error) {
+		console.error('Failed to get open orders:', error);
+		throw error;
+	}
+}
+
+export interface OrderCancel {
+	account_id: number;
+	symbol_id: number;
+	order_id?: string;
+	client_order_id?: string;
+}
+
+export async function cancelOrder(data: OrderCancel): Promise<OrderResponse> {
+	const token = localStorage.getItem('access_token');
+	if (!token) {
+		throw new Error('Not authenticated');
+	}
+
+	try {
+		const response = await fetch(`${API_BASE_URL}/order`, {
+			method: 'DELETE',
+			headers: {
+				'Authorization': `Bearer ${token}`,
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify(data)
+		});
+
+		if (response.ok) {
+			return await response.json();
+		} else if (response.status === 401) {
+			localStorage.removeItem('access_token');
+			throw new Error('Unauthorized');
+		}
+		const error = await response.json();
+		throw new Error(error.detail || 'Failed to cancel order');
+	} catch (error) {
+		console.error('Failed to cancel order:', error);
+		throw error;
+	}
+}
