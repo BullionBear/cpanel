@@ -142,3 +142,134 @@ export async function deleteAPIKey(apiId: number): Promise<void> {
 		throw error;
 	}
 }
+
+export interface PreferenceResponse {
+	preference: {
+		banner?: number[];
+		[key: string]: any;
+	};
+}
+
+export async function getPreference(layout: string = 'execution'): Promise<PreferenceResponse> {
+	const token = localStorage.getItem('access_token');
+	if (!token) {
+		throw new Error('Not authenticated');
+	}
+
+	try {
+		const response = await fetch(`${API_BASE_URL}/preference?layout=${layout}`, {
+			headers: {
+				'Authorization': `Bearer ${token}`
+			}
+		});
+
+		if (response.ok) {
+			return await response.json();
+		} else if (response.status === 401) {
+			localStorage.removeItem('access_token');
+			throw new Error('Unauthorized');
+		}
+		const error = await response.json();
+		throw new Error(error.detail || 'Failed to fetch preference');
+	} catch (error) {
+		console.error('Failed to get preference:', error);
+		throw error;
+	}
+}
+
+export interface BBOData {
+	symbol_id: number;
+	symbol: string;
+	exchange: string;
+	bid: [string, string]; // [price, quantity]
+	ask: [string, string]; // [price, quantity]
+}
+
+export async function getBBOs(symbolIds: number[]): Promise<BBOData[]> {
+	try {
+		const symbolIdParam = symbolIds.join(',');
+		const response = await fetch(`${API_BASE_URL}/market/bbos?symbol_id=${symbolIdParam}`);
+
+		if (response.ok) {
+			return await response.json();
+		}
+		const error = await response.json();
+		throw new Error(error.detail || 'Failed to fetch BBO data');
+	} catch (error) {
+		console.error('Failed to get BBOs:', error);
+		throw error;
+	}
+}
+
+export async function updatePreference(preference: Record<string, any>, layout: string = 'execution'): Promise<PreferenceResponse> {
+	const token = localStorage.getItem('access_token');
+	if (!token) {
+		throw new Error('Not authenticated');
+	}
+
+	try {
+		const response = await fetch(`${API_BASE_URL}/preference?layout=${layout}`, {
+			method: 'PUT',
+			headers: {
+				'Authorization': `Bearer ${token}`,
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({ preference })
+		});
+
+		if (response.ok) {
+			return await response.json();
+		} else if (response.status === 401) {
+			localStorage.removeItem('access_token');
+			throw new Error('Unauthorized');
+		}
+		const error = await response.json();
+		throw new Error(error.detail || 'Failed to update preference');
+	} catch (error) {
+		console.error('Failed to update preference:', error);
+		throw error;
+	}
+}
+
+export interface SymbolInfo {
+	id: number;
+	name: string;
+	exchange: {
+		id: number;
+		name: string;
+		slug: string;
+	};
+	product: {
+		id: number;
+		name: string;
+		slug: string;
+	};
+	base_token: {
+		id: number;
+		name: string;
+		slug: string;
+	};
+	quote_token: {
+		id: number;
+		name: string;
+		slug: string;
+	};
+	price_precision: number;
+	size_precision: number;
+	universal_ticker: string;
+}
+
+export async function getSymbols(limit: number = 100): Promise<SymbolInfo[]> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/symbol?limit=${limit}`);
+
+		if (response.ok) {
+			return await response.json();
+		}
+		const error = await response.json();
+		throw new Error(error.detail || 'Failed to fetch symbols');
+	} catch (error) {
+		console.error('Failed to get symbols:', error);
+		throw error;
+	}
+}

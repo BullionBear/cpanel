@@ -1,6 +1,6 @@
 """Preference router."""
-from typing import Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from typing import Dict, Any, Literal
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
@@ -29,7 +29,7 @@ class PreferenceResponse(BaseModel):
 
 @router.get("", response_model=PreferenceResponse)
 async def get_preference(
-    layout: str = Query(default="default", description="Layout name for the preference"),
+    layout: Literal["execution"] = Query(default="execution", description="Layout name for the preference"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -37,10 +37,10 @@ async def get_preference(
     Get user's preference.
     
     If the user preference is not found for the specified layout, creates a default preference
-    with {banner: [1]} and returns it.
+    with {banner: [1]}.
     
     Args:
-        layout: Layout name (default: "default")
+        layout: Layout name (default: "execution"). Add new layout types to the Literal type hint as needed.
         current_user: Authenticated user (from JWT token)
         db: Database session
         
@@ -63,5 +63,51 @@ async def get_preference(
     
     # Return the preference JSONB schema
     preference_data = user_pref.preference if isinstance(user_pref.preference, dict) else {}
+    
+    return PreferenceResponse(preference=preference_data)
+
+@router.put("", response_model=PreferenceResponse)
+async def update_preference(
+    preference: PreferenceResponse,
+    layout: Literal["execution"] = Query(default="execution", description="Layout name for the preference"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Update user's preference.
+    
+    If the user preference is not found for the specified layout, creates a new preference
+    with the provided data.
+    
+    Args:
+        preference: Preference data to update
+        layout: Layout name (default: "execution"). Add new layout types to the Literal type hint as needed.
+        current_user: Authenticated user (from JWT token)
+        db: Database session
+        
+    Returns:
+        PreferenceResponse containing the updated preference JSONB schema
+    """
+    preference_repo = UserPreferenceRepository(db)
+    
+    # Get existing preference or create if it doesn't exist
+    user_pref = preference_repo.get_by_user_and_layout(current_user.id, layout)
+    
+    if user_pref:
+        # Update existing preference
+        updated_pref = preference_repo.update(
+            user_pref,
+            preference=preference.preference
+        )
+        preference_data = updated_pref.preference if isinstance(updated_pref.preference, dict) else {}
+    else:
+        # Create new preference
+        user_pref = preference_repo.create(
+            user_id=current_user.id,
+            layout=layout,
+            version=1,
+            preference=preference.preference,
+        )
+        preference_data = user_pref.preference if isinstance(user_pref.preference, dict) else {}
     
     return PreferenceResponse(preference=preference_data)
