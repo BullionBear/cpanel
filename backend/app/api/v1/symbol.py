@@ -59,6 +59,54 @@ class SymbolResponse(BaseModel):
         from_attributes = True
 
 
+@router.get("/universal_ticker/{ticker_name}", response_model=SymbolResponse)
+async def get_symbol_by_universal_ticker(
+    ticker_name: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Get a symbol by its universal ticker.
+    
+    Returns the symbol with its exchange, product, base token, and quote token information.
+    """
+    symbol_repo = SymbolRepository(db)
+    
+    symbol = symbol_repo.get_by_universal_ticker(ticker_name)
+    if not symbol:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Symbol with universal ticker '{ticker_name}' not found"
+        )
+    
+    return SymbolResponse(
+        id=symbol.id,
+        name=symbol.name,
+        exchange=ExchangeInfo(
+            id=symbol.exchange.id,
+            name=symbol.exchange.name,
+            slug=symbol.exchange.slug
+        ),
+        product=ProductInfo(
+            id=symbol.product.id,
+            name=symbol.product.name,
+            slug=symbol.product.slug
+        ),
+        base_token=TokenInfo(
+            id=symbol.base_token.id,
+            name=symbol.base_token.name,
+            slug=symbol.base_token.slug
+        ),
+        quote_token=TokenInfo(
+            id=symbol.quote_token.id,
+            name=symbol.quote_token.name,
+            slug=symbol.quote_token.slug
+        ),
+        price_precision=symbol.price_precision,
+        size_precision=symbol.size_precision,
+        universal_ticker=symbol.universal_ticker
+    )
+
+
 @router.get("", response_model=List[SymbolResponse])
 async def list_symbols(
     exchange_id: Optional[int] = Query(None, description="Filter by exchange ID"),
