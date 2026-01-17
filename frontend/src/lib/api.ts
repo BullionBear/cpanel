@@ -327,6 +327,11 @@ export async function createOrder(data: OrderCreate): Promise<OrderResponse> {
 	}
 }
 
+export interface APIToken {
+	access_token: string;
+	token_type: string;
+}
+
 export interface TokenBalance {
 	token: string;
 	total: string;
@@ -454,6 +459,93 @@ export async function cancelOrder(data: OrderCancel): Promise<OrderResponse> {
 		throw new Error(error.detail || 'Failed to cancel order');
 	} catch (error) {
 		console.error('Failed to cancel order:', error);
+		throw error;
+	}
+}
+
+export async function getAPIToken(): Promise<APIToken | null> {
+	const token = localStorage.getItem('access_token');
+	if (!token) {
+		throw new Error('Not authenticated');
+	}
+
+	try {
+		const response = await fetch(`${API_BASE_URL}/auth/api-token`, {
+			headers: {
+				'Authorization': `Bearer ${token}`
+			}
+		});
+
+		if (response.ok) {
+			return await response.json();
+		} else if (response.status === 404) {
+			// No API token found
+			return null;
+		} else if (response.status === 401) {
+			localStorage.removeItem('access_token');
+			throw new Error('Unauthorized');
+		}
+		const error = await response.json();
+		throw new Error(error.detail || 'Failed to fetch API token');
+	} catch (error) {
+		console.error('Failed to get API token:', error);
+		throw error;
+	}
+}
+
+export async function createAPIToken(): Promise<APIToken> {
+	const token = localStorage.getItem('access_token');
+	if (!token) {
+		throw new Error('Not authenticated');
+	}
+
+	try {
+		const response = await fetch(`${API_BASE_URL}/auth/api-token`, {
+			method: 'POST',
+			headers: {
+				'Authorization': `Bearer ${token}`,
+				'Content-Type': 'application/json'
+			}
+		});
+
+		if (response.ok) {
+			return await response.json();
+		} else if (response.status === 401) {
+			localStorage.removeItem('access_token');
+			throw new Error('Unauthorized');
+		}
+		const error = await response.json();
+		throw new Error(error.detail || 'Failed to create API token');
+	} catch (error) {
+		console.error('Failed to create API token:', error);
+		throw error;
+	}
+}
+
+export async function deleteAPIToken(): Promise<void> {
+	const token = localStorage.getItem('access_token');
+	if (!token) {
+		throw new Error('Not authenticated');
+	}
+
+	try {
+		const response = await fetch(`${API_BASE_URL}/auth/api-token`, {
+			method: 'DELETE',
+			headers: {
+				'Authorization': `Bearer ${token}`
+			}
+		});
+
+		if (response.ok || response.status === 204) {
+			return;
+		} else if (response.status === 401) {
+			localStorage.removeItem('access_token');
+			throw new Error('Unauthorized');
+		}
+		const error = await response.json();
+		throw new Error(error.detail || 'Failed to delete API token');
+	} catch (error) {
+		console.error('Failed to delete API token:', error);
 		throw error;
 	}
 }

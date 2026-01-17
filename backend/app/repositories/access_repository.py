@@ -55,3 +55,31 @@ class AccessRepository:
         self.db.commit()
         return count
 
+    def get_api_token_by_user(self, user_id: int) -> Optional[Access]:
+        """Get the API token (api_ prefix) for a user if it exists and is valid."""
+        now = datetime.now(timezone.utc)
+        return (
+            self.db.query(Access)
+            .filter(Access.user_id == user_id)
+            .filter(Access.access_token.like("api_%"))
+            .filter(Access.expired_at > now)
+            .first()
+        )
+
+    def delete_api_tokens_by_user(self, user_id: int) -> int:
+        """Delete all API tokens (api_ prefix) for a user."""
+        count = (
+            self.db.query(Access)
+            .filter(Access.user_id == user_id)
+            .filter(Access.access_token.like("api_%"))
+            .count()
+        )
+        (
+            self.db.query(Access)
+            .filter(Access.user_id == user_id)
+            .filter(Access.access_token.like("api_%"))
+            .delete(synchronize_session=False)
+        )
+        self.db.commit()
+        return count
+

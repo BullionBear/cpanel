@@ -13,7 +13,7 @@ from app.core.security import (
 )
 from app.db.session import get_db
 from app.models import User
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, oauth2_scheme
 from app.repositories.user_repository import UserRepository
 from app.repositories.access_repository import AccessRepository
 from app.services.email_service import email_service
@@ -192,16 +192,16 @@ async def login(
     user_repo.update_last_login(user.id)
     
     if user.is_active:
-        # Activated user: Create access token (7 days) and return it
+        # Activated user: Create UI access token (7 days) with ui_ prefix and return it
         expires_delta = timedelta(days=7)
         token_data = {
             "sub": str(user.id),
             "username": user.username,
             "email": user.email,
             "is_active": True,
-            "type": "access",
+            "type": "ui_access",
         }
-        access_token = create_access_token(data=token_data, expires_delta=expires_delta)
+        access_token = create_access_token(data=token_data, expires_delta=expires_delta, prefix="ui_")
         
         # Calculate expired_at datetime
         expired_at = datetime.now(timezone.utc) + expires_delta
@@ -376,4 +376,115 @@ async def activate_user(
             is_active=activated_user.is_active,
         )
     }
+
+
+@router.get("/api-token", response_model=Token)
+async def get_api_token(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get the current API token for the authenticated user.
+    
+    Returns the user's existing API token if it exists and is valid.
+    Requires authentication (UI or API token).
+    """
+    access_repo = AccessRepository(db)
+    
+    # Get the user's API token
+    api_token_access = access_repo.get_api_token_by_user(current_user.id)
+    
+    if not api_token_access:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No API token found. Create one using POST /api/v1/auth/api-token"
+        )
+    
+    return Token(access_token=api_token_access.access_token, token_type="bearer")
+
+
+@router.post("/api-token", response_model=Token)
+async def create_api_token(
+    token: str = Depends(oauth2_scheme),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Create or refresh a permanent API token (expires in 10 years) using UI token.
+    
+    Requires a valid UI token (ui_ prefix). Returns an API token (api_ prefix)
+    that can be used for API access. API tokens have a 10-year expiration.
+    
+    If the user already has an API token, it will be deleted and replaced with a new one.
+    This enforces a one user-one API token model.
+    """
+    access_repo = AccessRepository(db)
+    
+    # Verify that the token is a UI token (not an API token)
+    if not token.startswith("ui_"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="API tokens can only be created using UI tokens (ui_ prefix)"
+        )
+    
+    # Check if user already has an API token (one user-one token model)
+    existing_api_token = access_repo.get_api_token_by_user(current_user.id)
+    if existing_api_token:
+        # Delete existing API token(s) to refresh
+        access_repo.delete_api_tokens_by_user(current_user.id)
+    
+    # Create API token with 10 years expiration (as "never expire")
+    expires_delta = timedelta(days=365 * 10)  # 10 years
+    token_data = {
+        "sub": str(current_user.id),
+        "username": current_user.username,
+        "email": current_user.email,
+        "is_active": current_user.is_active,
+        "type": "api_access",
+    }
+    api_token = create_access_token(data=token_data, expires_delta=expires_delta, prefix="api_")
+    
+    # Calculate expired_at datetime
+    expired_at = datetime.now(timezone.utc) + expires_delta
+    
+    # Save token to database
+    access_repo.create(
+        user_id=current_user.id,
+        access_token=api_token,
+        expired_at=expired_at,
+    )
+    
+    return Token(access_token=api_token, token_type="bearer")
+
+
+@router.delete("/api-token")
+async def delete_api_token(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Delete the API token for the authenticated user.
+    
+    Since each user can only have one API token, this endpoint deletes
+    the user's existing API token. Requires authentication.
+    """
+    access_repo = AccessRepository(db)
+    
+    # Check if user has an API token
+    api_token_access = access_repo.get_api_token_by_user(current_user.id)
+    if not api_token_access:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No API token found"
+        )
+    
+    # Delete the user's API token(s)
+    deleted_count = access_repo.delete_api_tokens_by_user(current_user.id)
+    if deleted_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete token"
+        )
+    
+    return {"message": "API token deleted successfully"}
 
