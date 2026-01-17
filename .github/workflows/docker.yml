@@ -40,10 +40,12 @@ jobs:
           echo "frontend_image=ghcr.io/${OWNER_LC}/cpanel-frontend" >> $GITHUB_OUTPUT
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
             echo "is_tag=true" >> $GITHUB_OUTPUT
           else
             SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
             echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "version=$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "is_tag=false" >> $GITHUB_OUTPUT
           fi
 
@@ -55,6 +57,8 @@ jobs:
           context: .
           file: docker/Dockerfile.backend
           push: true
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
           tags: |
             ${{ steps.meta.outputs.backend_image }}:latest
             ${{ steps.meta.outputs.backend_image }}:${{ steps.meta.outputs.short_sha }}
@@ -68,6 +72,8 @@ jobs:
           context: .
           file: docker/Dockerfile.backend
           push: true
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
           tags: |
             ${{ steps.meta.outputs.backend_image }}:${{ steps.meta.outputs.tag }}
           cache-from: type=gha
