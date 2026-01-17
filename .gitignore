@@ -5,3 +5,4 @@ env.sh
 __pycache__/
 *.pyc
 *.http
+deployment/letsencrypt/acme.json

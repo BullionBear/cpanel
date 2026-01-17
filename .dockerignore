@@ -1,0 +1,8 @@
+venv/
+env.sh
+*.env
+.env
+__pycache__/
+*.pyc
+*.http
+deployment/letsencrypt/acme.json
