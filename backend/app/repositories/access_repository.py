@@ -83,3 +83,28 @@ class AccessRepository:
         self.db.commit()
         return count
 
+    def get_ui_tokens_by_user(self, user_id: int) -> list[Access]:
+        """Get all UI tokens (ui_ prefix) for a user, ordered by created_at (oldest first)."""
+        return (
+            self.db.query(Access)
+            .filter(Access.user_id == user_id)
+            .filter(Access.access_token.like("ui_%"))
+            .order_by(Access.created_at.asc())
+            .all()
+        )
+
+    def delete_oldest_ui_token_by_user(self, user_id: int) -> bool:
+        """Delete the oldest UI token (ui_ prefix) for a user."""
+        oldest_token = (
+            self.db.query(Access)
+            .filter(Access.user_id == user_id)
+            .filter(Access.access_token.like("ui_%"))
+            .order_by(Access.created_at.asc())
+            .first()
+        )
+        if oldest_token:
+            self.db.delete(oldest_token)
+            self.db.commit()
+            return True
+        return False
+

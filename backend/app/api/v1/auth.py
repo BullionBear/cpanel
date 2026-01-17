@@ -1,7 +1,9 @@
 """Authentication router."""
+import asyncio
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 
@@ -192,6 +194,14 @@ async def login(
     user_repo.update_last_login(user.id)
     
     if user.is_active:
+        # Enforce MAX_UI_TOKEN limit: delete oldest tokens BEFORE creating new one
+        # This prevents race conditions and ensures we have space for the new token
+        ui_tokens = access_repo.get_ui_tokens_by_user(user.id)
+        # Delete oldest tokens if we're at or above the limit (we'll add one more)
+        while len(ui_tokens) >= settings.MAX_UI_TOKEN:
+            access_repo.delete_oldest_ui_token_by_user(user.id)
+            ui_tokens = access_repo.get_ui_tokens_by_user(user.id)
+        
         # Activated user: Create UI access token (7 days) with ui_ prefix and return it
         expires_delta = timedelta(days=7)
         token_data = {
@@ -201,20 +211,51 @@ async def login(
             "is_active": True,
             "type": "ui_access",
         }
-        access_token = create_access_token(data=token_data, expires_delta=expires_delta, prefix="ui_")
         
-        # Calculate expired_at datetime
-        expired_at = datetime.now(timezone.utc) + expires_delta
+        # Retry logic in case of duplicate token (very rare but possible)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                access_token = create_access_token(data=token_data, expires_delta=expires_delta, prefix="ui_")
+                
+                # Calculate expired_at datetime
+                expired_at = datetime.now(timezone.utc) + expires_delta
+                
+                # Save token to database
+                access_repo.create(
+                    user_id=user.id,
+                    access_token=access_token,
+                    expired_at=expired_at,
+                )
+                
+                # Success - return token
+                return Token(access_token=access_token, token_type="bearer")
+            except IntegrityError as e:
+                # Check if it's a unique constraint violation (duplicate token)
+                error_str = str(e.orig) if hasattr(e, 'orig') else str(e)
+                if "UniqueViolation" in error_str or "duplicate key" in error_str.lower():
+                    if attempt < max_retries - 1:
+                        # Wait a tiny bit and retry with a new token
+                        await asyncio.sleep(0.001 * (attempt + 1))  # Small delay: 1ms, 2ms, 3ms
+                        continue
+                    else:
+                        # Last attempt failed, raise the error
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Failed to create access token. Please try again."
+                        )
+                else:
+                    # Different integrity error, re-raise it
+                    raise
+            except Exception as e:
+                # Other errors, re-raise immediately
+                raise
         
-        # Save token to database
-        access_repo.create(
-            user_id=user.id,
-            access_token=access_token,
-            expired_at=expired_at,
+        # Should not reach here, but just in case
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create access token after retries"
         )
-        
-        # Return token for active users
-        return Token(access_token=access_token, token_type="bearer")
     else:
         # Inactive user: Create activation token (30 minutes) and send via email, don't return token
         expires_delta = timedelta(minutes=30)

@@ -1,4 +1,5 @@
 """Security utilities for authentication and password hashing."""
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -46,7 +47,14 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None, p
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+    
+    # Add iat (issued at) with microseconds and a random nonce to ensure uniqueness
+    now = datetime.now(timezone.utc)
+    to_encode.update({
+        "exp": expire,
+        "iat": now.timestamp(),  # Include microseconds precision
+        "jti": secrets.token_urlsafe(8),  # Unique token identifier to prevent collisions
+    })
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return f"{prefix}{encoded_jwt}" if prefix else encoded_jwt
 
