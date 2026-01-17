@@ -39,6 +39,7 @@ services:
       - "traefik.http.routers.backend.entrypoints=websecure"
       - "traefik.http.routers.backend.tls.certresolver=myresolver"
       - "traefik.http.services.backend.loadbalancer.server.port=8186"
+    pull_policy: always
 
   frontend:
     image: ghcr.io/bullionbear/cpanel-frontend:latest
@@ -50,3 +51,4 @@ services:
       - "traefik.http.routers.frontend.entrypoints=websecure"
       - "traefik.http.routers.frontend.tls.certresolver=myresolver"
       - "traefik.http.services.frontend.loadbalancer.server.port=80"
+    pull_policy: always
