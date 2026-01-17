@@ -86,7 +86,15 @@
 <svelte:window on:keydown={handleKeydown} />
 
 {#if isOpen}
-	<div class="modal-backdrop" on:click={handleBackdropClick} role="dialog" aria-modal="true">
+	<!-- svelte-ignore a11y-click-events-have-key-events -->
+	<!-- svelte-ignore a11y-no-static-element-interactions -->
+	<div 
+		class="modal-backdrop" 
+		on:click={handleBackdropClick} 
+		role="dialog" 
+		aria-modal="true"
+		aria-label="Close modal"
+	>
 		<div class="modal">
 			<div class="modal-header">
 				<h2>Banner Settings</h2>
