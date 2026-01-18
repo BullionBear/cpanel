@@ -30,6 +30,9 @@ class APIKeyResponse(BaseModel):
     user_id: int
     exchange: str
     name: str
+    api_key: str
+    api_secret: str
+    passphrase: Optional[str] = None
     master_is: Optional[int] = None
     created_at: str
 
@@ -119,6 +122,9 @@ async def register_api_key(
             user_id=api.user_id,
             exchange=api.exchange,
             name=api.name,
+            api_key=api.api_key,
+            api_secret=api.api_secret,
+            passphrase=api.passphrase,
             master_is=api.master_is,
             created_at=api.created_at.isoformat() if api.created_at else ""
         )
@@ -151,6 +157,9 @@ async def get_api_keys(
             user_id=api.user_id,
             exchange=api.exchange,
             name=api.name,
+            api_key=api.api_key,
+            api_secret=api.api_secret,
+            passphrase=api.passphrase,
             master_is=api.master_is,
             created_at=api.created_at.isoformat() if api.created_at else ""
         )

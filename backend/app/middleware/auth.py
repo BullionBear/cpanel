@@ -38,20 +38,38 @@ async def get_current_user(
     # Decode and verify JWT token
     payload = decode_access_token(token)
     if payload is None:
-        raise credentials_exception
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or malformed token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
     # Get user ID from token
     user_id: str = payload.get("sub")
     if user_id is None:
-        raise credentials_exception
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token missing user ID",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
     # Check if token exists in database and is valid
     access_repo = AccessRepository(db)
-    access = access_repo.get_valid_token(token)
+    access = access_repo.get_by_token(token)
+    
     if not access:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token not found or expired",
+            detail="Token not found in database. Please create a new token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Check if token is expired
+    from datetime import datetime, timezone
+    if access.expired_at <= datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired. Please create a new token.",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
@@ -59,7 +77,11 @@ async def get_current_user(
     user_repo = UserRepository(db)
     user = user_repo.get_by_id(int(user_id))
     if user is None:
-        raise credentials_exception
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
     return user
 
