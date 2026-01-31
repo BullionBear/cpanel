@@ -18,6 +18,7 @@ class APIKeyCreate(BaseModel):
     """API key creation request model."""
     exchange: str
     name: str
+    api_type: str = "HMAC"  # e.g., 'HMAC', 'RSA', etc.
     api_key: str
     api_secret: str
     passphrase: Optional[str] = None
@@ -30,6 +31,7 @@ class APIKeyResponse(BaseModel):
     user_id: int
     exchange: str
     name: str
+    api_type: str
     api_key: str
     api_secret: str
     passphrase: str = ""
@@ -111,6 +113,7 @@ async def register_api_key(
             user_id=current_user.id,
             exchange=exchange,
             name=api_data.name,
+            api_type=api_data.api_type,
             api_key=api_data.api_key,
             api_secret=api_data.api_secret,
             passphrase=api_data.passphrase,
@@ -122,6 +125,7 @@ async def register_api_key(
             user_id=api.user_id,
             exchange=api.exchange,
             name=api.name,
+            api_type=api.api_type,
             api_key=api.api_key,
             api_secret=api.api_secret,
             passphrase=api.passphrase or "",
@@ -157,6 +161,7 @@ async def get_api_keys(
             user_id=api.user_id,
             exchange=api.exchange,
             name=api.name,
+            api_type=api.api_type,
             api_key=api.api_key,
             api_secret=api.api_secret,
             passphrase=api.passphrase or "",

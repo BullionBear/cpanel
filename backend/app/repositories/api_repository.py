@@ -79,6 +79,7 @@ class APIRepository:
         user_id: int,
         exchange: str,
         name: str,
+        api_type: str,
         api_key: str,
         api_secret: str,
         passphrase: Optional[str] = None,
@@ -91,6 +92,7 @@ class APIRepository:
             user_id: User ID who owns this API
             exchange: Exchange name (e.g., 'binance', 'okx')
             name: API name/identifier
+            api_type: API type (e.g., 'HMAC', 'RSA')
             api_key: API key
             api_secret: API secret
             passphrase: Passphrase (optional, some exchanges don't use it)
@@ -103,6 +105,7 @@ class APIRepository:
             user_id=user_id,
             exchange=exchange,
             name=name,
+            api_type=api_type,
             api_key=api_key,
             api_secret=api_secret,
             passphrase=passphrase,

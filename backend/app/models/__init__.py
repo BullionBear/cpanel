@@ -48,6 +48,7 @@ except ImportError:
         user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
         exchange = Column(String, nullable=False, index=True)
         name = Column(String, nullable=False)
+        api_type = Column(String, nullable=False)  # e.g., 'HMAC', 'RSA', etc.
         api_key = Column(String, nullable=False)
         api_secret = Column(String, nullable=False)
         passphrase = Column(String, nullable=True)

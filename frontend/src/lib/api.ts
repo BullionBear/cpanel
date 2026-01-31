@@ -1,5 +1,38 @@
 import { API_BASE_URL } from './config';
 
+// Key generation types
+export type KeyType = 'RSA' | 'ED25519';
+
+export interface KeyGenerateResponse {
+	key_type: string;
+	private_key: string;
+	public_key: string;
+}
+
+export async function generateKeyPair(keyType: KeyType, keySize?: number): Promise<KeyGenerateResponse> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/tool/keygen`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({
+				key_type: keyType,
+				key_size: keySize
+			})
+		});
+
+		if (response.ok) {
+			return await response.json();
+		}
+		const error = await response.json();
+		throw new Error(error.detail || 'Failed to generate key pair');
+	} catch (error) {
+		console.error('Failed to generate key pair:', error);
+		throw error;
+	}
+}
+
 export interface User {
 	id: number;
 	username: string;
