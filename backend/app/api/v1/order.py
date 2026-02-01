@@ -1,5 +1,5 @@
 """Order router."""
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, field_validator
@@ -12,6 +12,39 @@ from app.repositories.symbol_repository import SymbolRepository
 from app.services.api_service import ApiService, NetworkError, ExchangeError
 
 router = APIRouter(prefix="/order", tags=["orders"])
+
+# API type priority: HMAC > ED25519 > RSA (lower number = higher priority)
+API_TYPE_PRIORITY = {'HMAC': 0, 'ED25519': 1, 'RSA': 2}
+
+
+def _select_best_api_per_uid(apis: List[Any]) -> List[Any]:
+    """
+    Select the best API for each unique UID based on api_type priority.
+    
+    Priority: HMAC > ED25519 > RSA
+    
+    Args:
+        apis: List of API model instances
+        
+    Returns:
+        List of API model instances with one per unique (exchange, uid) combination
+    """
+    # Group APIs by (exchange, uid)
+    uid_to_apis: Dict[tuple, List[Any]] = {}
+    for api in apis:
+        key = (api.exchange, api.uid)
+        if key not in uid_to_apis:
+            uid_to_apis[key] = []
+        uid_to_apis[key].append(api)
+    
+    # Select best API for each UID based on priority
+    best_apis = []
+    for key, api_list in uid_to_apis.items():
+        # Sort by api_type priority (lower = better)
+        api_list.sort(key=lambda a: API_TYPE_PRIORITY.get(a.api_type, 999))
+        best_apis.append(api_list[0])
+    
+    return best_apis
 
 
 # Pydantic models for request/response
@@ -125,7 +158,8 @@ async def create_order(
             order_type=order_data.type,  # type: ignore
             quantity=order_data.qty,
             price=order_data.price,
-            passphrase=api.passphrase
+            passphrase=api.passphrase,
+            api_type=api.api_type  # type: ignore
         )
         
         return OrderResponse(
@@ -190,7 +224,8 @@ def _get_open_orders_for_api(
         api_key=api.api_key,
         api_secret=api.api_secret,
         symbol=symbol_name,
-        passphrase=api.passphrase
+        passphrase=api.passphrase,
+        api_type=api.api_type  # type: ignore
     )
     
     # Convert to OrderResponse format
@@ -282,17 +317,24 @@ async def get_open_orders(
         if not apis:
             return []
         
-        # Get open orders for each API
+        # Filter APIs by exchange if symbol is provided
+        filtered_apis = []
         for api in apis:
-            symbol_name = None
             if symbol:
-                # Only include orders from this API if symbol matches the exchange
+                # Only include APIs that match the symbol's exchange
                 exchange_slug = api.exchange.upper()
                 if symbol.exchange.slug.upper() == exchange_slug:
-                    symbol_name = symbol.name
-                else:
-                    # Skip this API if symbol doesn't match its exchange
-                    continue
+                    filtered_apis.append(api)
+            else:
+                filtered_apis.append(api)
+        
+        # Deduplicate by UID - select best API per UID based on priority
+        # Priority: HMAC > ED25519 > RSA
+        deduplicated_apis = _select_best_api_per_uid(filtered_apis)
+        
+        # Get open orders for each deduplicated API
+        for api in deduplicated_apis:
+            symbol_name = symbol.name if symbol else None
             
             try:
                 orders = _get_open_orders_for_api(api, api_service, symbol_name)
@@ -364,7 +406,8 @@ async def cancel_order(
             symbol=symbol.name,
             order_id=cancel_data.order_id,
             client_order_id=cancel_data.client_order_id,
-            passphrase=api.passphrase
+            passphrase=api.passphrase,
+            api_type=api.api_type  # type: ignore
         )
         
         return OrderResponse(

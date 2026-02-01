@@ -12,6 +12,39 @@ from app.services.api_service import ApiService, NetworkError, ExchangeError
 
 router = APIRouter(prefix="/balance", tags=["balance"])
 
+# API type priority: HMAC > ED25519 > RSA (lower number = higher priority)
+API_TYPE_PRIORITY = {'HMAC': 0, 'ED25519': 1, 'RSA': 2}
+
+
+def _select_best_api_per_uid(apis: List[Any]) -> List[Any]:
+    """
+    Select the best API for each unique UID based on api_type priority.
+    
+    Priority: HMAC > ED25519 > RSA
+    
+    Args:
+        apis: List of API model instances
+        
+    Returns:
+        List of API model instances with one per unique (exchange, uid) combination
+    """
+    # Group APIs by (exchange, uid)
+    uid_to_apis: Dict[tuple, List[Any]] = {}
+    for api in apis:
+        key = (api.exchange, api.uid)
+        if key not in uid_to_apis:
+            uid_to_apis[key] = []
+        uid_to_apis[key].append(api)
+    
+    # Select best API for each UID based on priority
+    best_apis = []
+    for key, api_list in uid_to_apis.items():
+        # Sort by api_type priority (lower = better)
+        api_list.sort(key=lambda a: API_TYPE_PRIORITY.get(a.api_type, 999))
+        best_apis.append(api_list[0])
+    
+    return best_apis
+
 
 # Pydantic models for response
 class TokenBalance(BaseModel):
@@ -55,7 +88,8 @@ def _get_balance_for_api(api, api_service: ApiService) -> BalanceResponse:
         exchange=api.exchange,  # type: ignore
         api_key=api.api_key,
         api_secret=api.api_secret,
-        passphrase=api.passphrase
+        passphrase=api.passphrase,
+        api_type=api.api_type  # type: ignore
     )
     
     # Convert to response model
@@ -122,9 +156,8 @@ async def get_balances(
     api_repo = APIRepository(db)
     api_service = ApiService()
     
-    results = []
-    
-    # Process each API ID
+    # First, collect all valid APIs
+    valid_apis = []
     for api_id in api_ids:
         # Get API from database and verify ownership
         api = api_repo.get_by_user_and_id(current_user.id, api_id)
@@ -133,6 +166,16 @@ async def get_balances(
             # Skip APIs that don't exist or don't belong to the user
             continue
         
+        valid_apis.append(api)
+    
+    # Deduplicate by UID - select best API per UID based on priority
+    # Priority: HMAC > ED25519 > RSA
+    deduplicated_apis = _select_best_api_per_uid(valid_apis)
+    
+    results = []
+    
+    # Process each deduplicated API
+    for api in deduplicated_apis:
         # Get balance using API service
         try:
             balance_response = _get_balance_for_api(api, api_service)

@@ -248,10 +248,16 @@
 						{#each groupedAPIs[exchange] as api (api.id)}
 							<div class="api-item">
 								<div class="api-info">
-									<h3 class="api-name">{api.name}</h3>
+									<h3 class="api-name">
+										{api.name}
+										<span class="api-type-badge" class:hmac={api.api_type === 'HMAC'} class:asymmetric={api.api_type === 'ED25519' || api.api_type === 'RSA'}>
+											{api.api_type || 'HMAC'}
+										</span>
+									</h3>
 									<p class="api-meta">
+										<span class="uid-display">UID: {api.uid}</span>
 										Created: {new Date(api.created_at).toLocaleDateString()}
-										{#if api.master_is && api.master_is !== api.id}
+										{#if api.master_uid && api.master_uid !== api.uid}
 											<span class="sub-account">Sub-account</span>
 										{/if}
 									</p>
@@ -560,6 +566,28 @@
 		font-size: 16px;
 		font-weight: 600;
 		color: #1f2937;
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+
+	.api-type-badge {
+		display: inline-block;
+		padding: 2px 8px;
+		border-radius: 4px;
+		font-size: 11px;
+		font-weight: 500;
+		text-transform: uppercase;
+	}
+
+	.api-type-badge.hmac {
+		background: #e0e7ff;
+		color: #4338ca;
+	}
+
+	.api-type-badge.asymmetric {
+		background: #d1fae5;
+		color: #065f46;
 	}
 
 	.api-meta {
@@ -569,6 +597,16 @@
 		display: flex;
 		align-items: center;
 		gap: 12px;
+		flex-wrap: wrap;
+	}
+
+	.uid-display {
+		font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+		font-size: 12px;
+		background: #f3f4f6;
+		padding: 2px 6px;
+		border-radius: 4px;
+		color: #4b5563;
 	}
 
 	.sub-account {

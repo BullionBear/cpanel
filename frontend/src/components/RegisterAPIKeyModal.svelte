@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { registerAPIKey, type APIKeyCreate } from '$lib/api';
+	import { registerAPIKey, generateKeyPair, type APIKeyCreate, type APIType } from '$lib/api';
 	import { createEventDispatcher } from 'svelte';
 
 	export let isOpen = false;
@@ -8,12 +8,20 @@
 
 	let exchange: 'BINANCE' | 'BYBIT' = 'BINANCE';
 	let name = '';
+	let apiType: APIType = 'HMAC';
 	let apiKey = '';
 	let apiSecret = '';
-	let masterIs = '';
+	let masterUid = '';
 	let passphrase = '';
 	let loading = false;
 	let error: string | null = null;
+	let generatingKeys = false;
+	let generatedPublicKey = '';
+
+	// Computed values based on API type
+	$: isAsymmetric = apiType === 'ED25519' || apiType === 'RSA';
+	$: secretLabel = isAsymmetric ? 'Private Key *' : 'API Secret *';
+	$: secretPlaceholder = isAsymmetric ? 'Enter or generate your private key' : 'Enter your API secret';
 
 	function close() {
 		if (loading) return;
@@ -25,12 +33,38 @@
 	function resetForm() {
 		exchange = 'BINANCE';
 		name = '';
+		apiType = 'HMAC';
 		apiKey = '';
 		apiSecret = '';
-		masterIs = '';
+		masterUid = '';
 		passphrase = '';
 		error = null;
 		loading = false;
+		generatingKeys = false;
+		generatedPublicKey = '';
+	}
+
+	async function handleGenerateKeys() {
+		if (apiType === 'HMAC') return;
+		
+		generatingKeys = true;
+		error = null;
+		
+		try {
+			const keyPair = await generateKeyPair(apiType as 'RSA' | 'ED25519');
+			apiSecret = keyPair.private_key;
+			generatedPublicKey = keyPair.public_key;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to generate key pair';
+		} finally {
+			generatingKeys = false;
+		}
+	}
+
+	function copyPublicKey() {
+		if (generatedPublicKey) {
+			navigator.clipboard.writeText(generatedPublicKey);
+		}
 	}
 
 	async function handleSubmit() {
@@ -46,7 +80,7 @@
 			return;
 		}
 		if (!apiSecret.trim()) {
-			error = 'API secret is required';
+			error = isAsymmetric ? 'Private key is required' : 'API secret is required';
 			return;
 		}
 
@@ -57,10 +91,11 @@
 			const data: APIKeyCreate = {
 				exchange: exchange,
 				name: name.trim(),
+				api_type: apiType,
 				api_key: apiKey.trim(),
 				api_secret: apiSecret.trim(),
 				passphrase: passphrase.trim() || undefined,
-				master_is: masterIs.trim() || undefined
+				master_uid: masterUid.trim() || undefined
 			};
 
 			await registerAPIKey(data);
@@ -139,6 +174,24 @@
 				</div>
 
 				<div class="form-group">
+					<label for="apiType">API Type *</label>
+					<select id="apiType" bind:value={apiType} disabled={loading} required>
+						<option value="HMAC">HMAC (Standard)</option>
+						<option value="ED25519">ED25519 (Asymmetric)</option>
+						<option value="RSA">RSA (Asymmetric)</option>
+					</select>
+					<small class="help-text">
+						{#if apiType === 'HMAC'}
+							Standard HMAC-based authentication using API secret
+						{:else if apiType === 'ED25519'}
+							ED25519 signature authentication using private/public key pair
+						{:else}
+							RSA signature authentication using private/public key pair
+						{/if}
+					</small>
+				</div>
+
+				<div class="form-group">
 					<label for="apiKey">API Key *</label>
 					<input
 						id="apiKey"
@@ -151,16 +204,50 @@
 				</div>
 
 				<div class="form-group">
-					<label for="apiSecret">API Secret *</label>
-					<input
-						id="apiSecret"
-						type="password"
-						bind:value={apiSecret}
-						placeholder="Enter your API secret"
-						required
-						disabled={loading}
-					/>
+					<label for="apiSecret">{secretLabel}</label>
+					<div class="input-with-button">
+						<textarea
+							id="apiSecret"
+							bind:value={apiSecret}
+							placeholder={secretPlaceholder}
+							required
+							disabled={loading || generatingKeys}
+							rows={isAsymmetric ? 4 : 1}
+							class:textarea-expanded={isAsymmetric}
+						></textarea>
+						{#if isAsymmetric}
+							<button 
+								type="button" 
+								class="generate-btn" 
+								on:click={handleGenerateKeys}
+								disabled={loading || generatingKeys}
+							>
+								{generatingKeys ? 'Generating...' : 'Generate'}
+							</button>
+						{/if}
+					</div>
 				</div>
+
+				{#if isAsymmetric && generatedPublicKey}
+					<div class="form-group">
+						<label for="publicKey">Public Key (Copy this to your exchange)</label>
+						<div class="public-key-container">
+							<textarea
+								id="publicKey"
+								value={generatedPublicKey}
+								readonly
+								rows="4"
+								class="public-key-textarea"
+							></textarea>
+							<button type="button" class="copy-btn" on:click={copyPublicKey} title="Copy to clipboard">
+								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+									<path d="M16 1H4C2.9 1 2 1.9 2 3V17H4V3H16V1ZM19 5H8C6.9 5 6 5.9 6 7V21C6 22.1 6.9 23 8 23H19C20.1 23 21 22.1 21 21V7C21 5.9 20.1 5 19 5ZM19 21H8V7H19V21Z" fill="currentColor"/>
+								</svg>
+							</button>
+						</div>
+						<small class="help-text success-text">Copy this public key and register it with your exchange</small>
+					</div>
+				{/if}
 
 				<div class="form-group">
 					<label for="passphrase">Passphrase (Optional)</label>
@@ -175,15 +262,15 @@
 				</div>
 
 				<div class="form-group">
-					<label for="masterIs">Master API ID (Optional)</label>
+					<label for="masterUid">Master Account UID (Optional)</label>
 					<input
-						id="masterIs"
+						id="masterUid"
 						type="text"
-						bind:value={masterIs}
-						placeholder="Enter master API ID for sub-accounts"
+						bind:value={masterUid}
+						placeholder="Enter master account UID for sub-accounts"
 						disabled={loading}
 					/>
-					<small class="help-text">Leave empty for main account, or enter master API ID for sub-accounts</small>
+					<small class="help-text">Leave empty for main account, or enter master account UID for sub-accounts</small>
 				</div>
 
 				{#if error}
@@ -301,7 +388,8 @@
 	}
 
 	.form-group input,
-	.form-group select {
+	.form-group select,
+	.form-group textarea {
 		width: 100%;
 		padding: 10px 12px;
 		border: 1px solid #d1d5db;
@@ -310,20 +398,105 @@
 		color: #1f2937;
 		transition: all 0.2s;
 		box-sizing: border-box;
+		font-family: inherit;
+	}
+
+	.form-group textarea {
+		resize: vertical;
+		min-height: 42px;
+	}
+
+	.form-group textarea.textarea-expanded {
+		font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+		font-size: 12px;
 	}
 
 	.form-group input:focus,
-	.form-group select:focus {
+	.form-group select:focus,
+	.form-group textarea:focus {
 		outline: none;
 		border-color: #667eea;
 		box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 	}
 
 	.form-group input:disabled,
-	.form-group select:disabled {
+	.form-group select:disabled,
+	.form-group textarea:disabled {
 		background: #f3f4f6;
 		cursor: not-allowed;
 		opacity: 0.6;
+	}
+
+	.input-with-button {
+		display: flex;
+		gap: 8px;
+		align-items: flex-start;
+	}
+
+	.input-with-button textarea {
+		flex: 1;
+	}
+
+	.generate-btn {
+		padding: 10px 16px;
+		background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+		color: white;
+		border: none;
+		border-radius: 6px;
+		font-size: 14px;
+		font-weight: 500;
+		cursor: pointer;
+		transition: all 0.2s;
+		white-space: nowrap;
+	}
+
+	.generate-btn:hover:not(:disabled) {
+		transform: translateY(-1px);
+		box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+	}
+
+	.generate-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.public-key-container {
+		position: relative;
+	}
+
+	.public-key-textarea {
+		font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+		font-size: 12px;
+		background: #f0fdf4;
+		border-color: #86efac;
+		padding-right: 40px;
+	}
+
+	.public-key-container .copy-btn {
+		position: absolute;
+		top: 8px;
+		right: 8px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 32px;
+		height: 32px;
+		border: none;
+		background: white;
+		border-radius: 6px;
+		cursor: pointer;
+		color: #6b7280;
+		transition: all 0.2s;
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+	}
+
+	.public-key-container .copy-btn:hover {
+		background: #f3f4f6;
+		color: #374151;
+	}
+
+	.success-text {
+		color: #059669;
 	}
 
 	.help-text {

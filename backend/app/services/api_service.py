@@ -14,6 +14,65 @@ from app.utils import trim_decimal_string
 
 logger = logging.getLogger(__name__)
 
+# API Types
+API_TYPES = Literal['HMAC', 'ED25519', 'RSA']
+
+
+def create_binance_client(
+    api_key: str,
+    api_secret: str,
+    api_type: API_TYPES = 'HMAC'
+) -> bn.Client:
+    """
+    Create a Binance client based on the API type.
+    
+    Args:
+        api_key: The API key
+        api_secret: For HMAC, this is the secret key. For ED25519/RSA, this is the private key (PEM format)
+        api_type: The API type ('HMAC', 'ED25519', or 'RSA')
+    
+    Returns:
+        Binance Client instance configured for the specified API type
+    """
+    if api_type in ('ED25519', 'RSA'):
+        # For asymmetric keys, use private_key parameter
+        return bn.Client(
+            api_key=api_key,
+            private_key=api_secret  # PEM-formatted private key
+        )
+    else:
+        # Default HMAC authentication
+        return bn.Client(api_key, api_secret)
+
+
+def create_bybit_client(
+    api_key: str,
+    api_secret: str,
+    api_type: API_TYPES = 'HMAC',
+    testnet: bool = False
+) -> BybitHTTP:
+    """
+    Create a Bybit HTTP client based on the API type.
+    
+    Args:
+        api_key: The API key
+        api_secret: For HMAC, this is the secret key. For RSA, this is the private key (PEM format)
+        api_type: The API type ('HMAC' or 'RSA')
+        testnet: Whether to use testnet
+    
+    Returns:
+        Bybit HTTP client instance configured for the specified API type
+    """
+    # For RSA keys, set rsa_authentication=True
+    use_rsa = api_type == 'RSA'
+    
+    return BybitHTTP(
+        api_key=api_key,
+        api_secret=api_secret,
+        testnet=testnet,
+        rsa_authentication=use_rsa
+    )
+
 # Normalized order statuses
 ORDER_STATUS = Literal['NEW', 'FILLED', 'PARTIAL_FILLED', 'REJECT', 'CANCEL']
 ENDING_STATUSES = {'FILLED', 'REJECT', 'CANCEL'}
@@ -212,9 +271,16 @@ class ApiService:
     def __init__(self):
         pass
 
-    def verify_api(self, exchange: EXCHANGES, api_key: str, api_secret: str, passphrase: Optional[str] = None):
+    def verify_api(self, exchange: EXCHANGES, api_key: str, api_secret: str, passphrase: Optional[str] = None, api_type: API_TYPES = 'HMAC'):
         """
         Verify API credentials for the specified exchange.
+        
+        Args:
+            exchange: Exchange name (BINANCE or BYBIT)
+            api_key: API key
+            api_secret: API secret (for HMAC) or private key (for ED25519/RSA)
+            passphrase: Optional passphrase
+            api_type: API type ('HMAC', 'ED25519', or 'RSA')
         
         Raises:
             NetworkError: If there's a network or connection error
@@ -222,15 +288,189 @@ class ApiService:
         """
         match exchange:
             case 'BINANCE':
-                self.verify_binance_api(api_key, api_secret, passphrase)
+                self.verify_binance_api(api_key, api_secret, passphrase, api_type)
             case 'BYBIT':
-                self.verify_bybit_api(api_key, api_secret, passphrase)
+                self.verify_bybit_api(api_key, api_secret, passphrase, api_type)
             case _:
                 raise ValueError(f"Invalid exchange: {exchange}")
     
-    def get_balance(self, exchange: EXCHANGES, api_key: str, api_secret: str, passphrase: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_account_uid(self, exchange: EXCHANGES, api_key: str, api_secret: str, passphrase: Optional[str] = None, api_type: API_TYPES = 'HMAC') -> str:
+        """
+        Get account UID from the specified exchange.
+        
+        Args:
+            exchange: Exchange name (BINANCE or BYBIT)
+            api_key: API key
+            api_secret: API secret (for HMAC) or private key (for ED25519/RSA)
+            passphrase: Optional passphrase
+            api_type: API type ('HMAC', 'ED25519', or 'RSA')
+            
+        Returns:
+            Account UID as string
+            
+        Raises:
+            NetworkError: If there's a network or connection error
+            ExchangeError: If there's an exchange API error (includes error code and message)
+        """
+        match exchange:
+            case 'BINANCE':
+                return self.get_binance_account_uid(api_key, api_secret, passphrase, api_type)
+            case 'BYBIT':
+                return self.get_bybit_account_uid(api_key, api_secret, passphrase, api_type)
+            case _:
+                raise ValueError(f"Invalid exchange: {exchange}")
+    
+    def get_binance_account_uid(self, api_key: str, api_secret: str, passphrase: Optional[str] = None, api_type: API_TYPES = 'HMAC') -> str:
+        """
+        Get Binance account UID.
+        
+        Binance uses GET /api/v3/account which returns 'uid' field.
+        
+        Args:
+            api_key: API key
+            api_secret: API secret (for HMAC) or private key (for ED25519/RSA)
+            passphrase: Optional passphrase (not used for Binance)
+            api_type: API type ('HMAC', 'ED25519', or 'RSA')
+        
+        Returns:
+            Account UID as string
+            
+        Raises:
+            NetworkError: If there's a network or connection error
+            ExchangeError: If there's a Binance API error
+        """
+        try:
+            client = create_binance_client(api_key, api_secret, api_type)
+            # Get account info which contains the UID
+            account = client.get_account()
+            
+            if account and 'uid' in account:
+                return str(account['uid'])
+            
+            raise ExchangeError(
+                "Account UID not found in Binance response",
+                exchange="BINANCE",
+                error_code=None
+            )
+        except bn.exceptions.BinanceAPIException as e:
+            error_code = e.code
+            error_message = str(e.message) if hasattr(e, 'message') else str(e)
+            raise ExchangeError(
+                error_message,
+                exchange="BINANCE",
+                error_code=error_code,
+                original_error=e
+            )
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(
+                f"Network error while connecting to Binance: {str(e)}",
+                exchange="BINANCE",
+                original_error=e
+            )
+        except Exception as e:
+            logger.error(f"Unexpected error getting Binance account UID: {e}", exc_info=True)
+            raise ExchangeError(
+                f"Unexpected error getting Binance account UID: {str(e)}",
+                exchange="BINANCE",
+                error_code=None,
+                original_error=e
+            )
+    
+    def get_bybit_account_uid(self, api_key: str, api_secret: str, passphrase: Optional[str] = None, api_type: API_TYPES = 'HMAC') -> str:
+        """
+        Get Bybit account UID.
+        
+        Bybit uses GET /v5/account/info which returns 'userID' field.
+        
+        Args:
+            api_key: API key
+            api_secret: API secret (for HMAC) or private key (for RSA)
+            passphrase: Optional passphrase (not used for Bybit)
+            api_type: API type ('HMAC' or 'RSA')
+        
+        Returns:
+            Account UID as string
+            
+        Raises:
+            NetworkError: If there's a network or connection error
+            ExchangeError: If there's a Bybit API error
+        """
+        try:
+            client = create_bybit_client(api_key, api_secret, api_type)
+            # Get API key info which contains the userID
+            response = client.get_api_key_information()
+            
+            if not response:
+                raise ExchangeError(
+                    "Empty response from Bybit API",
+                    exchange="BYBIT",
+                    error_code=None
+                )
+            
+            ret_code = response.get('retCode')
+            ret_msg = response.get('retMsg', 'Unknown error')
+            
+            if ret_code != 0:
+                raise ExchangeError(
+                    ret_msg,
+                    exchange="BYBIT",
+                    error_code=ret_code
+                )
+            
+            result = response.get('result', {})
+            user_id = result.get('userID')
+            
+            if user_id is not None:
+                return str(user_id)
+            
+            raise ExchangeError(
+                "userID not found in Bybit response",
+                exchange="BYBIT",
+                error_code=None
+            )
+        except ExchangeError:
+            raise
+        except FailedRequestError as e:
+            error_str = str(e)
+            error_code = None
+            if "ErrCode:" in error_str:
+                try:
+                    code_part = error_str.split("ErrCode:")[1].split(")")[0].strip()
+                    error_code = int(code_part)
+                except (ValueError, IndexError):
+                    pass
+            
+            raise ExchangeError(
+                error_str,
+                exchange="BYBIT",
+                error_code=error_code,
+                original_error=e
+            )
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(
+                f"Network error while connecting to Bybit: {str(e)}",
+                exchange="BYBIT",
+                original_error=e
+            )
+        except Exception as e:
+            logger.error(f"Unexpected error getting Bybit account UID: {e}", exc_info=True)
+            raise ExchangeError(
+                f"Unexpected error getting Bybit account UID: {str(e)}",
+                exchange="BYBIT",
+                error_code=None,
+                original_error=e
+            )
+    
+    def get_balance(self, exchange: EXCHANGES, api_key: str, api_secret: str, passphrase: Optional[str] = None, api_type: API_TYPES = 'HMAC') -> List[Dict[str, Any]]:
         """
         Get normalized balance from the specified exchange.
+        
+        Args:
+            exchange: Exchange name (BINANCE or BYBIT)
+            api_key: API key
+            api_secret: API secret (for HMAC) or private key (for ED25519/RSA)
+            passphrase: Optional passphrase
+            api_type: API type ('HMAC', 'ED25519', or 'RSA')
         
         Returns:
             List of wallet balances in normalized format:
@@ -256,15 +496,21 @@ class ApiService:
         """
         match exchange:
             case 'BINANCE':
-                return self.get_binance_balance(api_key, api_secret, passphrase)
+                return self.get_binance_balance(api_key, api_secret, passphrase, api_type)
             case 'BYBIT':
-                return self.get_bybit_balance(api_key, api_secret, passphrase)
+                return self.get_bybit_balance(api_key, api_secret, passphrase, api_type)
             case _:
                 raise ValueError(f"Invalid exchange: {exchange}")
     
-    def get_binance_balance(self, api_key: str, api_secret: str, passphrase: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_binance_balance(self, api_key: str, api_secret: str, passphrase: Optional[str] = None, api_type: API_TYPES = 'HMAC') -> List[Dict[str, Any]]:
         """
         Get normalized balance from Binance (SPOT, MARGIN, FUTURES).
+        
+        Args:
+            api_key: API key
+            api_secret: API secret (for HMAC) or private key (for ED25519/RSA)
+            passphrase: Optional passphrase (not used for Binance)
+            api_type: API type ('HMAC', 'ED25519', or 'RSA')
         
         Returns normalized balance format.
         
@@ -273,7 +519,7 @@ class ApiService:
             ExchangeError: If there's a Binance API error (includes error code and message)
         """
         try:
-            client = bn.Client(api_key, api_secret)
+            client = create_binance_client(api_key, api_secret, api_type)
             result = []
             
             # Get SPOT balance
@@ -380,9 +626,15 @@ class ApiService:
                 original_error=e
             )
 
-    def get_bybit_balance(self, api_key: str, api_secret: str, passphrase: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_bybit_balance(self, api_key: str, api_secret: str, passphrase: Optional[str] = None, api_type: API_TYPES = 'HMAC') -> List[Dict[str, Any]]:
         """
         Get normalized balance from Bybit (UNIFIED, FUNDING).
+        
+        Args:
+            api_key: API key
+            api_secret: API secret (for HMAC) or private key (for RSA)
+            passphrase: Optional passphrase (not used for Bybit)
+            api_type: API type ('HMAC' or 'RSA')
         
         Returns normalized balance format.
         
@@ -391,11 +643,7 @@ class ApiService:
             ExchangeError: If there's a Bybit API error (includes error code and message)
         """
         try:
-            client = BybitHTTP(
-                api_key=api_key,
-                api_secret=api_secret,
-                testnet=False,
-            )
+            client = create_bybit_client(api_key, api_secret, api_type)
             result = []
             
             # Get UNIFIED balance
@@ -507,16 +755,22 @@ class ApiService:
                 original_error=e
             )
 
-    def verify_binance_api(self, api_key: str, api_secret: str, passphrase: Optional[str] = None):
+    def verify_binance_api(self, api_key: str, api_secret: str, passphrase: Optional[str] = None, api_type: API_TYPES = 'HMAC'):
         """
         Verify Binance API credentials.
+        
+        Args:
+            api_key: API key
+            api_secret: API secret (for HMAC) or private key (for ED25519/RSA)
+            passphrase: Optional passphrase (not used for Binance)
+            api_type: API type ('HMAC', 'ED25519', or 'RSA')
         
         Raises:
             NetworkError: If there's a network or connection error
             ExchangeError: If there's a Binance API error (includes error code and message)
         """
         try:
-            client = bn.Client(api_key, api_secret)
+            client = create_binance_client(api_key, api_secret, api_type)
             # Test API by getting account info
             # This requires valid API key with account read permissions
             account = client.get_account()
@@ -1046,6 +1300,7 @@ class ApiService:
         api_secret: str,
         symbol: Optional[str] = None,
         passphrase: Optional[str] = None,
+        api_type: API_TYPES = 'HMAC',
     ) -> List[Dict[str, Any]]:
         """
         Get all open orders from the specified exchange.
@@ -1053,9 +1308,10 @@ class ApiService:
         Args:
             exchange: Exchange name (BINANCE or BYBIT)
             api_key: API key
-            api_secret: API secret
+            api_secret: API secret (for HMAC) or private key (for ED25519/RSA)
             symbol: Optional symbol to filter orders (if None, returns all open orders)
             passphrase: Optional passphrase for API
+            api_type: API type ('HMAC', 'ED25519', or 'RSA')
         
         Returns:
             List of normalized order dictionaries
@@ -1066,9 +1322,9 @@ class ApiService:
         """
         match exchange:
             case 'BINANCE':
-                return self.get_binance_open_orders(api_key, api_secret, symbol)
+                return self.get_binance_open_orders(api_key, api_secret, symbol, api_type)
             case 'BYBIT':
-                return self.get_bybit_open_orders(api_key, api_secret, symbol, passphrase)
+                return self.get_bybit_open_orders(api_key, api_secret, symbol, passphrase, api_type)
             case _:
                 raise ValueError(f"Invalid exchange: {exchange}")
     
@@ -1077,10 +1333,11 @@ class ApiService:
         api_key: str,
         api_secret: str,
         symbol: Optional[str] = None,
+        api_type: API_TYPES = 'HMAC',
     ) -> List[Dict[str, Any]]:
         """Get all open orders from Binance."""
         try:
-            client = bn.Client(api_key, api_secret)
+            client = create_binance_client(api_key, api_secret, api_type)
             
             # Get open orders (optionally filtered by symbol)
             if symbol:
@@ -1162,14 +1419,11 @@ class ApiService:
         api_secret: str,
         symbol: Optional[str] = None,
         passphrase: Optional[str] = None,
+        api_type: API_TYPES = 'HMAC',
     ) -> List[Dict[str, Any]]:
         """Get all open orders from Bybit."""
         try:
-            client = BybitHTTP(
-                api_key=api_key,
-                api_secret=api_secret,
-                testnet=False,
-            )
+            client = create_bybit_client(api_key, api_secret, api_type)
             
             # Get open orders (optionally filtered by symbol)
             params = {"category": "spot"}
@@ -1306,6 +1560,7 @@ class ApiService:
         order_id: Optional[str] = None,
         client_order_id: Optional[str] = None,
         passphrase: Optional[str] = None,
+        api_type: API_TYPES = 'HMAC',
     ) -> Dict[str, Any]:
         """
         Cancel an order on the specified exchange.
@@ -1313,11 +1568,12 @@ class ApiService:
         Args:
             exchange: Exchange name (BINANCE or BYBIT)
             api_key: API key
-            api_secret: API secret
+            api_secret: API secret (for HMAC) or private key (for ED25519/RSA)
             symbol: Symbol name (e.g., "BTCUSDT")
             order_id: Exchange order ID (optional if client_order_id provided)
             client_order_id: Client order ID (optional if order_id provided)
             passphrase: Optional passphrase for API
+            api_type: API type ('HMAC', 'ED25519', or 'RSA')
         
         Returns:
             Dictionary with normalized order information after cancellation
@@ -1328,9 +1584,9 @@ class ApiService:
         """
         match exchange:
             case 'BINANCE':
-                return self.cancel_binance_order(api_key, api_secret, symbol, order_id, client_order_id)
+                return self.cancel_binance_order(api_key, api_secret, symbol, order_id, client_order_id, api_type)
             case 'BYBIT':
-                return self.cancel_bybit_order(api_key, api_secret, symbol, order_id, client_order_id)
+                return self.cancel_bybit_order(api_key, api_secret, symbol, order_id, client_order_id, api_type)
             case _:
                 raise ValueError(f"Invalid exchange: {exchange}")
     
@@ -1341,10 +1597,11 @@ class ApiService:
         symbol: str,
         order_id: Optional[str] = None,
         client_order_id: Optional[str] = None,
+        api_type: API_TYPES = 'HMAC',
     ) -> Dict[str, Any]:
         """Cancel an order on Binance."""
         try:
-            client = bn.Client(api_key, api_secret)
+            client = create_binance_client(api_key, api_secret, api_type)
             
             # Build cancel parameters
             cancel_params = {"symbol": symbol}
@@ -1435,14 +1692,11 @@ class ApiService:
         symbol: str,
         order_id: Optional[str] = None,
         client_order_id: Optional[str] = None,
+        api_type: API_TYPES = 'HMAC',
     ) -> Dict[str, Any]:
         """Cancel an order on Bybit."""
         try:
-            client = BybitHTTP(
-                api_key=api_key,
-                api_secret=api_secret,
-                testnet=False,
-            )
+            client = create_bybit_client(api_key, api_secret, api_type)
             
             # Build cancel parameters
             cancel_params = {
@@ -1583,6 +1837,7 @@ class ApiService:
         quantity: str,
         price: Optional[str] = None,
         passphrase: Optional[str] = None,
+        api_type: API_TYPES = 'HMAC',
     ) -> Dict[str, Any]:
         """
         Create an order on the specified exchange.
@@ -1590,12 +1845,14 @@ class ApiService:
         Args:
             exchange: Exchange name (BINANCE or BYBIT)
             api_key: API key
-            api_secret: API secret
+            api_secret: API secret (for HMAC) or private key (for ED25519/RSA)
             symbol: Symbol name (e.g., "BTCUSDT")
             side: Order side (BUY or SELL)
             order_type: Order type (MARKET or LIMIT)
             quantity: Order quantity (as string)
             price: Order price (as string, required for LIMIT orders)
+            passphrase: Optional passphrase
+            api_type: API type ('HMAC', 'ED25519', or 'RSA')
         
         Returns:
             Dictionary with order information from exchange
@@ -1606,9 +1863,9 @@ class ApiService:
         """
         match exchange:
             case 'BINANCE':
-                return self.create_binance_order(api_key, api_secret, symbol, side, order_type, quantity, price)
+                return self.create_binance_order(api_key, api_secret, symbol, side, order_type, quantity, price, api_type)
             case 'BYBIT':
-                return self.create_bybit_order(api_key, api_secret, symbol, side, order_type, quantity, price, passphrase)
+                return self.create_bybit_order(api_key, api_secret, symbol, side, order_type, quantity, price, passphrase, api_type)
             case _:
                 raise ValueError(f"Invalid exchange: {exchange}")
     
@@ -1621,6 +1878,7 @@ class ApiService:
         order_type: ORDER_TYPES,
         quantity: str,
         price: Optional[str] = None,
+        api_type: API_TYPES = 'HMAC',
     ) -> Dict[str, Any]:
         """
         Create an order on Binance.
@@ -1630,7 +1888,7 @@ class ApiService:
             ExchangeError: If there's a Binance API error (includes error code and message)
         """
         try:
-            client = bn.Client(api_key, api_secret)
+            client = create_binance_client(api_key, api_secret, api_type)
             
             # Convert side to Binance format (BUY -> BUY, SELL -> SELL)
             binance_side = side
@@ -1744,7 +2002,8 @@ class ApiService:
         order_type: ORDER_TYPES,
         quantity: str,
         price: Optional[str] = None,
-        passphrase: Optional[str] = None
+        passphrase: Optional[str] = None,
+        api_type: API_TYPES = 'HMAC',
     ) -> Dict[str, Any]:
         """
         Create an order on Bybit.
@@ -1754,11 +2013,7 @@ class ApiService:
             ExchangeError: If there's a Bybit API error (includes error code and message)
         """
         try:
-            client = BybitHTTP(
-                api_key=api_key,
-                api_secret=api_secret,
-                testnet=False,
-            )
+            client = create_bybit_client(api_key, api_secret, api_type)
             
             # Generate custom client order ID
             client_order_id = generate_client_order_id()
@@ -1887,20 +2142,22 @@ class ApiService:
                 original_error=e
             )
 
-    def verify_bybit_api(self, api_key: str, api_secret: str, passphrase: Optional[str] = None):
+    def verify_bybit_api(self, api_key: str, api_secret: str, passphrase: Optional[str] = None, api_type: API_TYPES = 'HMAC'):
         """
         Verify Bybit API credentials.
+        
+        Args:
+            api_key: API key
+            api_secret: API secret (for HMAC) or private key (for RSA)
+            passphrase: Optional passphrase (not used for Bybit)
+            api_type: API type ('HMAC' or 'RSA')
         
         Raises:
             NetworkError: If there's a network or connection error
             ExchangeError: If there's a Bybit API error (includes error code and message)
         """
         try:
-            client = BybitHTTP(
-                api_key=api_key,
-                api_secret=api_secret,
-                testnet=False,
-            )
+            client = create_bybit_client(api_key, api_secret, api_type)
             # Test API by getting wallet balance
             response = client.get_wallet_balance(
                 accountType="UNIFIED"

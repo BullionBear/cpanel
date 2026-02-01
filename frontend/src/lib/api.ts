@@ -73,22 +73,27 @@ export function logout() {
 }
 
 
+export type APIType = 'HMAC' | 'ED25519' | 'RSA';
+
 export interface APIKey {
 	id: number;
 	user_id: number;
 	exchange: string;
+	uid: string;  // Exchange account UID
 	name: string;
-	master_is: number | null;
+	api_type: APIType;
+	master_uid: string | null;  // Master account UID
 	created_at: string;
 }
 
 export interface APIKeyCreate {
 	exchange: string;
 	name: string;
+	api_type: APIType;
 	api_key: string;
 	api_secret: string;
 	passphrase?: string;
-	master_is?: string;
+	master_uid?: string;  // Master account UID for sub-accounts
 }
 
 export async function getAPIKeys(): Promise<APIKey[]> {
