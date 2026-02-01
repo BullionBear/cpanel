@@ -55,8 +55,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8186
 ## API Documentation
 
 Once the server is running, access:
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+- Swagger UI: http://localhost:8186/docs
+- ReDoc: http://localhost:8186/redoc
 
 ## Features
 

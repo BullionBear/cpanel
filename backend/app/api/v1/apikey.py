@@ -18,10 +18,11 @@ class APIKeyCreate(BaseModel):
     """API key creation request model."""
     exchange: str
     name: str
+    api_type: str = "HMAC"  # e.g., 'HMAC', 'RSA', 'ED25519', etc.
     api_key: str
     api_secret: str
     passphrase: Optional[str] = None
-    master_is: Optional[str] = None  # Can be string (ID) or None for main account
+    master_uid: Optional[str] = None  # Master account UID for sub-accounts
 
 
 class APIKeyResponse(BaseModel):
@@ -29,11 +30,13 @@ class APIKeyResponse(BaseModel):
     id: int
     user_id: int
     exchange: str
+    uid: str  # Exchange account UID
     name: str
+    api_type: str
     api_key: str
     api_secret: str
     passphrase: str = ""
-    master_is: Optional[int] = None
+    master_uid: Optional[str] = None  # Master account UID
     created_at: str
 
     class Config:
@@ -49,7 +52,7 @@ async def register_api_key(
     """
     Register a new API key for an exchange.
     
-    Verifies the API credentials with the exchange before saving to database.
+    Verifies the API credentials with the exchange and fetches account UID before saving to database.
     """
     # Normalize exchange name to uppercase
     exchange = api_data.exchange.upper()
@@ -68,7 +71,8 @@ async def register_api_key(
             exchange=exchange,  # type: ignore
             api_key=api_data.api_key,
             api_secret=api_data.api_secret,
-            passphrase=api_data.passphrase
+            passphrase=api_data.passphrase,
+            api_type=api_data.api_type  # type: ignore
         )
     except NetworkError as e:
         raise HTTPException(
@@ -84,48 +88,60 @@ async def register_api_key(
             detail=error_detail
         )
     
+    # Get account UID from exchange
+    try:
+        uid = api_service.get_account_uid(
+            exchange=exchange,  # type: ignore
+            api_key=api_data.api_key,
+            api_secret=api_data.api_secret,
+            passphrase=api_data.passphrase,
+            api_type=api_data.api_type  # type: ignore
+        )
+    except NetworkError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Network error while fetching account UID: {e.message}"
+        )
+    except ExchangeError as e:
+        error_detail = f"Exchange error while fetching account UID: {e.message}"
+        if e.error_code is not None:
+            error_detail += f" (Error code: {e.error_code})"
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_detail
+        )
+    
     # Create API repository
     api_repo = APIRepository(db)
     
-    # Parse master_is - convert to int if provided, None if not (main account)
-    master_is: Optional[int] = None
-    if api_data.master_is:
-        try:
-            master_is = int(api_data.master_is)
-            # Verify that the master API exists and belongs to the user
-            master_api = api_repo.get_by_user_and_id(current_user.id, master_is)
-            if not master_api:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Master API with ID {master_is} not found or does not belong to you"
-                )
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid master_is value: {api_data.master_is}. Must be a valid integer ID."
-            )
+    # Use master_uid directly (it's now a string UID, not an integer ID)
+    master_uid: Optional[str] = api_data.master_uid if api_data.master_uid else None
     
     # Create API record in database
     try:
         api = api_repo.create(
             user_id=current_user.id,
             exchange=exchange,
+            uid=uid,
             name=api_data.name,
+            api_type=api_data.api_type,
             api_key=api_data.api_key,
             api_secret=api_data.api_secret,
             passphrase=api_data.passphrase,
-            master_is=master_is
+            master_uid=master_uid
         )
         
         return APIKeyResponse(
             id=api.id,
             user_id=api.user_id,
             exchange=api.exchange,
+            uid=api.uid,
             name=api.name,
+            api_type=api.api_type,
             api_key=api.api_key,
             api_secret=api.api_secret,
             passphrase=api.passphrase or "",
-            master_is=api.master_is,
+            master_uid=api.master_uid,
             created_at=api.created_at.isoformat() if api.created_at else ""
         )
     except Exception as e:
@@ -156,11 +172,13 @@ async def get_api_keys(
             id=api.id,
             user_id=api.user_id,
             exchange=api.exchange,
+            uid=api.uid,
             name=api.name,
+            api_type=api.api_type,
             api_key=api.api_key,
             api_secret=api.api_secret,
             passphrase=api.passphrase or "",
-            master_is=api.master_is,
+            master_uid=api.master_uid,
             created_at=api.created_at.isoformat() if api.created_at else ""
         )
         for api in apis

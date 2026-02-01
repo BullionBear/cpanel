@@ -47,11 +47,13 @@ except ImportError:
         id = Column(Integer, primary_key=True, autoincrement=True)
         user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
         exchange = Column(String, nullable=False, index=True)
+        uid = Column(String, nullable=False, index=True)  # Exchange account UID
         name = Column(String, nullable=False)
+        api_type = Column(String, nullable=False)  # e.g., 'HMAC', 'RSA', etc.
         api_key = Column(String, nullable=False)
         api_secret = Column(String, nullable=False)
         passphrase = Column(String, nullable=True)
-        master_is = Column(Integer, ForeignKey("api.id", ondelete="SET NULL"), nullable=True, index=True)
+        master_uid = Column(String, nullable=True)  # Master account UID (for sub-accounts)
         created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
         updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

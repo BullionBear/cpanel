@@ -12,18 +12,19 @@ class API(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     exchange = Column(String, nullable=False, index=True)
+    uid = Column(String, nullable=False, index=True)  # Exchange account UID
     name = Column(String, nullable=False)
+    api_type = Column(String, nullable=False)  # e.g., 'HMAC', 'RSA', etc.
     api_key = Column(String, nullable=False)
     api_secret = Column(String, nullable=False)
     passphrase = Column(String, nullable=True)  # Some exchanges don't use passphrase
-    master_is = Column(Integer, ForeignKey("api.id", ondelete="SET NULL"), nullable=True, index=True)
+    master_uid = Column(String, nullable=True)  # Master account UID (for sub-accounts)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     # Relationships
     user = relationship("User", backref="apis")
-    master = relationship("API", remote_side=[id], backref="sub_accounts")
 
     def __repr__(self):
-        return f"<API(id={self.id}, user_id={self.user_id}, exchange='{self.exchange}', name='{self.name}', master_is={self.master_is})>"
+        return f"<API(id={self.id}, user_id={self.user_id}, exchange='{self.exchange}', uid='{self.uid}', name='{self.name}', master_uid={self.master_uid})>"
 

@@ -1,5 +1,38 @@
 import { API_BASE_URL } from './config';
 
+// Key generation types
+export type KeyType = 'RSA' | 'ED25519';
+
+export interface KeyGenerateResponse {
+	key_type: string;
+	private_key: string;
+	public_key: string;
+}
+
+export async function generateKeyPair(keyType: KeyType, keySize?: number): Promise<KeyGenerateResponse> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/tool/keygen`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({
+				key_type: keyType,
+				key_size: keySize
+			})
+		});
+
+		if (response.ok) {
+			return await response.json();
+		}
+		const error = await response.json();
+		throw new Error(error.detail || 'Failed to generate key pair');
+	} catch (error) {
+		console.error('Failed to generate key pair:', error);
+		throw error;
+	}
+}
+
 export interface User {
 	id: number;
 	username: string;
@@ -40,22 +73,27 @@ export function logout() {
 }
 
 
+export type APIType = 'HMAC' | 'ED25519' | 'RSA';
+
 export interface APIKey {
 	id: number;
 	user_id: number;
 	exchange: string;
+	uid: string;  // Exchange account UID
 	name: string;
-	master_is: number | null;
+	api_type: APIType;
+	master_uid: string | null;  // Master account UID
 	created_at: string;
 }
 
 export interface APIKeyCreate {
 	exchange: string;
 	name: string;
+	api_type: APIType;
 	api_key: string;
 	api_secret: string;
 	passphrase?: string;
-	master_is?: string;
+	master_uid?: string;  // Master account UID for sub-accounts
 }
 
 export async function getAPIKeys(): Promise<APIKey[]> {
