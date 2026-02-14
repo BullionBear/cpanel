@@ -90,16 +90,13 @@ async def register(
     expires_delta = timedelta(minutes=30)
     token_data = {
         "sub": str(user.id),
-        "username": user.username,
-        "email": user.email,
-        "is_active": False,
         "type": "activation",
     }
     activation_token = create_access_token(data=token_data, expires_delta=expires_delta)
-    
+
     # Calculate expired_at datetime
     expired_at = datetime.now(timezone.utc) + expires_delta
-    
+
     # Save token to database
     access_repo = AccessRepository(db)
     access_repo.create(
@@ -107,10 +104,10 @@ async def register(
         access_token=activation_token,
         expired_at=expired_at,
     )
-    
+
     # Create activation URL
     activation_url = f"{settings.HOST_URL}{settings.API_V1_PREFIX}/auth/activate?token={activation_token}"
-    
+
     # Send activation email
     email_subject = "Activate Your CPanel Account"
     email_body = f"""
@@ -206,9 +203,6 @@ async def login(
         expires_delta = timedelta(days=7)
         token_data = {
             "sub": str(user.id),
-            "username": user.username,
-            "email": user.email,
-            "is_active": True,
             "type": "ui_access",
         }
         
@@ -261,9 +255,6 @@ async def login(
         expires_delta = timedelta(minutes=30)
         token_data = {
             "sub": str(user.id),
-            "username": user.username,
-            "email": user.email,
-            "is_active": False,
             "type": "activation",
         }
         activation_token = create_access_token(data=token_data, expires_delta=expires_delta)
@@ -392,8 +383,8 @@ async def activate_user(
             detail="User account is already activated"
         )
     
-    # Check if token is for inactive user (should have is_active=False in payload)
-    if payload.get("is_active", True):
+    # Check if token is an activation token (type must be "activation")
+    if payload.get("type") != "activation":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This token is not valid for activation"
@@ -478,9 +469,6 @@ async def create_api_token(
     expires_delta = timedelta(days=365 * 10)  # 10 years
     token_data = {
         "sub": str(current_user.id),
-        "username": current_user.username,
-        "email": current_user.email,
-        "is_active": current_user.is_active,
         "type": "api_access",
     }
     api_token = create_access_token(data=token_data, expires_delta=expires_delta, prefix="api_")
