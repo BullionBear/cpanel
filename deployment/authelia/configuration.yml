@@ -1,0 +1,42 @@
+theme: dark
+
+# generate with 'docker run authelia/authelia:latest authelia crypto rand --length 128 --charset alphanumeric'
+
+identity_validation:
+  reset_password:
+    jwt_secret: z1jFt7jG8aO1hVI3g3RM4pyG4zNJ0baskeUuUvJL1jR1KOuT3EElwQiq4oUQIoSvcgGNLfOYkNxyEaEBm8ewurIH9vJsePSsbRAKKOabkdc2jyVJXe9bl0GI52sCFLRl
+
+authentication_backend:
+  file:
+    path: /config/user_database.yml
+
+access_control:
+  default_policy: one_factor
+  rules:
+    - domain:
+        - "traefik.lynxlinkage.com"
+      policy: one_factor
+    - domain:
+        - "influxdb.lynxlinkage.com"
+      policy: one_factor
+
+session:
+  name: authelia_session
+  secret: fDqEFi2NsdjVmzSufB86YqXJqiYCjVgeWXoaV1Qa7VzXzZFwSrY6v2Ac6T4tP5oNZsG2he4iIrIZeC7dFuiKD6GhPH4Oe2xbgw0IdUcVWNLDouxruBxy981tPacD145q
+  expiration: 7d
+  inactivity: 6h
+  remember_me_duration: 1M
+  cookies:
+    - name: authelia_session
+      domain: lynxlinkage.com
+      authelia_url: https://auth.lynxlinkage.com
+      default_redirection_url: https://auth.lynxlinkage.com/
+
+notifier:
+  filesystem:
+    filename: /config/notification.txt
+
+storage:
+  encryption_key: SoUtP3LE1fkWo3xbjsBga4Oar9DdyBhdBhqgpV1u1qetziXedzpIncHefHWAaeX0xo4q9zjmJoFN9h9K4CPkfCFusS6PQg5eXzmadhM2eH4lIHA83A8Ju1HIV4mdjgEe
+  local:
+    path: /config/db.sqlite3

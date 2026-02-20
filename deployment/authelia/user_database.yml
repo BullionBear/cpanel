@@ -1,0 +1,9 @@
+users:
+  eddy:
+    disabled: false
+    displayname: "eddy"
+    password: "$argon2id$v=19$m=65536,t=3,p=4$mWZSYKhz1XCUryqcOgyvdA$IfVJrJcjPQ4M4LEIcwGpQS0I9Tq3g9AyAtg9NrqD/PA"
+    email: eddy@lynxlinkage.com
+    groups:
+      - admin
+      - user
