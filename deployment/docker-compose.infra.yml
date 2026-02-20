@@ -26,6 +26,7 @@ services:
       - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
       - "traefik.http.routers.traefik-dashboard.service=api@internal"
       - "traefik.http.routers.traefik-dashboard.tls.certresolver=myresolver"
-  networks:
-    web_proxy:
-      external: true
+
+networks:
+  web_proxy:
+    external: true
