@@ -122,8 +122,8 @@ except ImportError:
 
         id = Column(Integer, primary_key=True, autoincrement=True)
         name = Column(String, nullable=False)
-        exchange_id = Column(Integer, ForeignKey("ref_exchange.id", ondelete="CASCADE"), nullable=False, index=True)
         wallet_type_id = Column(Integer, ForeignKey("ref_wallet.id", ondelete="CASCADE"), nullable=False, index=True)
+        api_id = Column(Integer, ForeignKey("api.id", ondelete="CASCADE"), nullable=True, index=True)
         is_active = Column(Boolean, default=True, nullable=False)
 
 __all__ = ["User", "Access", "API", "Exchange", "Product", "Token", "Symbol", "UserPreference", "Wallet", "WalletAccount"]

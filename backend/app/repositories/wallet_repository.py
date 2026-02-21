@@ -1,8 +1,6 @@
 """Wallet repository for database operations."""
 from typing import Optional, List
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
-
 from app.models import Wallet, WalletAccount
 
 
@@ -52,8 +50,8 @@ class WalletRepository:
 
     def query_wallets(
         self,
-        exchange_id: Optional[int] = None,
         wallet_type_id: Optional[int] = None,
+        api_id: Optional[int] = None,
         is_active: Optional[bool] = None,
         skip: int = 0,
         limit: int = 100,
@@ -62,8 +60,8 @@ class WalletRepository:
         Query wallet (WalletAccount) with optional filters.
 
         Args:
-            exchange_id: Filter by exchange ID
             wallet_type_id: Filter by ref_wallet ID
+            api_id: Filter by API key ID
             is_active: Filter by is_active
             skip: Number of records to skip (pagination)
             limit: Maximum number of records to return (pagination)
@@ -73,10 +71,10 @@ class WalletRepository:
         """
         query = self.db.query(WalletAccount)
 
-        if exchange_id is not None:
-            query = query.filter(WalletAccount.exchange_id == exchange_id)
         if wallet_type_id is not None:
             query = query.filter(WalletAccount.wallet_type_id == wallet_type_id)
+        if api_id is not None:
+            query = query.filter(WalletAccount.api_id == api_id)
         if is_active is not None:
             query = query.filter(WalletAccount.is_active == is_active)
 
@@ -97,8 +95,8 @@ class WalletRepository:
     def create_wallet(
         self,
         name: str,
-        exchange_id: int,
         wallet_type_id: int,
+        api_id: Optional[int] = None,
         is_active: bool = True,
     ) -> WalletAccount:
         """
@@ -106,8 +104,8 @@ class WalletRepository:
 
         Args:
             name: Wallet name
-            exchange_id: ref_exchange ID
             wallet_type_id: ref_wallet ID
+            api_id: API key ID (optional)
             is_active: Whether the wallet is active (default True)
 
         Returns:
@@ -115,8 +113,8 @@ class WalletRepository:
         """
         wallet = WalletAccount(
             name=name,
-            exchange_id=exchange_id,
             wallet_type_id=wallet_type_id,
+            api_id=api_id,
             is_active=is_active,
         )
         self.db.add(wallet)
