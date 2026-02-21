@@ -1,4 +1,4 @@
-import { API_V1 } from './config';
+import { API_V1, API_V2 } from './config';
 
 // Key generation types
 export type KeyType = 'RSA' | 'ED25519';
@@ -416,6 +416,38 @@ export async function getBalances(apiIds: number[]): Promise<BalanceResponse[]> 
 		throw new Error(error.detail || 'Failed to fetch balances');
 	} catch (error) {
 		console.error('Failed to get balances:', error);
+		throw error;
+	}
+}
+
+/** v2: get balances by wallet IDs (resolves wallet -> API, returns same BalanceResponse[] shape). */
+export async function getBalancesByWalletIds(walletIds: number[]): Promise<BalanceResponse[]> {
+	const token = localStorage.getItem('access_token');
+	if (!token) {
+		throw new Error('Not authenticated');
+	}
+	if (walletIds.length === 0) {
+		return [];
+	}
+	try {
+		const idParam = walletIds.join(',');
+		const response = await fetch(`${API_V2}/balance?id=${idParam}`, {
+			headers: {
+				'Authorization': `Bearer ${token}`
+			}
+		});
+		if (response.ok) {
+			return await response.json();
+		} else if (response.status === 401) {
+			localStorage.removeItem('access_token');
+			throw new Error('Unauthorized');
+		} else if (response.status === 404) {
+			return [];
+		}
+		const err = await response.json();
+		throw new Error(err.detail || 'Failed to fetch balances');
+	} catch (error) {
+		console.error('Failed to get balances by wallets:', error);
 		throw error;
 	}
 }
