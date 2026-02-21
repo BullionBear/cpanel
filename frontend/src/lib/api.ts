@@ -587,3 +587,99 @@ export async function deleteAPIToken(): Promise<void> {
 		throw error;
 	}
 }
+
+// --- Wallets ---
+
+export interface Wallet {
+	id: number;
+	name: string;
+	api_id: number | null;
+	wallet_type_id: number;
+	is_active: boolean;
+}
+
+export interface WalletType {
+	id: number;
+	name: string;
+	slug: string;
+}
+
+export interface WalletCreate {
+	name: string;
+	api_key_id: number;
+	wallet_type_id: number;
+}
+
+export async function getWallets(): Promise<Wallet[]> {
+	const token = localStorage.getItem('access_token');
+	if (!token) {
+		throw new Error('Not authenticated');
+	}
+	const response = await fetch(`${API_BASE_URL}/wallet`, {
+		headers: { 'Authorization': `Bearer ${token}` }
+	});
+	if (response.ok) return await response.json();
+	if (response.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await response.json();
+	throw new Error(err.detail || 'Failed to fetch wallets');
+}
+
+export async function getWalletTypes(): Promise<WalletType[]> {
+	const token = localStorage.getItem('access_token');
+	if (!token) {
+		throw new Error('Not authenticated');
+	}
+	const response = await fetch(`${API_BASE_URL}/wallet/types`, {
+		headers: { 'Authorization': `Bearer ${token}` }
+	});
+	if (response.ok) return await response.json();
+	if (response.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await response.json();
+	throw new Error(err.detail || 'Failed to fetch wallet types');
+}
+
+export async function createWallet(data: WalletCreate): Promise<Wallet> {
+	const token = localStorage.getItem('access_token');
+	if (!token) {
+		throw new Error('Not authenticated');
+	}
+	const response = await fetch(`${API_BASE_URL}/wallet`, {
+		method: 'POST',
+		headers: {
+			'Authorization': `Bearer ${token}`,
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify(data)
+	});
+	if (response.ok) return await response.json();
+	if (response.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await response.json();
+	throw new Error(err.detail || 'Failed to create wallet');
+}
+
+export async function deleteWallet(walletId: number): Promise<void> {
+	const token = localStorage.getItem('access_token');
+	if (!token) {
+		throw new Error('Not authenticated');
+	}
+	const response = await fetch(`${API_BASE_URL}/wallet/${walletId}`, {
+		method: 'DELETE',
+		headers: { 'Authorization': `Bearer ${token}` }
+	});
+	if (response.ok || response.status === 204) return;
+	if (response.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await response.json();
+	throw new Error(err.detail || 'Failed to delete wallet');
+}

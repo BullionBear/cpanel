@@ -38,6 +38,13 @@ class WalletResponse(BaseModel):
         from_attributes = True
 
 
+class WalletTypeResponse(BaseModel):
+    """Ref wallet type (for dropdowns)."""
+    id: int
+    name: str
+    slug: str
+
+
 def _is_wallet_type_allowed_for_exchange(exchange: str, wallet_slug: str) -> bool:
     """True if this wallet type (slug) is allowed for the exchange."""
     allowed = EXCHANGE_ALLOWED_WALLET_SLUGS.get((exchange or "").upper(), [])
@@ -86,6 +93,23 @@ async def create_wallet(
         wallet_type_id=wallet.wallet_type_id,
         is_active=wallet.is_active,
     )
+
+
+@router.get("/types", response_model=List[WalletTypeResponse])
+async def get_wallet_types(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    List all wallet types (ref_wallet) for use in create-wallet forms.
+    Declared before /{wallet_id} so GET /wallet/types is not matched as wallet_id='types'.
+    """
+    wallet_repo = WalletRepository(db)
+    ref_wallets = wallet_repo.query_ref_wallets()
+    return [
+        WalletTypeResponse(id=w.id, name=w.name, slug=w.slug)
+        for w in ref_wallets
+    ]
 
 
 @router.get("", response_model=List[WalletResponse])

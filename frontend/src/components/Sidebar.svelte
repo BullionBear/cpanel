@@ -85,6 +85,19 @@
 			{/if}
 		</a>
 		<a 
+			href="/wallets" 
+			class="nav-item" 
+			class:active={currentPath === '/wallets'}
+			on:click|preventDefault={() => navigate('/wallets')}
+		>
+			<svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+				<path d="M21 12V7H5V12M21 12H5M21 12V17H5V12M3 5H21V19H3V5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+			</svg>
+			{#if !collapsed}
+				<span>Wallets</span>
+			{/if}
+		</a>
+		<a 
 			href="/tool" 
 			class="nav-item" 
 			class:active={currentPath === '/tool'}
