@@ -12,6 +12,12 @@ from app.repositories.api_repository import APIRepository
 
 router = APIRouter(prefix="/wallet", tags=["wallets"])
 
+# Exchange -> allowed wallet type slugs (ref_wallet.slug). Blocks e.g. Bybit SPOT.
+EXCHANGE_ALLOWED_WALLET_SLUGS: dict[str, list[str]] = {
+    "BINANCE": ["SPOT", "UMARGIN", "CMARGIN", "LEVERAGE"],
+    "BYBIT": ["UNIFIED"],
+}
+
 
 class WalletCreate(BaseModel):
     """Wallet creation request model."""
@@ -30,6 +36,12 @@ class WalletResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+def _is_wallet_type_allowed_for_exchange(exchange: str, wallet_slug: str) -> bool:
+    """True if this wallet type (slug) is allowed for the exchange."""
+    allowed = EXCHANGE_ALLOWED_WALLET_SLUGS.get((exchange or "").upper(), [])
+    return (wallet_slug or "").upper() in [s.upper() for s in allowed]
 
 
 @router.post("", response_model=WalletResponse, status_code=status.HTTP_201_CREATED)
@@ -56,6 +68,12 @@ async def create_wallet(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Wallet type with ID {body.wallet_type_id} not found",
         )
+    if not _is_wallet_type_allowed_for_exchange(api.exchange, ref_wallet.slug):
+        allowed = EXCHANGE_ALLOWED_WALLET_SLUGS.get((api.exchange or "").upper(), [])
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Wallet type '{ref_wallet.slug}' is not allowed for exchange {api.exchange}. Allowed: {allowed}",
+        )
     wallet = wallet_repo.create_wallet(
         name=body.name,
         wallet_type_id=body.wallet_type_id,
@@ -77,19 +95,31 @@ async def get_wallets(
 ):
     """
     Get all wallets for the current user (wallets linked to the user's API keys).
+    Only returns wallets whose exchange allows that wallet type (e.g. Bybit SPOT is excluded).
     """
     wallet_repo = WalletRepository(db)
+    api_repo = APIRepository(db)
     wallets = wallet_repo.query_wallets_by_user_id(current_user.id)
-    return [
-        WalletResponse(
-            id=w.id,
-            name=w.name,
-            api_id=w.api_id,
-            wallet_type_id=w.wallet_type_id,
-            is_active=w.is_active,
+    result = []
+    for w in wallets:
+        if w.api_id is None:
+            continue
+        api = api_repo.get(w.api_id)
+        if not api:
+            continue
+        ref_wallet = wallet_repo.get_ref_wallet(w.wallet_type_id)
+        if not ref_wallet or not _is_wallet_type_allowed_for_exchange(api.exchange, ref_wallet.slug):
+            continue
+        result.append(
+            WalletResponse(
+                id=w.id,
+                name=w.name,
+                api_id=w.api_id,
+                wallet_type_id=w.wallet_type_id,
+                is_active=w.is_active,
+            )
         )
-        for w in wallets
-    ]
+    return result
 
 
 @router.delete("/{wallet_id}", status_code=status.HTTP_204_NO_CONTENT)
