@@ -3,7 +3,8 @@ from sqlalchemy import Column, Integer, String
 from . import Base
 
 
-class Exchange(Base):
+class RefExchange(Base):
+    """Reference: exchange (e.g. BINANCE, BYBIT)."""
     __tablename__ = "ref_exchange"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -11,4 +12,4 @@ class Exchange(Base):
     slug = Column(String, unique=True, nullable=False, index=True)
 
     def __repr__(self):
-        return f"<Exchange(name='{self.name}', slug='{self.slug}')>"
+        return f"<RefExchange(name='{self.name}', slug='{self.slug}')>"

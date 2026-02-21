@@ -26,7 +26,7 @@ def _get_bbo_for_symbol(symbol, market_service: MarketService) -> BestBidAskResp
     Helper function to get best bid/ask for a single symbol and convert to response model.
     
     Args:
-        symbol: Symbol model instance
+        symbol: RefSymbol model instance
         market_service: MarketService instance
         
     Returns:

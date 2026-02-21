@@ -8,13 +8,14 @@ Base = declarative_base()
 from .user import User  # noqa: E402
 from .access import Access  # noqa: E402
 from .api import API  # noqa: E402
-from .exchange import Exchange  # noqa: E402
-from .product import Product  # noqa: E402
-from .token import Token  # noqa: E402
-from .symbol import Symbol  # noqa: E402
+from .ref_exchange import RefExchange  # noqa: E402
+from .ref_product import RefProduct  # noqa: E402
+from .ref_token import RefToken  # noqa: E402
+from .ref_symbol import RefSymbol  # noqa: E402
 from .user_preference import UserPreference  # noqa: E402
+from .ref_wallet import RefWallet  # noqa: E402
 from .wallet import Wallet  # noqa: E402
-from .wallet_account import WalletAccount  # noqa: E402
+from .account import Account  # noqa: E402
 
-__all__ = ["Base", "User", "Access", "API", "Exchange", "Product", "Token", "Symbol", "UserPreference", "Wallet", "WalletAccount"]
+__all__ = ["Base", "User", "Access", "API", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "Account"]
 

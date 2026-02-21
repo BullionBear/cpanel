@@ -4,8 +4,9 @@ from sqlalchemy.orm import relationship
 from . import Base
 
 
-class Symbol(Base):
-    __tablename__ = "symbol"
+class RefSymbol(Base):
+    """Reference: symbol (trading pair definition)."""
+    __tablename__ = "ref_symbol"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String, nullable=False)
@@ -18,10 +19,10 @@ class Symbol(Base):
     universal_ticker = Column(String, nullable=False, unique=True, index=True)
 
     # Relationships
-    exchange = relationship("Exchange", backref="symbols")
-    product = relationship("Product", backref="symbols")
-    base_token = relationship("Token", foreign_keys=[base_id], backref="base_symbols")
-    quote_token = relationship("Token", foreign_keys=[quote_id], backref="quote_symbols")
+    exchange = relationship("RefExchange", backref="symbols")
+    product = relationship("RefProduct", backref="symbols")
+    base_token = relationship("RefToken", foreign_keys=[base_id], backref="base_symbols")
+    quote_token = relationship("RefToken", foreign_keys=[quote_id], backref="quote_symbols")
 
     def __repr__(self):
-        return f"<Symbol(name='{self.name}', exchange_id={self.exchange_id}, universal_ticker='{self.universal_ticker}')>"
+        return f"<RefSymbol(name='{self.name}', exchange_id={self.exchange_id}, universal_ticker='{self.universal_ticker}')>"

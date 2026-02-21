@@ -1,0 +1,15 @@
+from sqlalchemy import Column, Integer, String
+
+from . import Base
+
+
+class RefToken(Base):
+    """Reference: token (e.g. BTC, USDT)."""
+    __tablename__ = "ref_token"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, nullable=False)
+    slug = Column(String, unique=True, nullable=False, index=True)
+
+    def __repr__(self):
+        return f"<RefToken(name='{self.name}', slug='{self.slug}')>"
