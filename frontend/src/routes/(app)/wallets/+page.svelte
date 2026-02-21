@@ -20,9 +20,9 @@
 	let showMenuId: number | null = null;
 	let showCreateModal = false;
 
-	// Map wallet_type_id and api_id to labels for display
+	// Map wallet_type_id to slug for display
 	$: walletTypeMap = walletTypes.reduce((acc, wt) => {
-		acc[wt.id] = `${wt.name} (${wt.slug})`;
+		acc[wt.id] = wt.slug;
 		return acc;
 	}, {} as Record<number, string>);
 	$: apiKeyMap = apiKeys.reduce((acc, api) => {
