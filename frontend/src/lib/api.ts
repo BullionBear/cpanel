@@ -452,6 +452,27 @@ export async function getBalancesByWalletIds(walletIds: number[]): Promise<Balan
 	}
 }
 
+/** v2: get balance for a single wallet (for per-wallet display with wallet name as header). */
+export async function getBalanceByWalletId(walletId: number): Promise<BalanceResponse> {
+	const token = localStorage.getItem('access_token');
+	if (!token) {
+		throw new Error('Not authenticated');
+	}
+	const response = await fetch(`${API_V2}/balance/${walletId}`, {
+		headers: { 'Authorization': `Bearer ${token}` }
+	});
+	if (response.ok) return await response.json();
+	if (response.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	if (response.status === 404) {
+		throw new Error('Wallet not found');
+	}
+	const err = await response.json();
+	throw new Error(err.detail || 'Failed to fetch balance');
+}
+
 export interface OpenOrder {
 	order_id: string;
 	symbol: string;
