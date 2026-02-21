@@ -17,6 +17,7 @@ try:
     from user_preference import UserPreference  # noqa: E402
     from wallet import Wallet  # noqa: E402
     from wallet_account import WalletAccount  # noqa: E402
+    from account import Account  # noqa: E402
 except ImportError:
     # Fallback: define User model here if migration models not available
     from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
@@ -126,5 +127,14 @@ except ImportError:
         api_id = Column(Integer, ForeignKey("api.id", ondelete="CASCADE"), nullable=True, index=True)
         is_active = Column(Boolean, default=True, nullable=False)
 
-__all__ = ["User", "Access", "API", "Exchange", "Product", "Token", "Symbol", "UserPreference", "Wallet", "WalletAccount"]
+    class Account(Base):  # type: ignore
+        __tablename__ = "account"
+
+        id = Column(Integer, primary_key=True, autoincrement=True)
+        uid = Column(String, nullable=False, index=True)
+        exch_id = Column(Integer, ForeignKey("ref_exchange.id", ondelete="CASCADE"), nullable=False, index=True)
+        name = Column(String, nullable=False)
+        parent_uid = Column(String, nullable=True, index=True)
+
+__all__ = ["User", "Access", "API", "Exchange", "Product", "Token", "Symbol", "UserPreference", "Wallet", "WalletAccount", "Account"]
 

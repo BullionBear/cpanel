@@ -15,6 +15,7 @@ from .symbol import Symbol  # noqa: E402
 from .user_preference import UserPreference  # noqa: E402
 from .wallet import Wallet  # noqa: E402
 from .wallet_account import WalletAccount  # noqa: E402
+from .account import Account  # noqa: E402
 
-__all__ = ["Base", "User", "Access", "API", "Exchange", "Product", "Token", "Symbol", "UserPreference", "Wallet", "WalletAccount"]
+__all__ = ["Base", "User", "Access", "API", "Exchange", "Product", "Token", "Symbol", "UserPreference", "Wallet", "WalletAccount", "Account"]
 
