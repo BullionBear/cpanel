@@ -1,7 +1,7 @@
 """Wallet repository for database operations."""
 from typing import Optional, List
 from sqlalchemy.orm import Session
-from app.models import Wallet, WalletAccount
+from app.models import Wallet, WalletAccount, API
 
 
 class WalletRepository:
@@ -47,6 +47,32 @@ class WalletRepository:
         return self.db.query(Wallet).offset(skip).limit(limit).all()
 
     # --- wallet (WalletAccount) ---
+
+    def query_wallets_by_user_id(
+        self,
+        user_id: int,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> List[WalletAccount]:
+        """
+        Query wallets (WalletAccount) for a user (via API ownership).
+
+        Args:
+            user_id: User ID (wallets are joined with API where API.user_id = user_id)
+            skip: Number of records to skip (pagination)
+            limit: Maximum number of records to return (pagination)
+
+        Returns:
+            List of WalletAccount objects
+        """
+        return (
+            self.db.query(WalletAccount)
+            .join(API, WalletAccount.api_id == API.id)
+            .filter(API.user_id == user_id)
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
 
     def query_wallets(
         self,
@@ -152,3 +178,24 @@ class WalletRepository:
             self.db.commit()
             return True
         return False
+
+    def delete_wallet_by_user_and_id(self, user_id: int, wallet_id: int) -> bool:
+        """
+        Delete wallet (WalletAccount) by ID if it belongs to the user (via API).
+
+        Args:
+            user_id: User ID (wallet must be linked to an API owned by this user)
+            wallet_id: wallet table ID to delete
+
+        Returns:
+            True if deleted, False if not found or not owned by user
+        """
+        wallet = self.get_wallet(wallet_id)
+        if not wallet or wallet.api_id is None:
+            return False
+        api = self.db.query(API).filter(API.id == wallet.api_id, API.user_id == user_id).first()
+        if not api:
+            return False
+        self.db.delete(wallet)
+        self.db.commit()
+        return True
