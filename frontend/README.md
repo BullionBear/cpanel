@@ -12,17 +12,17 @@ npm install
 2. Configure API URL:
    - Create a `.env` file in the frontend directory with:
      ```
-     VITE_API_BASE_URL=http://localhost:8186/api/v1
+     VITE_API_BASE_URL=http://localhost:8186/api
      ```
-   - The default is `http://localhost:8186/api/v1` if no `.env` file exists
+   - The default is `http://localhost:8186/api` if no `.env` file exists
    - **Important**: After creating or modifying `.env`, restart the dev server
 
 ### API URL Configuration
 
-The API base URL is configured via the `VITE_API_BASE_URL` environment variable:
+The API base URL is configured via the `VITE_API_BASE_URL` environment variable (no version segment). Each endpoint determines its version (e.g. `/v1/wallet`, `/v2/balance`). All current requests use v1.
 
-- **Local Development**: `http://localhost:8186/api/v1` (backend running locally on port 8186)
-- **Docker/Production**: Update to your backend URL, e.g., `https://capi.yourdomain.com/api/v1`
+- **Local Development**: `http://localhost:8186/api` (backend running locally on port 8186)
+- **Docker/Production**: Update to your backend URL, e.g., `https://capi.yourdomain.com/api`
 
 **Note**: Vite requires environment variables to be prefixed with `VITE_` to be exposed to the client-side code.
 

@@ -1,4 +1,4 @@
-import { API_BASE_URL } from './config';
+import { API_V1 } from './config';
 
 // Key generation types
 export type KeyType = 'RSA' | 'ED25519';
@@ -11,7 +11,7 @@ export interface KeyGenerateResponse {
 
 export async function generateKeyPair(keyType: KeyType, keySize?: number): Promise<KeyGenerateResponse> {
 	try {
-		const response = await fetch(`${API_BASE_URL}/tool/keygen`, {
+		const response = await fetch(`${API_V1}/tool/keygen`, {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json'
@@ -47,7 +47,7 @@ export async function getCurrentUser(): Promise<User | null> {
 	}
 
 	try {
-		const response = await fetch(`${API_BASE_URL}/auth/me`, {
+		const response = await fetch(`${API_V1}/auth/me`, {
 			headers: {
 				'Authorization': `Bearer ${token}`
 			}
@@ -103,7 +103,7 @@ export async function getAPIKeys(): Promise<APIKey[]> {
 	}
 
 	try {
-		const response = await fetch(`${API_BASE_URL}/apikey`, {
+		const response = await fetch(`${API_V1}/apikey`, {
 			headers: {
 				'Authorization': `Bearer ${token}`
 			}
@@ -130,7 +130,7 @@ export async function registerAPIKey(data: APIKeyCreate): Promise<APIKey> {
 	}
 
 	try {
-		const response = await fetch(`${API_BASE_URL}/apikey/register`, {
+		const response = await fetch(`${API_V1}/apikey/register`, {
 			method: 'POST',
 			headers: {
 				'Authorization': `Bearer ${token}`,
@@ -160,7 +160,7 @@ export async function deleteAPIKey(apiId: number): Promise<void> {
 	}
 
 	try {
-		const response = await fetch(`${API_BASE_URL}/apikey/${apiId}`, {
+		const response = await fetch(`${API_V1}/apikey/${apiId}`, {
 			method: 'DELETE',
 			headers: {
 				'Authorization': `Bearer ${token}`
@@ -195,7 +195,7 @@ export async function getPreference(layout: string = 'execution'): Promise<Prefe
 	}
 
 	try {
-		const response = await fetch(`${API_BASE_URL}/preference?layout=${layout}`, {
+		const response = await fetch(`${API_V1}/preference?layout=${layout}`, {
 			headers: {
 				'Authorization': `Bearer ${token}`
 			}
@@ -226,7 +226,7 @@ export interface BBOData {
 export async function getBBOs(symbolIds: number[]): Promise<BBOData[]> {
 	try {
 		const symbolIdParam = symbolIds.join(',');
-		const response = await fetch(`${API_BASE_URL}/market/bbos?symbol_id=${symbolIdParam}`);
+		const response = await fetch(`${API_V1}/market/bbos?symbol_id=${symbolIdParam}`);
 
 		if (response.ok) {
 			return await response.json();
@@ -246,7 +246,7 @@ export async function updatePreference(preference: Record<string, any>, layout: 
 	}
 
 	try {
-		const response = await fetch(`${API_BASE_URL}/preference?layout=${layout}`, {
+		const response = await fetch(`${API_V1}/preference?layout=${layout}`, {
 			method: 'PUT',
 			headers: {
 				'Authorization': `Bearer ${token}`,
@@ -299,7 +299,7 @@ export interface SymbolInfo {
 
 export async function getSymbols(limit: number = 100): Promise<SymbolInfo[]> {
 	try {
-		const response = await fetch(`${API_BASE_URL}/symbol?limit=${limit}`);
+		const response = await fetch(`${API_V1}/symbol?limit=${limit}`);
 
 		if (response.ok) {
 			return await response.json();
@@ -342,7 +342,7 @@ export async function createOrder(data: OrderCreate): Promise<OrderResponse> {
 	}
 
 	try {
-		const response = await fetch(`${API_BASE_URL}/order`, {
+		const response = await fetch(`${API_V1}/order`, {
 			method: 'POST',
 			headers: {
 				'Authorization': `Bearer ${token}`,
@@ -397,7 +397,7 @@ export async function getBalances(apiIds: number[]): Promise<BalanceResponse[]> 
 
 	try {
 		const idParam = apiIds.join(',');
-		const response = await fetch(`${API_BASE_URL}/balance?id=${idParam}`, {
+		const response = await fetch(`${API_V1}/balance?id=${idParam}`, {
 			headers: {
 				'Authorization': `Bearer ${token}`
 			}
@@ -442,7 +442,7 @@ export async function getOpenOrders(): Promise<OpenOrder[]> {
 	}
 
 	try {
-		const response = await fetch(`${API_BASE_URL}/order/open`, {
+		const response = await fetch(`${API_V1}/order/open`, {
 			headers: {
 				'Authorization': `Bearer ${token}`
 			}
@@ -478,7 +478,7 @@ export async function cancelOrder(data: OrderCancel): Promise<OrderResponse> {
 	}
 
 	try {
-		const response = await fetch(`${API_BASE_URL}/order`, {
+		const response = await fetch(`${API_V1}/order`, {
 			method: 'DELETE',
 			headers: {
 				'Authorization': `Bearer ${token}`,
@@ -508,7 +508,7 @@ export async function getAPIToken(): Promise<APIToken | null> {
 	}
 
 	try {
-		const response = await fetch(`${API_BASE_URL}/auth/api-token`, {
+		const response = await fetch(`${API_V1}/auth/api-token`, {
 			headers: {
 				'Authorization': `Bearer ${token}`
 			}
@@ -538,7 +538,7 @@ export async function createAPIToken(): Promise<APIToken> {
 	}
 
 	try {
-		const response = await fetch(`${API_BASE_URL}/auth/api-token`, {
+		const response = await fetch(`${API_V1}/auth/api-token`, {
 			method: 'POST',
 			headers: {
 				'Authorization': `Bearer ${token}`,
@@ -567,7 +567,7 @@ export async function deleteAPIToken(): Promise<void> {
 	}
 
 	try {
-		const response = await fetch(`${API_BASE_URL}/auth/api-token`, {
+		const response = await fetch(`${API_V1}/auth/api-token`, {
 			method: 'DELETE',
 			headers: {
 				'Authorization': `Bearer ${token}`
@@ -615,7 +615,7 @@ export async function getWallets(): Promise<Wallet[]> {
 	if (!token) {
 		throw new Error('Not authenticated');
 	}
-	const response = await fetch(`${API_BASE_URL}/wallet`, {
+	const response = await fetch(`${API_V1}/wallet`, {
 		headers: { 'Authorization': `Bearer ${token}` }
 	});
 	if (response.ok) return await response.json();
@@ -632,7 +632,7 @@ export async function getWalletTypes(): Promise<WalletType[]> {
 	if (!token) {
 		throw new Error('Not authenticated');
 	}
-	const response = await fetch(`${API_BASE_URL}/wallet/types`, {
+	const response = await fetch(`${API_V1}/wallet/types`, {
 		headers: { 'Authorization': `Bearer ${token}` }
 	});
 	if (response.ok) return await response.json();
@@ -649,7 +649,7 @@ export async function createWallet(data: WalletCreate): Promise<Wallet> {
 	if (!token) {
 		throw new Error('Not authenticated');
 	}
-	const response = await fetch(`${API_BASE_URL}/wallet`, {
+	const response = await fetch(`${API_V1}/wallet`, {
 		method: 'POST',
 		headers: {
 			'Authorization': `Bearer ${token}`,
@@ -671,7 +671,7 @@ export async function deleteWallet(walletId: number): Promise<void> {
 	if (!token) {
 		throw new Error('Not authenticated');
 	}
-	const response = await fetch(`${API_BASE_URL}/wallet/${walletId}`, {
+	const response = await fetch(`${API_V1}/wallet/${walletId}`, {
 		method: 'DELETE',
 		headers: { 'Authorization': `Bearer ${token}` }
 	});

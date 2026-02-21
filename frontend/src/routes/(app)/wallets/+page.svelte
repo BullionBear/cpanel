@@ -116,7 +116,7 @@
 		<div class="loading">Loading wallets...</div>
 	{:else if error}
 		<div class="error">{error}</div>
-		<p class="error-hint">Check that the API is running and <code>VITE_API_BASE_URL</code> points to it (e.g. <code>http://localhost:8186/api/v1</code>).</p>
+		<p class="error-hint">Check that the API is running and <code>VITE_API_BASE_URL</code> points to it (e.g. <code>http://localhost:8186/api</code>).</p>
 	{:else if wallets.length === 0}
 		<div class="empty-state">
 			<p>No wallets yet. Create one and associate it to an existing API key.</p>
