@@ -19,8 +19,8 @@ setup_cors(app)
 setup_logging(app)
 
 # Include API routers
-app.include_router(api_router_v1, prefix=settings.API_V1_PREFIX)
-app.include_router(api_router_v2, prefix="/api/v2")
+app.include_router(api_router_v1, prefix=f"{settings.API_PREFIX}/v1")
+app.include_router(api_router_v2, prefix=f"{settings.API_PREFIX}/v2")
 
 
 
