@@ -6,7 +6,7 @@ from sqlalchemy.orm import relationship
 from . import Base
 
 
-class API(Base):
+class APIArchived(Base):
     """Legacy API keys (table renamed to api_archived_20260221)."""
     __tablename__ = "api_archived_20260221"
 
@@ -27,5 +27,5 @@ class API(Base):
     user = relationship("User", backref="apis")
 
     def __repr__(self):
-        return f"<API(id={self.id}, user_id={self.user_id}, exchange='{self.exchange}', uid='{self.uid}', name='{self.name}', master_uid={self.master_uid})>"
+        return f"<APIArchived(id={self.id}, user_id={self.user_id}, exchange='{self.exchange}', uid='{self.uid}', name='{self.name}', master_uid={self.master_uid})>"
 

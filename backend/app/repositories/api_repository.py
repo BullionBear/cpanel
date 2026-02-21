@@ -1,13 +1,13 @@
-"""API repository for database operations."""
+"""API repository for database operations (APIArchived model)."""
 from typing import Optional, List
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
-from app.models import API
+from app.models import APIArchived
 
 
 class APIRepository:
-    """Repository for API model operations."""
+    """Repository for APIArchived model operations."""
 
     def __init__(self, db: Session):
         """Initialize repository with database session."""
@@ -20,9 +20,9 @@ class APIRepository:
         master_uid: Optional[str] = None,
         skip: int = 0,
         limit: int = 100,
-    ) -> List[API]:
+    ) -> List[APIArchived]:
         """
-        Query APIs with optional filters.
+        Query APIArchiveds with optional filters.
         
         Args:
             user_id: Filter by user ID
@@ -32,46 +32,46 @@ class APIRepository:
             limit: Maximum number of records to return (pagination)
             
         Returns:
-            List of API objects matching the criteria
+            List of APIArchived objects matching the criteria
         """
-        query = self.db.query(API)
+        query = self.db.query(APIArchived)
         
         if user_id is not None:
-            query = query.filter(API.user_id == user_id)
+            query = query.filter(APIArchived.user_id == user_id)
         
         if exchange is not None:
-            query = query.filter(API.exchange == exchange)
+            query = query.filter(APIArchived.exchange == exchange)
         
         if master_uid is not None:
-            query = query.filter(API.master_uid == master_uid)
+            query = query.filter(APIArchived.master_uid == master_uid)
         
         return query.offset(skip).limit(limit).all()
 
-    def get(self, api_id: int) -> Optional[API]:
+    def get(self, api_id: int) -> Optional[APIArchived]:
         """
-        Get API by ID.
+        Get APIArchived by ID.
         
         Args:
-            api_id: API ID
+            api_id: APIArchived ID
             
         Returns:
-            API object if found, None otherwise
+            APIArchived object if found, None otherwise
         """
-        return self.db.query(API).filter(API.id == api_id).first()
+        return self.db.query(APIArchived).filter(APIArchived.id == api_id).first()
 
-    def get_by_user_and_id(self, user_id: int, api_id: int) -> Optional[API]:
+    def get_by_user_and_id(self, user_id: int, api_id: int) -> Optional[APIArchived]:
         """
-        Get API by ID and user ID (for security - ensures user owns the API).
+        Get APIArchived by ID and user ID (for security - ensures user owns the APIArchived).
         
         Args:
             user_id: User ID
-            api_id: API ID
+            api_id: APIArchived ID
             
         Returns:
-            API object if found and owned by user, None otherwise
+            APIArchived object if found and owned by user, None otherwise
         """
-        return self.db.query(API).filter(
-            and_(API.id == api_id, API.user_id == user_id)
+        return self.db.query(APIArchived).filter(
+            and_(APIArchived.id == api_id, APIArchived.user_id == user_id)
         ).first()
 
     def create(
@@ -85,25 +85,25 @@ class APIRepository:
         api_secret: str,
         passphrase: Optional[str] = None,
         master_uid: Optional[str] = None,
-    ) -> API:
+    ) -> APIArchived:
         """
-        Create a new API.
+        Create a new APIArchived.
         
         Args:
-            user_id: User ID who owns this API
+            user_id: User ID who owns this APIArchived
             exchange: Exchange name (e.g., 'BINANCE', 'BYBIT')
             uid: Exchange account UID
-            name: API name/identifier
-            api_type: API type (e.g., 'HMAC', 'RSA')
-            api_key: API key
-            api_secret: API secret
+            name: APIArchived name/identifier
+            api_type: APIArchived type (e.g., 'HMAC', 'RSA')
+            api_key: APIArchived key
+            api_secret: APIArchived secret
             passphrase: Passphrase (optional, some exchanges don't use it)
             master_uid: Master account UID (None for main account, or UID for sub-account)
             
         Returns:
-            Created API object
+            Created APIArchived object
         """
-        api = API(
+        api = APIArchived(
             user_id=user_id,
             exchange=exchange,
             uid=uid,
@@ -128,10 +128,10 @@ class APIRepository:
 
     def delete(self, api_id: int) -> bool:
         """
-        Delete API by ID.
+        Delete APIArchived by ID.
         
         Args:
-            api_id: API ID to delete
+            api_id: APIArchived ID to delete
             
         Returns:
             True if deleted, False if not found
@@ -145,11 +145,11 @@ class APIRepository:
 
     def delete_by_user_and_id(self, user_id: int, api_id: int) -> bool:
         """
-        Delete API by ID and user ID (for security - ensures user owns the API).
+        Delete APIArchived by ID and user ID (for security - ensures user owns the APIArchived).
         
         Args:
             user_id: User ID
-            api_id: API ID to delete
+            api_id: APIArchived ID to delete
             
         Returns:
             True if deleted, False if not found or not owned by user
@@ -161,21 +161,21 @@ class APIRepository:
             return True
         return False
 
-    def update(self, api: API) -> API:
+    def update(self, api: APIArchived) -> APIArchived:
         """
-        Update API (commit changes to database).
+        Update APIArchived (commit changes to database).
         
         Args:
-            api: API object with updated fields
+            api: APIArchived object with updated fields
             
         Returns:
-            Updated API object
+            Updated APIArchived object
         """
         self.db.commit()
         self.db.refresh(api)
         return api
 
-    def get_main_accounts(self, user_id: int) -> List[API]:
+    def get_main_accounts(self, user_id: int) -> List[APIArchived]:
         """
         Get all main accounts for a user (where master_uid equals uid).
         
@@ -183,16 +183,16 @@ class APIRepository:
             user_id: User ID
             
         Returns:
-            List of main account APIs
+            List of main account APIArchiveds
         """
-        return self.db.query(API).filter(
+        return self.db.query(APIArchived).filter(
             and_(
-                API.user_id == user_id,
-                API.master_uid == API.uid
+                APIArchived.user_id == user_id,
+                APIArchived.master_uid == APIArchived.uid
             )
         ).all()
 
-    def get_sub_accounts(self, master_uid: str) -> List[API]:
+    def get_sub_accounts(self, master_uid: str) -> List[APIArchived]:
         """
         Get all sub-accounts for a master account.
         
@@ -200,18 +200,18 @@ class APIRepository:
             master_uid: Master account UID
             
         Returns:
-            List of sub-account APIs
+            List of sub-account APIArchiveds
         """
-        return self.db.query(API).filter(
+        return self.db.query(APIArchived).filter(
             and_(
-                API.master_uid == master_uid,
-                API.master_uid != API.uid  # Exclude the master itself
+                APIArchived.master_uid == master_uid,
+                APIArchived.master_uid != APIArchived.uid  # Exclude the master itself
             )
         ).all()
     
-    def get_by_uid(self, user_id: int, exchange: str, uid: str) -> Optional[API]:
+    def get_by_uid(self, user_id: int, exchange: str, uid: str) -> Optional[APIArchived]:
         """
-        Get API by exchange UID for a user.
+        Get APIArchived by exchange UID for a user.
         
         Args:
             user_id: User ID
@@ -219,13 +219,13 @@ class APIRepository:
             uid: Exchange account UID
             
         Returns:
-            API object if found, None otherwise
+            APIArchived object if found, None otherwise
         """
-        return self.db.query(API).filter(
+        return self.db.query(APIArchived).filter(
             and_(
-                API.user_id == user_id,
-                API.exchange == exchange,
-                API.uid == uid
+                APIArchived.user_id == user_id,
+                APIArchived.exchange == exchange,
+                APIArchived.uid == uid
             )
         ).first()
 

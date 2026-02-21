@@ -8,7 +8,7 @@ import random
 import string
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from app.models import API
+from app.models import APIArchived
 from app.repositories.api_repository import APIRepository
 from app.utils import trim_decimal_string
 

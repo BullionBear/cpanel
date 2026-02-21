@@ -9,14 +9,14 @@ sys.path.insert(0, str(migration_models_path))
 try:
     from user import User  # noqa: E402
     from access import Access  # noqa: E402
-    from api import API  # noqa: E402
+    from api import APIArchived  # noqa: E402
     from ref_exchange import RefExchange  # noqa: E402
     from ref_product import RefProduct  # noqa: E402
     from ref_token import RefToken  # noqa: E402
     from ref_symbol import RefSymbol  # noqa: E402
     from user_preference import UserPreference  # noqa: E402
     from ref_wallet import RefWallet  # noqa: E402
-    from wallet import Wallet  # noqa: E402
+    from wallet import WalletArchived  # noqa: E402
     from account import Account  # noqa: E402
 except ImportError:
     # Fallback: define User model here if migration models not available
@@ -44,7 +44,7 @@ except ImportError:
         created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
         expired_at = Column(DateTime(timezone=True), nullable=False, index=True)
 
-    class API(Base):  # type: ignore
+    class APIArchived(Base):  # type: ignore
         __tablename__ = "api_archived_20260221"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
@@ -118,7 +118,7 @@ except ImportError:
         name = Column(String, nullable=False)
         slug = Column(String, unique=True, nullable=False, index=True)
 
-    class Wallet(Base):  # type: ignore
+    class WalletArchived(Base):  # type: ignore
         __tablename__ = "wallet_archived_20240221"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
@@ -136,5 +136,5 @@ except ImportError:
         name = Column(String, nullable=False)
         parent_uid = Column(String, nullable=True, index=True)
 
-__all__ = ["User", "Access", "API", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "Account"]
+__all__ = ["User", "Access", "APIArchived", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "WalletArchived", "Account"]
 

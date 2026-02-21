@@ -3,7 +3,7 @@ from sqlalchemy import Boolean, Column, ForeignKey, Integer, String
 from . import Base
 
 
-class Wallet(Base):
+class WalletArchived(Base):
     """Legacy wallet table (renamed to wallet_archived_20240221)."""
 
     __tablename__ = "wallet_archived_20240221"
@@ -15,4 +15,4 @@ class Wallet(Base):
     is_active = Column(Boolean, default=True, nullable=False)
 
     def __repr__(self):
-        return f"<Wallet(name='{self.name}', api_id={self.api_id}, wallet_type_id={self.wallet_type_id})>"
+        return f"<WalletArchived(name='{self.name}', api_id={self.api_id}, wallet_type_id={self.wallet_type_id})>"
