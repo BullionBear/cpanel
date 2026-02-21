@@ -118,6 +118,25 @@ class WalletRepository:
         """
         return self.db.query(WalletAccount).filter(WalletAccount.id == wallet_id).first()
 
+    def get_wallet_by_user_and_id(self, user_id: int, wallet_id: int) -> Optional[WalletAccount]:
+        """
+        Get wallet (WalletAccount) by ID if it belongs to the user (via API).
+
+        Args:
+            user_id: User ID (wallet must be linked to an API owned by this user)
+            wallet_id: wallet table ID
+
+        Returns:
+            WalletAccount object if found and owned by user, None otherwise
+        """
+        wallet = self.get_wallet(wallet_id)
+        if not wallet or wallet.api_id is None:
+            return None
+        api = self.db.query(API).filter(API.id == wallet.api_id, API.user_id == user_id).first()
+        if not api:
+            return None
+        return wallet
+
     def create_wallet(
         self,
         name: str,
