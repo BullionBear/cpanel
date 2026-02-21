@@ -1,11 +1,11 @@
 """Wallet repository for database operations."""
 from typing import Optional, List
 from sqlalchemy.orm import Session
-from app.models import RefWallet, WalletAccount, API
+from app.models import RefWallet, Wallet, API
 
 
 class WalletRepository:
-    """Repository for RefWallet (ref_wallet) and WalletAccount (wallet) model operations."""
+    """Repository for RefWallet (ref_wallet) and Wallet (wallet) model operations."""
 
     def __init__(self, db: Session):
         """Initialize repository with database session."""
@@ -46,16 +46,16 @@ class WalletRepository:
         """
         return self.db.query(RefWallet).offset(skip).limit(limit).all()
 
-    # --- wallet (WalletAccount) ---
+    # --- wallet (Wallet) ---
 
     def query_wallets_by_user_id(
         self,
         user_id: int,
         skip: int = 0,
         limit: int = 100,
-    ) -> List[WalletAccount]:
+    ) -> List[Wallet]:
         """
-        Query wallets (WalletAccount) for a user (via API ownership).
+        Query wallets (Wallet) for a user (via API ownership).
 
         Args:
             user_id: User ID (wallets are joined with API where API.user_id = user_id)
@@ -63,11 +63,11 @@ class WalletRepository:
             limit: Maximum number of records to return (pagination)
 
         Returns:
-            List of WalletAccount objects
+            List of Wallet objects
         """
         return (
-            self.db.query(WalletAccount)
-            .join(API, WalletAccount.api_id == API.id)
+            self.db.query(Wallet)
+            .join(API, Wallet.api_id == API.id)
             .filter(API.user_id == user_id)
             .offset(skip)
             .limit(limit)
@@ -81,9 +81,9 @@ class WalletRepository:
         is_active: Optional[bool] = None,
         skip: int = 0,
         limit: int = 100,
-    ) -> List[WalletAccount]:
+    ) -> List[Wallet]:
         """
-        Query wallet (WalletAccount) with optional filters.
+        Query wallet (Wallet) with optional filters.
 
         Args:
             wallet_type_id: Filter by ref_wallet ID
@@ -93,41 +93,41 @@ class WalletRepository:
             limit: Maximum number of records to return (pagination)
 
         Returns:
-            List of WalletAccount objects
+            List of Wallet objects
         """
-        query = self.db.query(WalletAccount)
+        query = self.db.query(Wallet)
 
         if wallet_type_id is not None:
-            query = query.filter(WalletAccount.wallet_type_id == wallet_type_id)
+            query = query.filter(Wallet.wallet_type_id == wallet_type_id)
         if api_id is not None:
-            query = query.filter(WalletAccount.api_id == api_id)
+            query = query.filter(Wallet.api_id == api_id)
         if is_active is not None:
-            query = query.filter(WalletAccount.is_active == is_active)
+            query = query.filter(Wallet.is_active == is_active)
 
         return query.offset(skip).limit(limit).all()
 
-    def get_wallet(self, wallet_id: int) -> Optional[WalletAccount]:
+    def get_wallet(self, wallet_id: int) -> Optional[Wallet]:
         """
-        Get wallet (WalletAccount) by ID.
+        Get wallet (Wallet) by ID.
 
         Args:
             wallet_id: wallet table ID
 
         Returns:
-            WalletAccount object if found, None otherwise
+            Wallet object if found, None otherwise
         """
-        return self.db.query(WalletAccount).filter(WalletAccount.id == wallet_id).first()
+        return self.db.query(Wallet).filter(Wallet.id == wallet_id).first()
 
-    def get_wallet_by_user_and_id(self, user_id: int, wallet_id: int) -> Optional[WalletAccount]:
+    def get_wallet_by_user_and_id(self, user_id: int, wallet_id: int) -> Optional[Wallet]:
         """
-        Get wallet (WalletAccount) by ID if it belongs to the user (via API).
+        Get wallet (Wallet) by ID if it belongs to the user (via API).
 
         Args:
             user_id: User ID (wallet must be linked to an API owned by this user)
             wallet_id: wallet table ID
 
         Returns:
-            WalletAccount object if found and owned by user, None otherwise
+            Wallet object if found and owned by user, None otherwise
         """
         wallet = self.get_wallet(wallet_id)
         if not wallet or wallet.api_id is None:
@@ -143,9 +143,9 @@ class WalletRepository:
         wallet_type_id: int,
         api_id: Optional[int] = None,
         is_active: bool = True,
-    ) -> WalletAccount:
+    ) -> Wallet:
         """
-        Create a new wallet (WalletAccount).
+        Create a new wallet (Wallet).
 
         Args:
             name: Wallet name
@@ -154,9 +154,9 @@ class WalletRepository:
             is_active: Whether the wallet is active (default True)
 
         Returns:
-            Created WalletAccount object
+            Created Wallet object
         """
-        wallet = WalletAccount(
+        wallet = Wallet(
             name=name,
             wallet_type_id=wallet_type_id,
             api_id=api_id,
@@ -167,15 +167,15 @@ class WalletRepository:
         self.db.refresh(wallet)
         return wallet
 
-    def update_wallet(self, wallet: WalletAccount) -> WalletAccount:
+    def update_wallet(self, wallet: Wallet) -> Wallet:
         """
         Update wallet (commit changes to database).
 
         Args:
-            wallet: WalletAccount object with updated fields
+            wallet: Wallet object with updated fields
 
         Returns:
-            Updated WalletAccount object
+            Updated Wallet object
         """
         self.db.commit()
         self.db.refresh(wallet)
@@ -183,7 +183,7 @@ class WalletRepository:
 
     def delete_wallet(self, wallet_id: int) -> bool:
         """
-        Delete wallet (WalletAccount) by ID.
+        Delete wallet (Wallet) by ID.
 
         Args:
             wallet_id: wallet table ID to delete
@@ -200,7 +200,7 @@ class WalletRepository:
 
     def delete_wallet_by_user_and_id(self, user_id: int, wallet_id: int) -> bool:
         """
-        Delete wallet (WalletAccount) by ID if it belongs to the user (via API).
+        Delete wallet (Wallet) by ID if it belongs to the user (via API).
 
         Args:
             user_id: User ID (wallet must be linked to an API owned by this user)

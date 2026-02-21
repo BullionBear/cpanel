@@ -14,8 +14,8 @@ from .ref_token import RefToken  # noqa: E402
 from .ref_symbol import RefSymbol  # noqa: E402
 from .user_preference import UserPreference  # noqa: E402
 from .ref_wallet import RefWallet  # noqa: E402
-from .wallet_account import WalletAccount  # noqa: E402
+from .wallet import Wallet  # noqa: E402
 from .account import Account  # noqa: E402
 
-__all__ = ["Base", "User", "Access", "API", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "WalletAccount", "Account"]
+__all__ = ["Base", "User", "Access", "API", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "Account"]
 

@@ -16,7 +16,7 @@ try:
     from ref_symbol import RefSymbol  # noqa: E402
     from user_preference import UserPreference  # noqa: E402
     from ref_wallet import RefWallet  # noqa: E402
-    from wallet_account import WalletAccount  # noqa: E402
+    from wallet import Wallet  # noqa: E402
     from account import Account  # noqa: E402
 except ImportError:
     # Fallback: define User model here if migration models not available
@@ -118,7 +118,7 @@ except ImportError:
         name = Column(String, nullable=False)
         slug = Column(String, unique=True, nullable=False, index=True)
 
-    class WalletAccount(Base):  # type: ignore
+    class Wallet(Base):  # type: ignore
         __tablename__ = "wallet_archived_20240221"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
@@ -136,5 +136,5 @@ except ImportError:
         name = Column(String, nullable=False)
         parent_uid = Column(String, nullable=True, index=True)
 
-__all__ = ["User", "Access", "API", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "WalletAccount", "Account"]
+__all__ = ["User", "Access", "API", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "Account"]
 
