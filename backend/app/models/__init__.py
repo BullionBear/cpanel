@@ -15,6 +15,7 @@ try:
     from token import Token  # noqa: E402
     from symbol import Symbol  # noqa: E402
     from user_preference import UserPreference  # noqa: E402
+    from wallet import Wallet  # noqa: E402
 except ImportError:
     # Fallback: define User model here if migration models not available
     from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
@@ -108,5 +109,12 @@ except ImportError:
         from sqlalchemy.dialects.postgresql import JSONB
         preference = Column(JSONB, nullable=False)
 
-__all__ = ["User", "Access", "API", "Exchange", "Product", "Token", "Symbol", "UserPreference"]
+    class Wallet(Base):  # type: ignore
+        __tablename__ = "ref_wallet"
+
+        id = Column(Integer, primary_key=True, autoincrement=True)
+        name = Column(String, nullable=False)
+        slug = Column(String, unique=True, nullable=False, index=True)
+
+__all__ = ["User", "Access", "API", "Exchange", "Product", "Token", "Symbol", "UserPreference", "Wallet"]
 
