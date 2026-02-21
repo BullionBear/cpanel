@@ -10,12 +10,12 @@ try:
     from user import User  # noqa: E402
     from access import Access  # noqa: E402
     from api import API  # noqa: E402
-    from exchange import Exchange  # noqa: E402
-    from product import Product  # noqa: E402
-    from token import Token  # noqa: E402
-    from symbol import Symbol  # noqa: E402
+    from ref_exchange import RefExchange  # noqa: E402
+    from ref_product import RefProduct  # noqa: E402
+    from ref_token import RefToken  # noqa: E402
+    from ref_symbol import RefSymbol  # noqa: E402
     from user_preference import UserPreference  # noqa: E402
-    from wallet import Wallet  # noqa: E402
+    from ref_wallet import RefWallet  # noqa: E402
     from wallet_account import WalletAccount  # noqa: E402
     from account import Account  # noqa: E402
 except ImportError:
@@ -45,7 +45,7 @@ except ImportError:
         expired_at = Column(DateTime(timezone=True), nullable=False, index=True)
 
     class API(Base):  # type: ignore
-        __tablename__ = "api"
+        __tablename__ = "api_archived_20260221"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
         user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -60,29 +60,29 @@ except ImportError:
         created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
         updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
-    class Exchange(Base):  # type: ignore
+    class RefExchange(Base):  # type: ignore
         __tablename__ = "ref_exchange"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
         name = Column(String, nullable=False)
         slug = Column(String, unique=True, nullable=False, index=True)
 
-    class Product(Base):  # type: ignore
+    class RefProduct(Base):  # type: ignore
         __tablename__ = "ref_product"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
         name = Column(String, nullable=False)
         slug = Column(String, unique=True, nullable=False, index=True)
 
-    class Token(Base):  # type: ignore
+    class RefToken(Base):  # type: ignore
         __tablename__ = "ref_token"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
         name = Column(String, nullable=False)
         slug = Column(String, unique=True, nullable=False, index=True)
 
-    class Symbol(Base):  # type: ignore
-        __tablename__ = "symbol"
+    class RefSymbol(Base):  # type: ignore
+        __tablename__ = "ref_symbol"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
         name = Column(String, nullable=False)
@@ -96,10 +96,10 @@ except ImportError:
 
         # Relationships
         from sqlalchemy.orm import relationship
-        exchange = relationship("Exchange", backref="symbols")
-        product = relationship("Product", backref="symbols")
-        base_token = relationship("Token", foreign_keys=[base_id], backref="base_symbols")
-        quote_token = relationship("Token", foreign_keys=[quote_id], backref="quote_symbols")
+        exchange = relationship("RefExchange", backref="symbols")
+        product = relationship("RefProduct", backref="symbols")
+        base_token = relationship("RefToken", foreign_keys=[base_id], backref="base_symbols")
+        quote_token = relationship("RefToken", foreign_keys=[quote_id], backref="quote_symbols")
 
     class UserPreference(Base):  # type: ignore
         __tablename__ = "user_preference"
@@ -111,7 +111,7 @@ except ImportError:
         from sqlalchemy.dialects.postgresql import JSONB
         preference = Column(JSONB, nullable=False)
 
-    class Wallet(Base):  # type: ignore
+    class RefWallet(Base):  # type: ignore
         __tablename__ = "ref_wallet"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
@@ -119,12 +119,12 @@ except ImportError:
         slug = Column(String, unique=True, nullable=False, index=True)
 
     class WalletAccount(Base):  # type: ignore
-        __tablename__ = "wallet"
+        __tablename__ = "wallet_archived_20240221"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
         name = Column(String, nullable=False)
         wallet_type_id = Column(Integer, ForeignKey("ref_wallet.id", ondelete="CASCADE"), nullable=False, index=True)
-        api_id = Column(Integer, ForeignKey("api.id", ondelete="CASCADE"), nullable=True, index=True)
+        api_id = Column(Integer, ForeignKey("api_archived_20260221.id", ondelete="CASCADE"), nullable=True, index=True)
         is_active = Column(Boolean, default=True, nullable=False)
 
     class Account(Base):  # type: ignore
@@ -136,5 +136,5 @@ except ImportError:
         name = Column(String, nullable=False)
         parent_uid = Column(String, nullable=True, index=True)
 
-__all__ = ["User", "Access", "API", "Exchange", "Product", "Token", "Symbol", "UserPreference", "Wallet", "WalletAccount", "Account"]
+__all__ = ["User", "Access", "API", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "WalletAccount", "Account"]
 

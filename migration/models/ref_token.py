@@ -3,7 +3,8 @@ from sqlalchemy import Column, Integer, String
 from . import Base
 
 
-class Token(Base):
+class RefToken(Base):
+    """Reference: token (e.g. BTC, USDT)."""
     __tablename__ = "ref_token"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -11,4 +12,4 @@ class Token(Base):
     slug = Column(String, unique=True, nullable=False, index=True)
 
     def __repr__(self):
-        return f"<Token(name='{self.name}', slug='{self.slug}')>"
+        return f"<RefToken(name='{self.name}', slug='{self.slug}')>"

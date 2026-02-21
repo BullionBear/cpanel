@@ -1,19 +1,19 @@
 """Wallet repository for database operations."""
 from typing import Optional, List
 from sqlalchemy.orm import Session
-from app.models import Wallet, WalletAccount, API
+from app.models import RefWallet, WalletAccount, API
 
 
 class WalletRepository:
-    """Repository for Wallet (ref_wallet) and WalletAccount (wallet) model operations."""
+    """Repository for RefWallet (ref_wallet) and WalletAccount (wallet) model operations."""
 
     def __init__(self, db: Session):
         """Initialize repository with database session."""
         self.db = db
 
-    # --- ref_wallet (Wallet) ---
+    # --- ref_wallet (RefWallet) ---
 
-    def get_ref_wallet(self, wallet_type_id: int) -> Optional[Wallet]:
+    def get_ref_wallet(self, wallet_type_id: int) -> Optional[RefWallet]:
         """
         Get ref_wallet by ID.
 
@@ -21,11 +21,11 @@ class WalletRepository:
             wallet_type_id: ref_wallet ID
 
         Returns:
-            Wallet object if found, None otherwise
+            RefWallet object if found, None otherwise
         """
-        return self.db.query(Wallet).filter(Wallet.id == wallet_type_id).first()
+        return self.db.query(RefWallet).filter(RefWallet.id == wallet_type_id).first()
 
-    def get_ref_wallet_by_slug(self, slug: str) -> Optional[Wallet]:
+    def get_ref_wallet_by_slug(self, slug: str) -> Optional[RefWallet]:
         """
         Get ref_wallet by slug.
 
@@ -33,18 +33,18 @@ class WalletRepository:
             slug: ref_wallet slug (e.g. 'SPOT', 'FUTURES')
 
         Returns:
-            Wallet object if found, None otherwise
+            RefWallet object if found, None otherwise
         """
-        return self.db.query(Wallet).filter(Wallet.slug == slug).first()
+        return self.db.query(RefWallet).filter(RefWallet.slug == slug).first()
 
-    def query_ref_wallets(self, skip: int = 0, limit: int = 100) -> List[Wallet]:
+    def query_ref_wallets(self, skip: int = 0, limit: int = 100) -> List[RefWallet]:
         """
         List all ref_wallet records.
 
         Returns:
-            List of Wallet objects
+            List of RefWallet objects
         """
-        return self.db.query(Wallet).offset(skip).limit(limit).all()
+        return self.db.query(RefWallet).offset(skip).limit(limit).all()
 
     # --- wallet (WalletAccount) ---
 

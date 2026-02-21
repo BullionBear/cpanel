@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.repositories.symbol_repository import SymbolRepository
-from app.models import Exchange, Product, Token
+from app.models import RefExchange, RefProduct, RefToken
 from app.services.api_service import ApiService, NetworkError, ExchangeError
 
 router = APIRouter(prefix="/symbol", tags=["symbols"])
@@ -206,14 +206,14 @@ async def create_symbol(
     symbol_repo = SymbolRepository(db)
     
     # Get exchange and product
-    exchange = db.query(Exchange).filter(Exchange.id == symbol_data.exchange_id).first()
+    exchange = db.query(RefExchange).filter(RefExchange.id == symbol_data.exchange_id).first()
     if not exchange:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Exchange with ID {symbol_data.exchange_id} not found"
         )
     
-    product = db.query(Product).filter(Product.id == symbol_data.product_id).first()
+    product = db.query(RefProduct).filter(RefProduct.id == symbol_data.product_id).first()
     if not product:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -264,10 +264,10 @@ async def create_symbol(
     quote_asset = symbol_info.get('quote_asset', '').upper()
     
     # Try to find token by name first (most reliable), then by slug
-    base_token = db.query(Token).filter(Token.name == base_asset).first()
+    base_token = db.query(RefToken).filter(RefToken.name == base_asset).first()
     if not base_token:
         # Fallback to slug lookup
-        base_token = db.query(Token).filter(Token.slug == base_asset.lower()).first()
+        base_token = db.query(RefToken).filter(RefToken.slug == base_asset.lower()).first()
     
     if not base_token:
         raise HTTPException(
@@ -276,10 +276,10 @@ async def create_symbol(
         )
     
     # Try to find token by name first (most reliable), then by slug
-    quote_token = db.query(Token).filter(Token.name == quote_asset).first()
+    quote_token = db.query(RefToken).filter(RefToken.name == quote_asset).first()
     if not quote_token:
         # Fallback to slug lookup
-        quote_token = db.query(Token).filter(Token.slug == quote_asset.lower()).first()
+        quote_token = db.query(RefToken).filter(RefToken.slug == quote_asset.lower()).first()
     
     if not quote_token:
         raise HTTPException(

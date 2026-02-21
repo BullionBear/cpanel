@@ -7,7 +7,8 @@ from . import Base
 
 
 class API(Base):
-    __tablename__ = "api"
+    """Legacy API keys (table renamed to api_archived_20260221)."""
+    __tablename__ = "api_archived_20260221"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)

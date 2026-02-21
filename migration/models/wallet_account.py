@@ -4,14 +4,14 @@ from . import Base
 
 
 class WalletAccount(Base):
-    """Wallet table: exchange wallet (e.g. SPOT per exchange)."""
+    """Legacy wallet table (renamed to wallet_archived_20240221)."""
 
-    __tablename__ = "wallet"
+    __tablename__ = "wallet_archived_20240221"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String, nullable=False)
     wallet_type_id = Column(Integer, ForeignKey("ref_wallet.id", ondelete="CASCADE"), nullable=False, index=True)
-    api_id = Column(Integer, ForeignKey("api.id", ondelete="CASCADE"), nullable=True, index=True)
+    api_id = Column(Integer, ForeignKey("api_archived_20260221.id", ondelete="CASCADE"), nullable=True, index=True)
     is_active = Column(Boolean, default=True, nullable=False)
 
     def __repr__(self):
