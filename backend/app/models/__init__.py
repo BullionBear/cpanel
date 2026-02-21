@@ -133,6 +133,7 @@ except ImportError:
         id = Column(Integer, primary_key=True, autoincrement=True)
         uid = Column(String, nullable=False, index=True)
         exch_id = Column(Integer, ForeignKey("ref_exchange.id", ondelete="CASCADE"), nullable=False, index=True)
+        user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
         name = Column(String, nullable=False)
         parent_uid = Column(String, nullable=True, index=True)
 
