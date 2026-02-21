@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
 
     # API Settings
-    API_V1_PREFIX: str = "/api/v1"
+    API_PREFIX: str = "/api"
     PROJECT_NAME: str = "CPanel API"
     VERSION: str = "1.0.0"
     DEBUG: bool = False
