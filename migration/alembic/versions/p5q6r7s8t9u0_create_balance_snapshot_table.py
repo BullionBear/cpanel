@@ -23,11 +23,12 @@ def upgrade() -> None:
     op.create_table(
         "balance_snapshot",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("sid", sa.String(64), nullable=False),
+        sa.Column("sid", sa.Integer(), nullable=False),
         sa.Column("wallet_id", sa.Integer(), nullable=False),
         sa.Column("token", sa.String(32), nullable=False),
         sa.Column("amount", sa.Numeric(36, 18), nullable=False),
         sa.Column("ref_price", sa.Numeric(36, 18), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.ForeignKeyConstraint(["wallet_id"], ["wallet.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )

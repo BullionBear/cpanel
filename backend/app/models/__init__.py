@@ -167,11 +167,12 @@ except ImportError:
         __tablename__ = "balance_snapshot"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
-        sid = Column(String(64), nullable=False, index=True)
+        sid = Column(Integer, nullable=False, index=True)
         wallet_id = Column(Integer, ForeignKey("wallet.id", ondelete="CASCADE"), nullable=False, index=True)
         token = Column(String(32), nullable=False, index=True)
         amount = Column(Numeric(36, 18), nullable=False)
         ref_price = Column(Numeric(36, 18), nullable=False)
+        updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 __all__ = ["User", "Access", "API", "APIArchived", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "WalletArchived", "Account", "BalanceSnapshot"]
 
