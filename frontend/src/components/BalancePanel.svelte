@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { getAPIKeys, getBalances, type APIKey, type BalanceResponse } from '$lib/api';
+	import { getWalletsV2, getBalancesV2, type BalanceResponse } from '$lib/api';
 
 	let balances: BalanceResponse[] = [];
 	let loading = true;
@@ -12,21 +12,20 @@
 			loading = true;
 			error = null;
 
-			// First get all API keys
-			const apiKeys = await getAPIKeys();
-			
-			if (apiKeys.length === 0) {
+			// Get all wallets (v2)
+			const wallets = await getWalletsV2();
+			if (wallets.length === 0) {
 				balances = [];
 				loading = false;
 				return;
 			}
 
-			// Get balances for all API keys
-			const apiIds = apiKeys.map(k => k.id);
-			balances = await getBalances(apiIds);
-			
+			// Get balances for all wallet IDs (v2)
+			const walletIds = wallets.map((w) => w.id);
+			balances = await getBalancesV2(walletIds);
+
 			// Expand all accounts by default
-			expandedAccounts = new Set(balances.map(b => b.api_id));
+			expandedAccounts = new Set(balances.map((b) => b.api_id));
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load balances';
 		} finally {
@@ -91,7 +90,7 @@
 		{:else if error}
 			<div class="error">{error}</div>
 		{:else if balances.length === 0}
-			<div class="empty">No API keys configured</div>
+			<div class="empty">No wallets configured. Add wallets in Account page.</div>
 		{:else}
 			<div class="balances-list">
 				{#each balances as account}

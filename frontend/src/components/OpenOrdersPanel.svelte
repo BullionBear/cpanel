@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { getOpenOrders, getSymbols, getAPIKeys, cancelOrder, type OpenOrder, type SymbolInfo, type APIKey } from '$lib/api';
+	import { getOpenOrders, getSymbols, getApiKeysV2, cancelOrder, type OpenOrder, type SymbolInfo, type APIKeyV2 } from '$lib/api';
 
 	let orders: OpenOrder[] = [];
 	let symbols: SymbolInfo[] = [];
-	let accounts: APIKey[] = [];
+	let accounts: APIKeyV2[] = [];
 	let loading = true;
 	let error: string | null = null;
 	let cancelingOrderId: string | null = null;
@@ -17,7 +17,7 @@
 			const [ordersData, symbolsData, accountsData] = await Promise.all([
 				getOpenOrders(),
 				getSymbols(200),
-				getAPIKeys()
+				getApiKeysV2()
 			]);
 
 			orders = ordersData;

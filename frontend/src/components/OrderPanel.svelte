@@ -1,9 +1,17 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { getAPIKeys, getSymbols, createOrder, type APIKey, type SymbolInfo
+	import {
+		getAccountsV2,
+		getApiKeysV2,
+		getSymbols,
+		createOrder,
+		type AccountV2,
+		type APIKeyV2,
+		type SymbolInfo
 	} from '$lib/api';
 
-	let accounts: APIKey[] = [];
+	let accounts: AccountV2[] = [];
+	let apiKeys: APIKeyV2[] = [];
 	let symbols: SymbolInfo[] = [];
 	let filteredSymbols: SymbolInfo[] = [];
 	let loading = true;
@@ -11,7 +19,7 @@
 	let error: string | null = null;
 	let success: string | null = null;
 
-	// Form fields
+	// Form fields: selectedAccountId is account id (from GET v2/account/acct)
 	let selectedAccountId: number | null = null;
 	let selectedSymbolId: number | null = null;
 	let orderType: 'LIMIT' | 'MARKET' = 'LIMIT';
@@ -23,12 +31,14 @@
 			loading = true;
 			error = null;
 
-			const [accountsData, symbolsData] = await Promise.all([
-				getAPIKeys(),
+			const [accountsData, apiKeysData, symbolsData] = await Promise.all([
+				getAccountsV2(),
+				getApiKeysV2(),
 				getSymbols(200)
 			]);
 
 			accounts = accountsData;
+			apiKeys = apiKeysData;
 			symbols = symbolsData;
 
 			// Set default account if available
@@ -43,25 +53,33 @@
 		}
 	}
 
+	// Get API keys for an account (match by exchange + uid)
+	function getApisForAccount(acct: AccountV2): APIKeyV2[] {
+		return apiKeys.filter(
+			(api) =>
+				api.exchange === acct.exchange && Number(api.uid) === Number(acct.uid)
+		);
+	}
+
 	function updateFilteredSymbols() {
 		if (!selectedAccountId) {
 			filteredSymbols = [];
 			return;
 		}
 
-		const selectedAccount = accounts.find(a => a.id === selectedAccountId);
+		const selectedAccount = accounts.find((a) => a.id === selectedAccountId);
 		if (!selectedAccount) {
 			filteredSymbols = [];
 			return;
 		}
 
 		// Filter symbols by exchange
-		filteredSymbols = symbols.filter(s => 
-			s.exchange.slug.toUpperCase() === selectedAccount.exchange.toUpperCase()
+		filteredSymbols = symbols.filter(
+			(s) => s.exchange.slug.toUpperCase() === selectedAccount.exchange.toUpperCase()
 		);
 
 		// Reset symbol selection if not in filtered list
-		if (selectedSymbolId && !filteredSymbols.find(s => s.id === selectedSymbolId)) {
+		if (selectedSymbolId && !filteredSymbols.find((s) => s.id === selectedSymbolId)) {
 			selectedSymbolId = filteredSymbols.length > 0 ? filteredSymbols[0].id : null;
 		} else if (!selectedSymbolId && filteredSymbols.length > 0) {
 			selectedSymbolId = filteredSymbols[0].id;
@@ -109,6 +127,19 @@
 			return;
 		}
 
+		const selectedAccount = accounts.find((a) => a.id === selectedAccountId);
+		if (!selectedAccount) {
+			error = 'Account not found';
+			return;
+		}
+		const acctApis = getApisForAccount(selectedAccount);
+		if (acctApis.length === 0) {
+			error = 'No API key for this account. Add an API key in Account page.';
+			return;
+		}
+		// v2/order expects account_id = API key ID
+		const apiKeyId = acctApis[0].id;
+
 		try {
 			submitting = true;
 			error = null;
@@ -116,7 +147,7 @@
 
 			const orderData = {
 				symbol_id: selectedSymbolId,
-				account_id: selectedAccountId,
+				account_id: apiKeyId,
 				type: orderType,
 				qty: qty,
 				side: side,
@@ -125,7 +156,7 @@
 
 			const result = await createOrder(orderData);
 			success = `Order ${result.order_id} created (${side} ${result.quantity} @ ${result.price === '-1' ? 'MKT' : result.price})`;
-			
+
 			// Clear form after success
 			price = '';
 			qty = '';

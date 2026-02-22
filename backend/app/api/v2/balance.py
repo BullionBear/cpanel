@@ -140,7 +140,7 @@ async def get_balances(
             continue
         apis = api_repo.get_by_acct(wallet.acct_id)
         exchange = db.query(RefExchange).filter(RefExchange.id == apis[0].exch_id).first() if apis else None
-        exchange_name = exchange.name if exchange else ""
+        exchange_name = (exchange.slug or exchange.name or "").upper() if exchange else ""
         for api in apis:
             if exchange_name:
                 api_exchange_uid_list.append((api, exchange_name, account.uid))
@@ -199,7 +199,7 @@ async def get_balance_by_wallet_id(
     apis_sorted = sorted(apis, key=lambda a: API_TYPE_PRIORITY.get(a.api_type, 999))
     api = apis_sorted[0]
     exchange = db.query(RefExchange).filter(RefExchange.id == api.exch_id).first()
-    exchange_name = exchange.name if exchange else ""
+    exchange_name = (exchange.slug or exchange.name or "").upper() if exchange else ""
 
     api_service = ApiService()
     try:
