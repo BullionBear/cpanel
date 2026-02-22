@@ -16,6 +16,7 @@ from .user_preference import UserPreference  # noqa: E402
 from .ref_wallet import RefWallet  # noqa: E402
 from .wallet import Wallet, WalletArchived  # noqa: E402
 from .account import Account  # noqa: E402
+from .balance_snapshot import BalanceSnapshot  # noqa: E402
 
-__all__ = ["Base", "User", "Access", "API", "APIArchived", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "WalletArchived", "Account"]
+__all__ = ["Base", "User", "Access", "API", "APIArchived", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "WalletArchived", "Account", "BalanceSnapshot"]
 

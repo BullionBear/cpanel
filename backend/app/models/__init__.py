@@ -18,9 +18,10 @@ try:
     from ref_wallet import RefWallet  # noqa: E402
     from wallet import Wallet, WalletArchived  # noqa: E402
     from account import Account  # noqa: E402
+    from balance_snapshot import BalanceSnapshot  # noqa: E402
 except ImportError:
     # Fallback: define User model here if migration models not available
-    from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, String
+    from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String
     from sqlalchemy.sql import func
     from app.db.session import Base
 
@@ -162,5 +163,15 @@ except ImportError:
         name = Column(String, nullable=False)
         parent_uid = Column(BigInteger, nullable=True, index=True)
 
-__all__ = ["User", "Access", "API", "APIArchived", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "WalletArchived", "Account"]
+    class BalanceSnapshot(Base):  # type: ignore
+        __tablename__ = "balance_snapshot"
+
+        id = Column(Integer, primary_key=True, autoincrement=True)
+        sid = Column(String(64), nullable=False, index=True)
+        wallet_id = Column(Integer, ForeignKey("wallet.id", ondelete="CASCADE"), nullable=False, index=True)
+        token = Column(String(32), nullable=False, index=True)
+        amount = Column(Numeric(36, 18), nullable=False)
+        ref_price = Column(Numeric(36, 18), nullable=False)
+
+__all__ = ["User", "Access", "API", "APIArchived", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "WalletArchived", "Account", "BalanceSnapshot"]
 
