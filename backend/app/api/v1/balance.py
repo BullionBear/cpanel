@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from app.db.session import get_db
 from app.models import User
 from app.middleware.auth import get_current_user
-from app.repositories.api_repository import APIRepository
+from app.repositories.api_repository import APIArchivedRepository
 from app.services.api_service import ApiService, NetworkError, ExchangeError
 
 router = APIRouter(prefix="/balance", tags=["balance"])
@@ -153,7 +153,7 @@ async def get_balances(
         )
     
     # Get API repository and service
-    api_repo = APIRepository(db)
+    api_repo = APIArchivedRepository(db)
     api_service = ApiService()
     
     # First, collect all valid APIs
@@ -208,7 +208,7 @@ async def get_balance_by_api_id(
     Verifies that the API key belongs to the current user before fetching balance.
     """
     # Get API from database and verify ownership
-    api_repo = APIRepository(db)
+    api_repo = APIArchivedRepository(db)
     api = api_repo.get_by_user_and_id(current_user.id, api_id)
     
     if not api:

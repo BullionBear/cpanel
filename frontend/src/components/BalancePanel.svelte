@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { getWallets, getBalanceByWalletId, type Wallet, type BalanceResponse } from '$lib/api';
+	import { getWalletsV2, getBalancesV2, type BalanceResponse } from '$lib/api';
 
 	interface WalletBalance {
 		wallet: Wallet;
@@ -17,20 +17,20 @@
 			loading = true;
 			error = null;
 
-			const wallets = await getWallets();
+			// Get all wallets (v2)
+			const wallets = await getWalletsV2();
 			if (wallets.length === 0) {
-				items = [];
+				balances = [];
 				loading = false;
 				return;
 			}
-			// Fetch balance per wallet so we can show wallet name in header
-			const results = await Promise.allSettled(
-				wallets.map(async (w) => ({ wallet: w, balance: await getBalanceByWalletId(w.id) }))
-			);
-			items = results
-				.filter((r): r is PromiseFulfilledResult<{ wallet: Wallet; balance: BalanceResponse }> => r.status === 'fulfilled')
-				.map((r) => r.value);
-			expandedWalletIds = new Set(items.map((i) => i.wallet.id));
+
+			// Get balances for all wallet IDs (v2)
+			const walletIds = wallets.map((w) => w.id);
+			balances = await getBalancesV2(walletIds);
+
+			// Expand all accounts by default
+			expandedAccounts = new Set(balances.map((b) => b.api_id));
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load balances';
 		} finally {
@@ -94,8 +94,8 @@
 			<div class="loading">Loading balances...</div>
 		{:else if error}
 			<div class="error">{error}</div>
-		{:else if items.length === 0}
-			<div class="empty">No wallets configured. Add wallets on the Wallets page.</div>
+		{:else if balances.length === 0}
+			<div class="empty">No wallets configured. Add wallets in Account page.</div>
 		{:else}
 			<div class="balances-list">
 				{#each items as { wallet, balance } (wallet.id)}

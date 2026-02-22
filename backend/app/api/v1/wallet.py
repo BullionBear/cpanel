@@ -7,8 +7,8 @@ from pydantic import BaseModel
 from app.db.session import get_db
 from app.models import User
 from app.middleware.auth import get_current_user
-from app.repositories.wallet_repository import WalletRepository
-from app.repositories.api_repository import APIRepository
+from app.repositories.wallet_repository import WalletArchivedRepository
+from app.repositories.api_repository import APIArchivedRepository
 
 router = APIRouter(prefix="/wallet", tags=["wallets"])
 
@@ -61,14 +61,14 @@ async def create_wallet(
     Create a new wallet with name, API key ID, and wallet type ID.
     The API key must belong to the current user.
     """
-    api_repo = APIRepository(db)
+    api_repo = APIArchivedRepository(db)
     api = api_repo.get_by_user_and_id(current_user.id, body.api_key_id)
     if not api:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"API key with ID {body.api_key_id} not found or does not belong to you",
         )
-    wallet_repo = WalletRepository(db)
+    wallet_repo = WalletArchivedRepository(db)
     ref_wallet = wallet_repo.get_ref_wallet(body.wallet_type_id)
     if not ref_wallet:
         raise HTTPException(
@@ -104,7 +104,7 @@ async def get_wallet_types(
     List all wallet types (ref_wallet) for use in create-wallet forms.
     Declared before /{wallet_id} so GET /wallet/types is not matched as wallet_id='types'.
     """
-    wallet_repo = WalletRepository(db)
+    wallet_repo = WalletArchivedRepository(db)
     ref_wallets = wallet_repo.query_ref_wallets()
     return [
         WalletTypeResponse(id=w.id, name=w.name, slug=w.slug)
@@ -121,8 +121,8 @@ async def get_wallets(
     Get all wallets for the current user (wallets linked to the user's API keys).
     Only returns wallets whose exchange allows that wallet type (e.g. Bybit SPOT is excluded).
     """
-    wallet_repo = WalletRepository(db)
-    api_repo = APIRepository(db)
+    wallet_repo = WalletArchivedRepository(db)
+    api_repo = APIArchivedRepository(db)
     wallets = wallet_repo.query_wallets_by_user_id(current_user.id)
     result = []
     for w in wallets:
@@ -156,7 +156,7 @@ async def delete_wallet(
     Delete a wallet by ID.
     The wallet must be linked to an API key owned by the current user.
     """
-    wallet_repo = WalletRepository(db)
+    wallet_repo = WalletArchivedRepository(db)
     deleted = wallet_repo.delete_wallet_by_user_and_id(current_user.id, wallet_id)
     if not deleted:
         raise HTTPException(

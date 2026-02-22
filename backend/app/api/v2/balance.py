@@ -1,13 +1,14 @@
-"""Balance router (v2): balance by wallet id. Resolves wallet -> API -> fetch balance as v1."""
-from typing import List, Dict, Any, Optional
+"""Balance router (v2): balance by wallet id. Resolves wallet -> account -> API -> fetch balance."""
+from typing import List, Dict, Any, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.db.session import get_db
-from app.models import User
+from app.models import User, RefExchange
 from app.middleware.auth import get_current_user
 from app.repositories.api_repository import APIRepository
+from app.repositories.account_repository import AccountRepository
 from app.repositories.wallet_repository import WalletRepository
 from app.services.api_service import ApiService, NetworkError, ExchangeError
 
@@ -17,22 +18,24 @@ router = APIRouter(prefix="/balance", tags=["balance-v2"])
 API_TYPE_PRIORITY = {"HMAC": 0, "ED25519": 1, "RSA": 2}
 
 
-def _select_best_api_per_uid(apis: List[Any]) -> List[Any]:
+def _select_best_api_per_uid(
+    api_exchange_uid_list: List[Tuple[Any, str, int]],
+) -> List[Tuple[Any, str]]:
     """
-    Select the best API for each unique UID based on api_type priority.
-    Priority: HMAC > ED25519 > RSA
+    Select the best API for each unique (exchange, uid) based on api_type priority.
+    Input: list of (api, exchange_name, uid). Output: list of (api, exchange_name).
     """
-    uid_to_apis: Dict[tuple, List[Any]] = {}
-    for api in apis:
-        key = (api.exchange, api.uid)
-        if key not in uid_to_apis:
-            uid_to_apis[key] = []
-        uid_to_apis[key].append(api)
-    best_apis = []
-    for key, api_list in uid_to_apis.items():
-        api_list.sort(key=lambda a: API_TYPE_PRIORITY.get(a.api_type, 999))
-        best_apis.append(api_list[0])
-    return best_apis
+    key_to_apis: Dict[tuple, List[Tuple[Any, str]]] = {}
+    for api, exchange_name, uid in api_exchange_uid_list:
+        key = (exchange_name, uid)
+        if key not in key_to_apis:
+            key_to_apis[key] = []
+        key_to_apis[key].append((api, exchange_name))
+    best = []
+    for api_list in key_to_apis.values():
+        api_list.sort(key=lambda t: API_TYPE_PRIORITY.get(t[0].api_type, 999))
+        best.append(api_list[0])
+    return best
 
 
 class TokenBalance(BaseModel):
@@ -57,14 +60,14 @@ class BalanceResponse(BaseModel):
     wallets: List[WalletBalance]
 
 
-def _get_balance_for_api(api: Any, api_service: ApiService) -> BalanceResponse:
-    """Get balance for a single API and convert to response model (same as v1)."""
+def _get_balance_for_api(api: Any, exchange_name: str, api_service: ApiService) -> BalanceResponse:
+    """Get balance for a single API and convert to response model."""
     balance_data = api_service.get_balance(
-        exchange=api.exchange,  # type: ignore
+        exchange=exchange_name,
         api_key=api.api_key,
         api_secret=api.api_secret,
         passphrase=api.passphrase,
-        api_type=api.api_type,  # type: ignore
+        api_type=api.api_type,
     )
     wallets = [
         WalletBalance(
@@ -84,7 +87,7 @@ def _get_balance_for_api(api: Any, api_service: ApiService) -> BalanceResponse:
     return BalanceResponse(
         api_id=api.id,
         name=api.name,
-        exchange=api.exchange,
+        exchange=exchange_name,
         wallets=wallets,
     )
 
@@ -123,23 +126,30 @@ async def get_balances(
 
     wallet_repo = WalletRepository(db)
     api_repo = APIRepository(db)
+    account_repo = AccountRepository(db)
     api_service = ApiService()
 
-    # Resolve wallets to APIs (only wallets owned by user, with valid api_id)
-    valid_apis = []
+    # Resolve wallets -> account -> APIs (only wallets owned by user)
+    api_exchange_uid_list: List[Tuple[Any, str, int]] = []
     for wallet_id in wallet_ids:
         wallet = wallet_repo.get_wallet_by_user_and_id(current_user.id, wallet_id)
-        if not wallet or wallet.api_id is None:
+        if not wallet:
             continue
-        api = api_repo.get(wallet.api_id)
-        if api:
-            valid_apis.append(api)
+        account = account_repo.get(wallet.acct_id)
+        if not account or account.user_id != current_user.id:
+            continue
+        apis = api_repo.get_by_acct(wallet.acct_id)
+        exchange = db.query(RefExchange).filter(RefExchange.id == apis[0].exch_id).first() if apis else None
+        exchange_name = (exchange.slug or exchange.name or "").upper() if exchange else ""
+        for api in apis:
+            if exchange_name:
+                api_exchange_uid_list.append((api, exchange_name, account.uid))
 
-    deduplicated_apis = _select_best_api_per_uid(valid_apis)
+    deduplicated = _select_best_api_per_uid(api_exchange_uid_list)
     results = []
-    for api in deduplicated_apis:
+    for api, exchange_name in deduplicated:
         try:
-            results.append(_get_balance_for_api(api, api_service))
+            results.append(_get_balance_for_api(api, exchange_name, api_service))
         except NetworkError:
             continue
         except ExchangeError:
@@ -166,27 +176,34 @@ async def get_balance_by_wallet_id(
     """
     wallet_repo = WalletRepository(db)
     api_repo = APIRepository(db)
+    account_repo = AccountRepository(db)
     wallet = wallet_repo.get_wallet_by_user_and_id(current_user.id, wallet_id)
     if not wallet:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Wallet with ID {wallet_id} not found or does not belong to you",
         )
-    if wallet.api_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Wallet has no associated API key",
-        )
-    api = api_repo.get(wallet.api_id)
-    if not api:
+    account = account_repo.get(wallet.acct_id)
+    if not account or account.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="API key for this wallet not found",
+            detail="Account for this wallet not found or does not belong to you",
         )
+    apis = api_repo.get_by_acct(wallet.acct_id)
+    if not apis:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No API key found for this wallet's account",
+        )
+    # Pick best API by type priority
+    apis_sorted = sorted(apis, key=lambda a: API_TYPE_PRIORITY.get(a.api_type, 999))
+    api = apis_sorted[0]
+    exchange = db.query(RefExchange).filter(RefExchange.id == api.exch_id).first()
+    exchange_name = (exchange.slug or exchange.name or "").upper() if exchange else ""
 
     api_service = ApiService()
     try:
-        return _get_balance_for_api(api, api_service)
+        return _get_balance_for_api(api, exchange_name, api_service)
     except NetworkError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -342,7 +342,7 @@ export async function createOrder(data: OrderCreate): Promise<OrderResponse> {
 	}
 
 	try {
-		const response = await fetch(`${API_V1}/order`, {
+		const response = await fetch(`${API_V2}/order`, {
 			method: 'POST',
 			headers: {
 				'Authorization': `Bearer ${token}`,
@@ -488,14 +488,19 @@ export interface OpenOrder {
 	updated_at: number;
 }
 
-export async function getOpenOrders(): Promise<OpenOrder[]> {
+export async function getOpenOrders(accountId?: number, symbolId?: number): Promise<OpenOrder[]> {
 	const token = localStorage.getItem('access_token');
 	if (!token) {
 		throw new Error('Not authenticated');
 	}
 
+	const params = new URLSearchParams();
+	if (accountId != null) params.set('account_id', String(accountId));
+	if (symbolId != null) params.set('symbol_id', String(symbolId));
+	const q = params.toString() ? `?${params.toString()}` : '';
+
 	try {
-		const response = await fetch(`${API_V1}/order/open`, {
+		const response = await fetch(`${API_V2}/order/open${q}`, {
 			headers: {
 				'Authorization': `Bearer ${token}`
 			}
@@ -531,7 +536,7 @@ export async function cancelOrder(data: OrderCancel): Promise<OrderResponse> {
 	}
 
 	try {
-		const response = await fetch(`${API_V1}/order`, {
+		const response = await fetch(`${API_V2}/order`, {
 			method: 'DELETE',
 			headers: {
 				'Authorization': `Bearer ${token}`,
@@ -735,4 +740,220 @@ export async function deleteWallet(walletId: number): Promise<void> {
 	}
 	const err = await response.json();
 	throw new Error(err.detail || 'Failed to delete wallet');
+}
+
+// --- Account v2 (dashboard: accounts, API keys, wallets, balance) ---
+
+export interface AccountV2 {
+	id: number;
+	uid: number;
+	exch_id: number;
+	exchange: string;
+	name: string;
+	parent_uid: number;
+}
+
+export interface APIKeyV2 {
+	id: number;
+	user_id: number;
+	exchange: string;
+	uid: number;
+	name: string;
+	api_type: string;
+	api_key: string;
+	api_secret: string;
+	passphrase: string;
+	parent_uid: number;
+	created_at: string;
+}
+
+export interface WalletV2 {
+	id: number;
+	name: string;
+	category_id: number;
+	acct_id: number;
+	user_id: number;
+	is_active: boolean;
+}
+
+export async function getAccountsV2(exchId?: number): Promise<AccountV2[]> {
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const q = exchId != null ? `?exch_id=${exchId}` : '';
+	const res = await fetch(`${API_V2}/account/acct${q}`, {
+		headers: { Authorization: `Bearer ${token}` }
+	});
+	if (res.ok) return await res.json();
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await res.json();
+	throw new Error(err.detail || 'Failed to fetch accounts');
+}
+
+export async function getApiKeysV2(exchId?: number): Promise<APIKeyV2[]> {
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const q = exchId != null ? `?exch_id=${exchId}` : '';
+	const res = await fetch(`${API_V2}/account/apikey${q}`, {
+		headers: { Authorization: `Bearer ${token}` }
+	});
+	if (res.ok) return await res.json();
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await res.json();
+	throw new Error(err.detail || 'Failed to fetch API keys');
+}
+
+export async function getWalletsV2(acctId?: number): Promise<WalletV2[]> {
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const q = acctId != null ? `?acct_id=${acctId}` : '';
+	const res = await fetch(`${API_V2}/account/wallet${q}`, {
+		headers: { Authorization: `Bearer ${token}` }
+	});
+	if (res.ok) return await res.json();
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await res.json();
+	throw new Error(err.detail || 'Failed to fetch wallets');
+}
+
+export async function getBalancesV2(walletIds: number[]): Promise<BalanceResponse[]> {
+	if (walletIds.length === 0) return [];
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const idParam = walletIds.join(',');
+	const res = await fetch(`${API_V2}/balance?id=${idParam}`, {
+		headers: { Authorization: `Bearer ${token}` }
+	});
+	if (res.ok) return await res.json();
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	if (res.status === 404) return [];
+	const err = await res.json();
+	throw new Error(err.detail || 'Failed to fetch balances');
+}
+
+/** Unique exchanges from symbols; fallback to known list if symbols unavailable. */
+export interface ExchangeOption {
+	id: number;
+	name: string;
+}
+
+export async function getExchanges(): Promise<ExchangeOption[]> {
+	try {
+		const symbols = await getSymbols(500);
+		const byId = new Map<number, string>();
+		for (const s of symbols) {
+			if (s.exchange?.id != null && s.exchange?.name) {
+				byId.set(s.exchange.id, s.exchange.name);
+			}
+		}
+		return [...byId.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+	} catch {
+		return [
+			{ id: 1, name: 'Binance' },
+			{ id: 2, name: 'Bybit' }
+		];
+	}
+}
+
+export interface APIKeyCreateV2 {
+	exch_id: number;
+	api_type?: string;
+	api_key: string;
+	api_secret: string;
+	passphrase?: string;
+	parent_uid?: number;
+}
+
+export async function registerApiKeyV2(data: APIKeyCreateV2): Promise<APIKeyV2> {
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const res = await fetch(`${API_V2}/account/apikey`, {
+		method: 'POST',
+		headers: {
+			Authorization: `Bearer ${token}`,
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify({
+			exch_id: data.exch_id,
+			api_type: data.api_type ?? 'HMAC',
+			api_key: data.api_key,
+			api_secret: data.api_secret,
+			passphrase: data.passphrase || undefined,
+			parent_uid: data.parent_uid ?? undefined
+		})
+	});
+	if (res.ok) return await res.json();
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await res.json();
+	throw new Error(err.detail || 'Failed to register API key');
+}
+
+export async function renameAccountV2(id: number, name: string): Promise<AccountV2> {
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const res = await fetch(`${API_V2}/account/acct/rename`, {
+		method: 'PUT',
+		headers: {
+			Authorization: `Bearer ${token}`,
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify({ id, name })
+	});
+	if (res.ok) return await res.json();
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await res.json();
+	throw new Error(err.detail || 'Failed to rename account');
+}
+
+export async function createWalletV2(acctId: number, categoryId: number, name?: string): Promise<WalletV2> {
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const res = await fetch(`${API_V2}/account/wallet`, {
+		method: 'POST',
+		headers: {
+			Authorization: `Bearer ${token}`,
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify({ acct_id: acctId, category_id: categoryId, name: name || undefined })
+	});
+	if (res.ok) return await res.json();
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await res.json();
+	throw new Error(err.detail || 'Failed to create wallet');
+}
+
+export async function deleteApiKeyV2(apiId: number): Promise<void> {
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const res = await fetch(`${API_V2}/account/apikey/${apiId}`, {
+		method: 'DELETE',
+		headers: { Authorization: `Bearer ${token}` }
+	});
+	if (res.ok || res.status === 204) return;
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await res.json();
+	throw new Error(err.detail || 'Failed to delete API key');
 }

@@ -9,18 +9,18 @@ sys.path.insert(0, str(migration_models_path))
 try:
     from user import User  # noqa: E402
     from access import Access  # noqa: E402
-    from api import API  # noqa: E402
+    from api import API, APIArchived  # noqa: E402
     from ref_exchange import RefExchange  # noqa: E402
     from ref_product import RefProduct  # noqa: E402
     from ref_token import RefToken  # noqa: E402
     from ref_symbol import RefSymbol  # noqa: E402
     from user_preference import UserPreference  # noqa: E402
     from ref_wallet import RefWallet  # noqa: E402
-    from wallet import Wallet  # noqa: E402
+    from wallet import Wallet, WalletArchived  # noqa: E402
     from account import Account  # noqa: E402
 except ImportError:
     # Fallback: define User model here if migration models not available
-    from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
+    from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, String
     from sqlalchemy.sql import func
     from app.db.session import Base
 
@@ -44,7 +44,7 @@ except ImportError:
         created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
         expired_at = Column(DateTime(timezone=True), nullable=False, index=True)
 
-    class API(Base):  # type: ignore
+    class APIArchived(Base):  # type: ignore
         __tablename__ = "api_archived_20260221"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
@@ -57,6 +57,21 @@ except ImportError:
         api_secret = Column(String, nullable=False)
         passphrase = Column(String, nullable=True)
         master_uid = Column(String, nullable=True)  # Master account UID (for sub-accounts)
+        created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+        updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    class API(Base):  # type: ignore
+        __tablename__ = "api"
+
+        id = Column(Integer, primary_key=True, autoincrement=True)
+        acct_id = Column(Integer, ForeignKey("account.id", ondelete="CASCADE"), nullable=False, index=True)
+        user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+        exch_id = Column(Integer, ForeignKey("ref_exchange.id", ondelete="CASCADE"), nullable=False, index=True)
+        name = Column(String, nullable=False)
+        api_type = Column(String, nullable=False)
+        api_key = Column(String, nullable=False)
+        api_secret = Column(String, nullable=False)
+        passphrase = Column(String, nullable=True)
         created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
         updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -118,7 +133,7 @@ except ImportError:
         name = Column(String, nullable=False)
         slug = Column(String, unique=True, nullable=False, index=True)
 
-    class Wallet(Base):  # type: ignore
+    class WalletArchived(Base):  # type: ignore
         __tablename__ = "wallet_archived_20240221"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
@@ -127,14 +142,25 @@ except ImportError:
         api_id = Column(Integer, ForeignKey("api_archived_20260221.id", ondelete="CASCADE"), nullable=True, index=True)
         is_active = Column(Boolean, default=True, nullable=False)
 
+    class Wallet(Base):  # type: ignore
+        __tablename__ = "wallet"
+
+        id = Column(Integer, primary_key=True, autoincrement=True)
+        category_id = Column(Integer, ForeignKey("ref_wallet.id", ondelete="CASCADE"), nullable=False, index=True)
+        user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+        acct_id = Column(Integer, ForeignKey("account.id", ondelete="CASCADE"), nullable=False, index=True)
+        name = Column(String, nullable=False)
+        is_active = Column(Boolean, default=True, nullable=False)
+
     class Account(Base):  # type: ignore
         __tablename__ = "account"
 
         id = Column(Integer, primary_key=True, autoincrement=True)
-        uid = Column(String, nullable=False, index=True)
+        uid = Column(BigInteger, nullable=False, index=True)
         exch_id = Column(Integer, ForeignKey("ref_exchange.id", ondelete="CASCADE"), nullable=False, index=True)
+        user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
         name = Column(String, nullable=False)
-        parent_uid = Column(String, nullable=True, index=True)
+        parent_uid = Column(BigInteger, nullable=True, index=True)
 
-__all__ = ["User", "Access", "API", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "Account"]
+__all__ = ["User", "Access", "API", "APIArchived", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "WalletArchived", "Account"]
 
