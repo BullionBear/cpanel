@@ -108,7 +108,6 @@
 	{#if !loading && !error && apiKeys.length === 0}
 		<div class="empty-hint">
 			<p>Register an API key first to create wallets.</p>
-			<a href="/apikeys" class="link">Go to API Keys</a>
 		</div>
 	{/if}
 
