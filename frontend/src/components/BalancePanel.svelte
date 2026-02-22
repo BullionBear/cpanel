@@ -2,10 +2,15 @@
 	import { onMount } from 'svelte';
 	import { getWalletsV2, getBalancesV2, type BalanceResponse } from '$lib/api';
 
-	let balances: BalanceResponse[] = [];
+	interface WalletBalance {
+		wallet: Wallet;
+		balance: BalanceResponse;
+	}
+
+	let items: WalletBalance[] = [];
 	let loading = true;
 	let error: string | null = null;
-	let expandedAccounts: Set<number> = new Set();
+	let expandedWalletIds: Set<number> = new Set();
 
 	async function loadBalances() {
 		try {
@@ -33,13 +38,13 @@
 		}
 	}
 
-	function toggleAccount(apiId: number) {
-		if (expandedAccounts.has(apiId)) {
-			expandedAccounts.delete(apiId);
+	function toggleWallet(walletId: number) {
+		if (expandedWalletIds.has(walletId)) {
+			expandedWalletIds.delete(walletId);
 		} else {
-			expandedAccounts.add(apiId);
+			expandedWalletIds.add(walletId);
 		}
-		expandedAccounts = expandedAccounts; // trigger reactivity
+		expandedWalletIds = expandedWalletIds; // trigger reactivity
 	}
 
 	function getExchangeColor(exchange: string): string {
@@ -93,17 +98,17 @@
 			<div class="empty">No wallets configured. Add wallets in Account page.</div>
 		{:else}
 			<div class="balances-list">
-				{#each balances as account}
+				{#each items as { wallet, balance } (wallet.id)}
 					<div class="account-section">
 						<button 
 							class="account-header" 
-							on:click={() => toggleAccount(account.api_id)}
-							aria-expanded={expandedAccounts.has(account.api_id)}
+							on:click={() => toggleWallet(wallet.id)}
+							aria-expanded={expandedWalletIds.has(wallet.id)}
 						>
 							<div class="account-info">
 								<svg 
 									class="chevron" 
-									class:expanded={expandedAccounts.has(account.api_id)}
+									class:expanded={expandedWalletIds.has(wallet.id)}
 									width="16" 
 									height="16" 
 									viewBox="0 0 24 24" 
@@ -111,20 +116,20 @@
 								>
 									<path d="M9 18L15 12L9 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 								</svg>
-								<span class="account-name">{account.name}</span>
+								<span class="account-name">{wallet.name}</span>
 							</div>
-							<span class="exchange-badge" style="background-color: {getExchangeColor(account.exchange)};">
-								{account.exchange}
+							<span class="exchange-badge" style="background-color: {getExchangeColor(balance.exchange)};">
+								{balance.exchange}
 							</span>
 						</button>
 						
-						{#if expandedAccounts.has(account.api_id)}
+						{#if expandedWalletIds.has(wallet.id)}
 							<div class="account-content">
-								{#each account.wallets as wallet}
+								{#each balance.wallets as w}
 									<div class="wallet-section">
-										<div class="wallet-name">{wallet.wallet}</div>
+										<div class="wallet-name">{w.wallet}</div>
 										<div class="token-list">
-											{#each wallet.balance as token}
+											{#each w.balance as token}
 												<div class="token-row">
 													<span class="token-name">{token.token}</span>
 													<div class="token-amounts">
