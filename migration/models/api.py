@@ -29,3 +29,23 @@ class APIArchived(Base):
     def __repr__(self):
         return f"<APIArchived(id={self.id}, user_id={self.user_id}, exchange='{self.exchange}', uid='{self.uid}', name='{self.name}', master_uid={self.master_uid})>"
 
+
+class API(Base):
+    """API keys table (links to account)."""
+
+    __tablename__ = "api"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    acct_id = Column(Integer, ForeignKey("account.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    exch_id = Column(Integer, ForeignKey("ref_exchange.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    api_type = Column(String, nullable=False)  # e.g. 'HMAC', 'RSA'
+    api_key = Column(String, nullable=False)
+    api_secret = Column(String, nullable=False)
+    passphrase = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    def __repr__(self):
+        return f"<API(id={self.id}, acct_id={self.acct_id}, user_id={self.user_id}, exch_id={self.exch_id}, name='{self.name}')>"

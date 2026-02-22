@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from app.db.session import get_db
 from app.models import User
 from app.middleware.auth import get_current_user
-from app.repositories.api_repository import APIRepository
+from app.repositories.api_repository import APIArchivedRepository
 from app.services.api_service import ApiService, NetworkError, ExchangeError
 
 router = APIRouter(prefix="/apikey", tags=["api-keys"])
@@ -112,7 +112,7 @@ async def register_api_key(
         )
     
     # Create API repository
-    api_repo = APIRepository(db)
+    api_repo = APIArchivedRepository(db)
     
     # Use master_uid directly (it's now a string UID, not an integer ID)
     master_uid: Optional[str] = api_data.master_uid if api_data.master_uid else None
@@ -161,7 +161,7 @@ async def get_api_keys(
     
     Returns a list of all API keys registered by the user.
     """
-    api_repo = APIRepository(db)
+    api_repo = APIArchivedRepository(db)
     
     # Get all APIs for the current user
     apis = api_repo.query(user_id=current_user.id)
@@ -196,7 +196,7 @@ async def delete_api_key(
     
     Verifies that the API key belongs to the current user before deletion.
     """
-    api_repo = APIRepository(db)
+    api_repo = APIArchivedRepository(db)
     
     # Delete API - this method verifies ownership automatically
     deleted = api_repo.delete_by_user_and_id(current_user.id, api_id)

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.db.session import get_db
 from app.models import User
 from app.middleware.auth import get_current_user
-from app.repositories.api_repository import APIRepository
+from app.repositories.api_repository import APIArchivedRepository
 from app.repositories.symbol_repository import SymbolRepository
 from app.services.api_service import ApiService, NetworkError, ExchangeError
 
@@ -119,7 +119,7 @@ async def create_order(
         )
     
     # Get API key and verify ownership
-    api_repo = APIRepository(db)
+    api_repo = APIArchivedRepository(db)
     api = api_repo.get_by_user_and_id(current_user.id, order_data.account_id)
     
     if not api:
@@ -262,7 +262,7 @@ async def get_open_orders(
     If account_id is not provided, returns open orders for all API keys belonging to the current user.
     Optionally filtered by symbol_id.
     """
-    api_repo = APIRepository(db)
+    api_repo = APIArchivedRepository(db)
     api_service = ApiService()
     
     # If symbol_id is provided, get symbol info (we'll validate against each exchange)
@@ -368,7 +368,7 @@ async def cancel_order(
         )
     
     # Get API key and verify ownership
-    api_repo = APIRepository(db)
+    api_repo = APIArchivedRepository(db)
     api = api_repo.get_by_user_and_id(current_user.id, cancel_data.account_id)
     
     if not api:

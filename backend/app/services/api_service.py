@@ -9,7 +9,7 @@ import string
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from app.models import APIArchived
-from app.repositories.api_repository import APIRepository
+from app.repositories.api_repository import APIArchivedRepository
 from app.utils import trim_decimal_string
 
 logger = logging.getLogger(__name__)
@@ -294,7 +294,7 @@ class ApiService:
             case _:
                 raise ValueError(f"Invalid exchange: {exchange}")
     
-    def get_account_uid(self, exchange: EXCHANGES, api_key: str, api_secret: str, passphrase: Optional[str] = None, api_type: API_TYPES = 'HMAC') -> str:
+    def get_account_uid(self, exchange: EXCHANGES, api_key: str, api_secret: str, passphrase: Optional[str] = None, api_type: API_TYPES = 'HMAC') -> int:
         """
         Get account UID from the specified exchange.
         
@@ -306,7 +306,7 @@ class ApiService:
             api_type: API type ('HMAC', 'ED25519', or 'RSA')
             
         Returns:
-            Account UID as string
+            Account UID as int
             
         Raises:
             NetworkError: If there's a network or connection error
@@ -320,7 +320,7 @@ class ApiService:
             case _:
                 raise ValueError(f"Invalid exchange: {exchange}")
     
-    def get_binance_account_uid(self, api_key: str, api_secret: str, passphrase: Optional[str] = None, api_type: API_TYPES = 'HMAC') -> str:
+    def get_binance_account_uid(self, api_key: str, api_secret: str, passphrase: Optional[str] = None, api_type: API_TYPES = 'HMAC') -> int:
         """
         Get Binance account UID.
         
@@ -333,7 +333,7 @@ class ApiService:
             api_type: API type ('HMAC', 'ED25519', or 'RSA')
         
         Returns:
-            Account UID as string
+            Account UID as int
             
         Raises:
             NetworkError: If there's a network or connection error
@@ -345,7 +345,7 @@ class ApiService:
             account = client.get_account()
             
             if account and 'uid' in account:
-                return str(account['uid'])
+                return int(account['uid'])
             
             raise ExchangeError(
                 "Account UID not found in Binance response",
@@ -376,7 +376,7 @@ class ApiService:
                 original_error=e
             )
     
-    def get_bybit_account_uid(self, api_key: str, api_secret: str, passphrase: Optional[str] = None, api_type: API_TYPES = 'HMAC') -> str:
+    def get_bybit_account_uid(self, api_key: str, api_secret: str, passphrase: Optional[str] = None, api_type: API_TYPES = 'HMAC') -> int:
         """
         Get Bybit account UID.
         
@@ -389,7 +389,7 @@ class ApiService:
             api_type: API type ('HMAC' or 'RSA')
         
         Returns:
-            Account UID as string
+            Account UID as int
             
         Raises:
             NetworkError: If there's a network or connection error
@@ -421,7 +421,7 @@ class ApiService:
             user_id = result.get('userID')
             
             if user_id is not None:
-                return str(user_id)
+                return int(user_id)
             
             raise ExchangeError(
                 "userID not found in Bybit response",

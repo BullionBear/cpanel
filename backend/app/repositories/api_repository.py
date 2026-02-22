@@ -1,13 +1,13 @@
-"""API repository for database operations (APIArchived model)."""
+"""API and APIArchived repositories for database operations."""
 from typing import Optional, List
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
-from app.models import APIArchived
+from app.models import API, APIArchived
 
 
-class APIRepository:
-    """Repository for APIArchived model operations."""
+class APIArchivedRepository:
+    """Repository for APIArchived model operations (legacy api_archived_20260221 table)."""
 
     def __init__(self, db: Session):
         """Initialize repository with database session."""
@@ -229,3 +229,93 @@ class APIRepository:
             )
         ).first()
 
+
+class APIRepository:
+    """Repository for API model operations (api table)."""
+
+    def __init__(self, db: Session):
+        """Initialize repository with database session."""
+        self.db = db
+
+    def query(
+        self,
+        user_id: Optional[int] = None,
+        acct_id: Optional[int] = None,
+        exch_id: Optional[int] = None,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> List[API]:
+        """Query APIs with optional filters."""
+        query = self.db.query(API)
+        if user_id is not None:
+            query = query.filter(API.user_id == user_id)
+        if acct_id is not None:
+            query = query.filter(API.acct_id == acct_id)
+        if exch_id is not None:
+            query = query.filter(API.exch_id == exch_id)
+        return query.offset(skip).limit(limit).all()
+
+    def get(self, api_id: int) -> Optional[API]:
+        """Get API by ID."""
+        return self.db.query(API).filter(API.id == api_id).first()
+
+    def get_by_user_and_id(self, user_id: int, api_id: int) -> Optional[API]:
+        """Get API by ID if it belongs to the user."""
+        return self.db.query(API).filter(
+            and_(API.id == api_id, API.user_id == user_id)
+        ).first()
+
+    def get_by_acct(self, acct_id: int) -> List[API]:
+        """Get all APIs for an account."""
+        return self.db.query(API).filter(API.acct_id == acct_id).all()
+
+    def create(
+        self,
+        acct_id: int,
+        user_id: int,
+        exch_id: int,
+        name: str,
+        api_type: str,
+        api_key: str,
+        api_secret: str,
+        passphrase: Optional[str] = None,
+    ) -> API:
+        """Create a new API."""
+        api = API(
+            acct_id=acct_id,
+            user_id=user_id,
+            exch_id=exch_id,
+            name=name,
+            api_type=api_type,
+            api_key=api_key,
+            api_secret=api_secret,
+            passphrase=passphrase,
+        )
+        self.db.add(api)
+        self.db.commit()
+        self.db.refresh(api)
+        return api
+
+    def update(self, api: API) -> API:
+        """Update API (commit changes to database)."""
+        self.db.commit()
+        self.db.refresh(api)
+        return api
+
+    def delete(self, api_id: int) -> bool:
+        """Delete API by ID."""
+        api = self.get(api_id)
+        if api:
+            self.db.delete(api)
+            self.db.commit()
+            return True
+        return False
+
+    def delete_by_user_and_id(self, user_id: int, api_id: int) -> bool:
+        """Delete API by ID if it belongs to the user."""
+        api = self.get_by_user_and_id(user_id, api_id)
+        if api:
+            self.db.delete(api)
+            self.db.commit()
+            return True
+        return False

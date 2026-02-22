@@ -7,8 +7,8 @@ from pydantic import BaseModel
 from app.db.session import get_db
 from app.models import User
 from app.middleware.auth import get_current_user
-from app.repositories.api_repository import APIRepository
-from app.repositories.wallet_repository import WalletRepository
+from app.repositories.api_repository import APIArchivedRepository
+from app.repositories.wallet_repository import WalletArchivedRepository
 from app.services.api_service import ApiService, NetworkError, ExchangeError
 
 router = APIRouter(prefix="/balance", tags=["balance-v2"])
@@ -121,8 +121,8 @@ async def get_balances(
             detail="At least one valid wallet ID is required",
         )
 
-    wallet_repo = WalletRepository(db)
-    api_repo = APIRepository(db)
+    wallet_repo = WalletArchivedRepository(db)
+    api_repo = APIArchivedRepository(db)
     api_service = ApiService()
 
     # Resolve wallets to APIs (only wallets owned by user, with valid api_id)
@@ -164,8 +164,8 @@ async def get_balance_by_wallet_id(
 
     Verifies that the wallet belongs to the current user (via its API key) before fetching.
     """
-    wallet_repo = WalletRepository(db)
-    api_repo = APIRepository(db)
+    wallet_repo = WalletArchivedRepository(db)
+    api_repo = APIArchivedRepository(db)
     wallet = wallet_repo.get_wallet_by_user_and_id(current_user.id, wallet_id)
     if not wallet:
         raise HTTPException(

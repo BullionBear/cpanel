@@ -7,15 +7,15 @@ Base = declarative_base()
 # Import all models here so Alembic can detect them
 from .user import User  # noqa: E402
 from .access import Access  # noqa: E402
-from .api import APIArchived  # noqa: E402
+from .api import API, APIArchived  # noqa: E402
 from .ref_exchange import RefExchange  # noqa: E402
 from .ref_product import RefProduct  # noqa: E402
 from .ref_token import RefToken  # noqa: E402
 from .ref_symbol import RefSymbol  # noqa: E402
 from .user_preference import UserPreference  # noqa: E402
 from .ref_wallet import RefWallet  # noqa: E402
-from .wallet import WalletArchived  # noqa: E402
+from .wallet import Wallet, WalletArchived  # noqa: E402
 from .account import Account  # noqa: E402
 
-__all__ = ["Base", "User", "Access", "APIArchived", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "WalletArchived", "Account"]
+__all__ = ["Base", "User", "Access", "API", "APIArchived", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "WalletArchived", "Account"]
 
