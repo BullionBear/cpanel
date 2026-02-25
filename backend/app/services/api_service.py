@@ -2215,3 +2215,273 @@ class ApiService:
                 error_code=None,
                 original_error=e
             )
+
+    # ── My Trades (execution history) ─────────────────────────────────
+
+    PRODUCT_TO_BYBIT_CATEGORY = {
+        "SPOT": "spot",
+        "LINEAR": "linear",
+        "INVERSE": "inverse",
+        "OPTION": "option",
+    }
+
+    def get_mytrades(
+        self,
+        exchange: EXCHANGES,
+        api_key: str,
+        api_secret: str,
+        category: str,
+        start_ms: int,
+        end_ms: int,
+        symbol: Optional[str] = None,
+        limit: int = 200,
+        passphrase: Optional[str] = None,
+        api_type: API_TYPES = 'HMAC',
+    ) -> List[Dict[str, Any]]:
+        """
+        Get trade execution history from the specified exchange.
+
+        Args:
+            exchange: Exchange name (BINANCE or BYBIT)
+            api_key / api_secret / passphrase / api_type: credentials
+            category: Product category slug (SPOT, LINEAR, …)
+            start_ms: Start time epoch ms (inclusive)
+            end_ms: End time epoch ms (inclusive)
+            symbol: Optional symbol filter (e.g. "BTCUSDT")
+            limit: Max records (capped per-exchange)
+
+        Returns:
+            Normalised list of trade dicts, newest first:
+            [
+                {
+                    "exch_tid": int,
+                    "order_id": int,
+                    "symbol": str,
+                    "side": "Buy" | "Sell",
+                    "exec_px": str,
+                    "exec_qty": str,
+                    "exec_fee": str,
+                    "fee_currency": str,
+                    "is_maker": bool,
+                    "exec_time_ms": int,
+                },
+                ...
+            ]
+
+        Raises:
+            NetworkError / ExchangeError
+        """
+        logger.info(
+            "get_mytrades: exchange=%s category=%s start_ms=%s end_ms=%s symbol=%s limit=%s",
+            exchange, category, start_ms, end_ms, symbol, limit,
+        )
+        match exchange:
+            case 'BINANCE':
+                return self._get_binance_mytrades(
+                    api_key, api_secret, category, start_ms, end_ms, symbol, limit, api_type,
+                )
+            case 'BYBIT':
+                return self._get_bybit_mytrades(
+                    api_key, api_secret, category, start_ms, end_ms, symbol, limit, passphrase, api_type,
+                )
+            case _:
+                raise ValueError(f"Invalid exchange: {exchange}")
+
+    # -- Binance -----------------------------------------------------------
+
+    def _get_binance_mytrades(
+        self,
+        api_key: str,
+        api_secret: str,
+        category: str,
+        start_ms: int,
+        end_ms: int,
+        symbol: Optional[str],
+        limit: int,
+        api_type: API_TYPES,
+    ) -> List[Dict[str, Any]]:
+        try:
+            client = create_binance_client(api_key, api_secret, api_type)
+            cap = min(limit, 1000)  # Binance max per request
+
+            if category.upper() in ("SPOT", "MARGIN"):
+                if not symbol:
+                    logger.warning("Binance SPOT/MARGIN requires symbol; raising ExchangeError")
+                    raise ExchangeError(
+                        "symbol is required for Binance spot/margin trade history",
+                        exchange="BINANCE", error_code=None,
+                    )
+                params = {"symbol": symbol, "startTime": start_ms, "endTime": end_ms, "limit": cap}
+                logger.info("Binance get_my_trades (SPOT/MARGIN) params=%s", params)
+                raw = client.get_my_trades(**params)
+                logger.info("Binance get_my_trades raw response: %d trades", len(raw) if raw else 0)
+                return self._normalise_binance_spot_trades(raw)
+
+            # futures (USD-M)
+            if not symbol:
+                raise ExchangeError(
+                    "symbol is required for Binance futures trade history",
+                    exchange="BINANCE", error_code=None,
+                )
+            params = {"symbol": symbol, "startTime": start_ms, "endTime": end_ms, "limit": cap}
+            logger.info("Binance futures_account_trades params=%s", params)
+            raw = client.futures_account_trades(**params)
+            logger.info("Binance futures_account_trades raw response: %d trades", len(raw) if raw else 0)
+            return self._normalise_binance_futures_trades(raw)
+
+        except ExchangeError:
+            raise
+        except bn.exceptions.BinanceAPIException as e:
+            raise ExchangeError(
+                str(e.message) if hasattr(e, 'message') else str(e),
+                exchange="BINANCE", error_code=e.code, original_error=e,
+            )
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(
+                f"Network error connecting to Binance: {e}",
+                exchange="BINANCE", original_error=e,
+            )
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error getting Binance trades: {e}",
+                exchange="BINANCE", error_code=None, original_error=e,
+            )
+
+    @staticmethod
+    def _normalise_binance_spot_trades(raw: list) -> List[Dict[str, Any]]:
+        results = []
+        for t in raw:
+            results.append({
+                "exch_tid": int(t.get("id", 0)),
+                "order_id": int(t.get("orderId", 0)),
+                "symbol": t.get("symbol", ""),
+                "side": "Buy" if t.get("isBuyer") else "Sell",
+                "exec_px": str(t.get("price", "0")),
+                "exec_qty": str(t.get("qty", "0")),
+                "exec_fee": str(t.get("commission", "0")),
+                "fee_currency": str(t.get("commissionAsset", "")),
+                "is_maker": bool(t.get("isMaker", False)),
+                "exec_time_ms": int(t.get("time", 0)),
+            })
+        results.sort(key=lambda x: x["exec_time_ms"], reverse=True)
+        return results
+
+    @staticmethod
+    def _normalise_binance_futures_trades(raw: list) -> List[Dict[str, Any]]:
+        results = []
+        for t in raw:
+            results.append({
+                "exch_tid": int(t.get("id", 0)),
+                "order_id": int(t.get("orderId", 0)),
+                "symbol": t.get("symbol", ""),
+                "side": "Buy" if t.get("buyer") else "Sell",
+                "exec_px": str(t.get("price", "0")),
+                "exec_qty": str(t.get("qty", "0")),
+                "exec_fee": str(t.get("commission", "0")),
+                "fee_currency": str(t.get("commissionAsset", "")),
+                "is_maker": bool(t.get("maker", False)),
+                "exec_time_ms": int(t.get("time", 0)),
+            })
+        results.sort(key=lambda x: x["exec_time_ms"], reverse=True)
+        return results
+
+    # -- Bybit -------------------------------------------------------------
+
+    def _get_bybit_mytrades(
+        self,
+        api_key: str,
+        api_secret: str,
+        category: str,
+        start_ms: int,
+        end_ms: int,
+        symbol: Optional[str],
+        limit: int,
+        passphrase: Optional[str],
+        api_type: API_TYPES,
+    ) -> List[Dict[str, Any]]:
+        try:
+            client = create_bybit_client(api_key, api_secret, api_type)
+            bybit_cat = self.PRODUCT_TO_BYBIT_CATEGORY.get(category.upper(), "spot")
+            cap = min(limit, 100)  # Bybit max per page
+
+            params: Dict[str, Any] = {
+                "category": bybit_cat,
+                "startTime": start_ms,
+                "endTime": end_ms,
+                "limit": cap,
+            }
+            if symbol:
+                params["symbol"] = symbol
+
+            logger.info("Bybit get_executions params=%s (category %s -> %s)", params, category, bybit_cat)
+
+            all_trades: List[Dict[str, Any]] = []
+            page_num = 0
+            while True:
+                page_num += 1
+                response = client.get_executions(**params)
+                if not response or response.get("retCode") != 0:
+                    msg = (response or {}).get("retMsg", "Unknown error")
+                    raise ExchangeError(
+                        f"Bybit get_executions failed: {msg}",
+                        exchange="BYBIT",
+                        error_code=(response or {}).get("retCode"),
+                    )
+                result = response.get("result", {})
+                page = result.get("list", [])
+                logger.info("Bybit get_executions page=%d: %d trades, nextPageCursor=%s",
+                    page_num, len(page), result.get("nextPageCursor", ""))
+                all_trades.extend(self._normalise_bybit_trades(page))
+                cursor = result.get("nextPageCursor", "")
+                if not cursor or len(all_trades) >= limit:
+                    break
+                params["cursor"] = cursor
+
+            logger.info("Bybit get_executions total: %d trades for category=%s", len(all_trades), category)
+            all_trades.sort(key=lambda x: x["exec_time_ms"], reverse=True)
+            return all_trades[:limit]
+
+        except ExchangeError:
+            raise
+        except FailedRequestError as e:
+            error_str = str(e)
+            error_code = None
+            if "ErrCode:" in error_str:
+                try:
+                    error_code = int(error_str.split("ErrCode:")[1].split(")")[0].strip())
+                except (ValueError, IndexError):
+                    pass
+            raise ExchangeError(error_str, exchange="BYBIT", error_code=error_code, original_error=e)
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(
+                f"Network error connecting to Bybit: {e}",
+                exchange="BYBIT", original_error=e,
+            )
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error getting Bybit trades: {e}",
+                exchange="BYBIT", error_code=None, original_error=e,
+            )
+
+    @staticmethod
+    def _normalise_bybit_trades(page: list) -> List[Dict[str, Any]]:
+        results = []
+        for t in page:
+            exec_time_raw = t.get("execTime", "0")
+            try:
+                exec_time_ms = int(exec_time_raw)
+            except (ValueError, TypeError):
+                exec_time_ms = 0
+            results.append({
+                "exch_tid": int(t.get("execId", 0)),
+                "order_id": int(t.get("orderId", 0)) if t.get("orderId", "").isdigit() else 0,
+                "symbol": t.get("symbol", ""),
+                "side": t.get("side", ""),  # Bybit already returns "Buy"/"Sell"
+                "exec_px": str(t.get("execPrice", "0")),
+                "exec_qty": str(t.get("execQty", "0")),
+                "exec_fee": str(t.get("execFee", "0")),
+                "fee_currency": str(t.get("feeCurrency", "")),
+                "is_maker": t.get("isMaker") == "true" or t.get("isMaker") is True,
+                "exec_time_ms": exec_time_ms,
+            })
+        return results
