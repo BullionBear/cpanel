@@ -119,6 +119,10 @@ async def create_order(
             detail=f"API key with ID {order_data.account_id} not found or does not belong to you",
         )
 
+    account_repo = AccountRepository(db)
+    account = account_repo.get(api.acct_id)
+    acct_name = account.name if account else api.name
+
     symbol_repo = SymbolRepository(db)
     symbol = symbol_repo.get(order_data.symbol_id)
     if not symbol:
@@ -158,7 +162,7 @@ async def create_order(
             status=order_result.get("status", "NEW"),
             client_order_id=order_result.get("client_order_id", ""),
             account_id=order_data.account_id,
-            account_name=api.name,
+            account_name=acct_name,
             created_at=order_result.get("created_at", 0),
             updated_at=order_result.get("updated_at", 0),
         )
@@ -183,6 +187,7 @@ def _get_open_orders_for_api(
     api: Any,
     exchange_slug: str,
     api_service: ApiService,
+    account_name: str,
     symbol_name: Optional[str] = None,
 ) -> List[OrderResponse]:
     """Get open orders for a single API and convert to response model."""
@@ -205,7 +210,7 @@ def _get_open_orders_for_api(
             status=order.get("status", "NEW"),
             client_order_id=order.get("client_order_id", ""),
             account_id=api.id,
-            account_name=api.name,
+            account_name=account_name,
             created_at=order.get("created_at", 0),
             updated_at=order.get("updated_at", 0),
         )
@@ -244,6 +249,8 @@ async def get_open_orders(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"API key with ID {account_id} not found or does not belong to you",
             )
+        account = account_repo.get(api.acct_id)
+        acct_name = account.name if account else api.name
         exchange_slug = _get_exchange_slug(db, api.exch_id)
         symbol_name = None
         if symbol:
@@ -254,7 +261,7 @@ async def get_open_orders(
                 )
             symbol_name = symbol.name
         try:
-            orders = _get_open_orders_for_api(api, exchange_slug, api_service, symbol_name)
+            orders = _get_open_orders_for_api(api, exchange_slug, api_service, acct_name, symbol_name)
             all_orders.extend(orders)
         except (NetworkError, ExchangeError):
             pass
@@ -264,6 +271,7 @@ async def get_open_orders(
             return []
 
         api_exchange_list: List[Tuple[Any, str, int]] = []
+        api_id_to_account_name: Dict[int, str] = {}
         for api in apis:
             account = account_repo.get(api.acct_id)
             if not account or account.user_id != current_user.id:
@@ -274,12 +282,14 @@ async def get_open_orders(
             if symbol and symbol.exchange.slug.upper() != exchange_slug:
                 continue
             api_exchange_list.append((api, exchange_slug, account.uid))
+            api_id_to_account_name[api.id] = account.name
 
         deduplicated = _select_best_api_per_uid(api_exchange_list)
         symbol_name = symbol.name if symbol else None
         for api, exchange_slug in deduplicated:
             try:
-                orders = _get_open_orders_for_api(api, exchange_slug, api_service, symbol_name)
+                acct_name = api_id_to_account_name.get(api.id, api.name)
+                orders = _get_open_orders_for_api(api, exchange_slug, api_service, acct_name, symbol_name)
                 all_orders.extend(orders)
             except (NetworkError, ExchangeError):
                 continue
@@ -307,6 +317,10 @@ async def cancel_order(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"API key with ID {cancel_data.account_id} not found or does not belong to you",
         )
+
+    account_repo = AccountRepository(db)
+    account = account_repo.get(api.acct_id)
+    acct_name = account.name if account else api.name
 
     symbol_repo = SymbolRepository(db)
     symbol = symbol_repo.get(cancel_data.symbol_id)
@@ -345,7 +359,7 @@ async def cancel_order(
             status=cancel_result.get("status", "CANCEL"),
             client_order_id=cancel_result.get("client_order_id", cancel_data.client_order_id or ""),
             account_id=cancel_data.account_id,
-            account_name=api.name,
+            account_name=acct_name,
             created_at=cancel_result.get("created_at", 0),
             updated_at=cancel_result.get("updated_at", 0),
         )
