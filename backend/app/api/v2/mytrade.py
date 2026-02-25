@@ -46,6 +46,16 @@ class CursorCreatePayload(BaseModel):
     product_id: int
 
 
+class CursorUpdateFields(BaseModel):
+    cursor_end: Optional[int] = None
+
+
+class CursorUpdatePayload(BaseModel):
+    acct_id: int
+    product_id: int
+    update: CursorUpdateFields
+
+
 class CursorResponse(BaseModel):
     acct_id: int
     product_id: int
@@ -153,6 +163,50 @@ async def get_cursor(
         product_id=product_id,
         cursor_start=start_ms,
         cursor_end=start_ms,
+    )
+
+
+@router.put("/cursor", response_model=CursorResponse)
+async def update_cursor(
+    payload: CursorUpdatePayload,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Update cursor for (acct_id, product_id). Supports update.cursor_end."""
+    acct_repo = AccountRepository(db)
+    account = acct_repo.get_by_user_and_id(current_user.id, payload.acct_id)
+    if not account:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Account not found or does not belong to user",
+        )
+
+    product = db.query(RefProduct).filter(RefProduct.id == payload.product_id).first()
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found",
+        )
+
+    repo = TradingHistoryRepository(db)
+    cursor = repo.get_cursor(payload.acct_id, payload.product_id)
+    if not cursor:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Cursor not found for this account and product",
+        )
+
+    if payload.update.cursor_end is not None:
+        repo.update_cursor(cursor, cursor_end=payload.update.cursor_end)
+
+    start_ms = _start_of_month_utc_ms()
+    cs = cursor.cursor_start if cursor.cursor_start is not None else start_ms
+    ce = cursor.cursor_end if cursor.cursor_end is not None else start_ms
+    return CursorResponse(
+        acct_id=payload.acct_id,
+        product_id=payload.product_id,
+        cursor_start=cs,
+        cursor_end=ce,
     )
 
 
