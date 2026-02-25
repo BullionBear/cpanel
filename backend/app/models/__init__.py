@@ -19,6 +19,8 @@ try:
     from wallet import Wallet, WalletArchived  # noqa: E402
     from account import Account  # noqa: E402
     from balance_snapshot import BalanceSnapshot  # noqa: E402
+    from trading_history import TradingHistory  # noqa: E402
+    from trading_history_cursor import TradingHistoryCursor  # noqa: E402
 except ImportError:
     # Fallback: define User model here if migration models not available
     from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String
@@ -174,5 +176,33 @@ except ImportError:
         ref_price = Column(Numeric(36, 18), nullable=False)
         updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
-__all__ = ["User", "Access", "API", "APIArchived", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "WalletArchived", "Account", "BalanceSnapshot"]
+    class TradingHistory(Base):  # type: ignore
+        __tablename__ = "trading_history"
+
+        id = Column(Integer, primary_key=True, autoincrement=True)
+        exch_id = Column(Integer, ForeignKey("ref_exchange.id", ondelete="CASCADE"), nullable=False, index=True)
+        exch_tid = Column(Integer, nullable=False, index=True)
+        acct_id = Column(Integer, ForeignKey("account.id", ondelete="CASCADE"), nullable=False, index=True)
+        order_id = Column(Integer, nullable=False, index=True)
+        symbol = Column(String(32), nullable=False, index=True)
+        product_id = Column(Integer, ForeignKey("ref_product.id", ondelete="CASCADE"), nullable=False, index=True)
+        side = Column(String(8), nullable=False)
+        exec_px = Column(Numeric(36, 18), nullable=False)
+        exec_qty = Column(Numeric(36, 18), nullable=False)
+        exec_fee = Column(Numeric(36, 18), nullable=False)
+        fee_currency = Column(String(16), nullable=False)
+        is_maker = Column(Boolean, nullable=False)
+        exec_time = Column(DateTime(timezone=True), nullable=False)
+
+    class TradingHistoryCursor(Base):  # type: ignore
+        __tablename__ = "trading_history_cursor"
+
+        id = Column(Integer, primary_key=True, autoincrement=True)
+        acct_id = Column(Integer, ForeignKey("account.id", ondelete="CASCADE"), nullable=False, index=True)
+        product_id = Column(Integer, ForeignKey("ref_product.id", ondelete="CASCADE"), nullable=False, index=True)
+        cursor = Column(String(256), nullable=False)
+        created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+        updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+__all__ = ["User", "Access", "API", "APIArchived", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "WalletArchived", "Account", "BalanceSnapshot", "TradingHistory", "TradingHistoryCursor"]
 

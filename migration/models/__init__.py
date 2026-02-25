@@ -17,6 +17,8 @@ from .ref_wallet import RefWallet  # noqa: E402
 from .wallet import Wallet, WalletArchived  # noqa: E402
 from .account import Account  # noqa: E402
 from .balance_snapshot import BalanceSnapshot  # noqa: E402
+from .trading_history import TradingHistory  # noqa: E402
+from .trading_history_cursor import TradingHistoryCursor  # noqa: E402
 
-__all__ = ["Base", "User", "Access", "API", "APIArchived", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "WalletArchived", "Account", "BalanceSnapshot"]
+__all__ = ["Base", "User", "Access", "API", "APIArchived", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "WalletArchived", "Account", "BalanceSnapshot", "TradingHistory", "TradingHistoryCursor"]
 
