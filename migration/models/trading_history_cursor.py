@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Integer
 from sqlalchemy.sql import func
 
 from . import Base
@@ -12,8 +12,8 @@ class TradingHistoryCursor(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     acct_id = Column(Integer, ForeignKey("account.id", ondelete="CASCADE"), nullable=False, index=True)
     product_id = Column(Integer, ForeignKey("ref_product.id", ondelete="CASCADE"), nullable=False, index=True)
-    cursor_start = Column(Integer, nullable=True)
-    cursor_end = Column(Integer, nullable=True)
+    cursor_start = Column(BigInteger, nullable=True)
+    cursor_end = Column(BigInteger, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
