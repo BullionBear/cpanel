@@ -10,16 +10,18 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models import User, RefExchange, RefProduct
+from app.models import User, RefExchange, RefProduct, TradingHistory
 from app.middleware.auth import get_current_user
 from app.repositories.account_repository import AccountRepository
 from app.repositories.api_repository import APIRepository
+from app.repositories.symbol_repository import SymbolRepository
 from app.repositories.trading_history_repository import TradingHistoryRepository
 from app.services.api_service import APIService, NetworkError, ExchangeError
 
 router = APIRouter(prefix="/mytrades", tags=["mytrades-v2"])
 
 API_TYPE_PRIORITY = {"HMAC": 0, "ED25519": 1, "RSA": 2}
+MAX_EXCHANGE_WINDOW_MS = 24 * 60 * 60 * 1000
 
 
 class TradeItem(BaseModel):
@@ -61,6 +63,25 @@ class CursorResponse(BaseModel):
     product_id: int
     cursor_start: int
     cursor_end: int
+
+
+def _parse_csv_ints(value: Optional[str], field_name: str) -> List[int]:
+    """Parse comma-separated integer query param."""
+    if value is None or value.strip() == "":
+        return []
+    try:
+        parsed = [int(v.strip()) for v in value.split(",") if v.strip()]
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {field_name}. Must be comma-separated integers.",
+        )
+    if not parsed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must include at least one integer.",
+        )
+    return parsed
 
 
 def _start_of_month_utc_ms() -> int:
@@ -210,99 +231,87 @@ async def update_cursor(
     )
 
 
-@router.get("", response_model=List[TradeItem])
-async def get_mytrades(
-    acct_id: int = Query(..., description="Account ID (required)"),
-    product_id: int = Query(..., description="Product ID (required)"),
-    source: str = Query(..., description="Data source: 'db' or 'exch'"),
-    start_ms: int = Query(..., description="Start time in epoch milliseconds (inclusive)"),
-    end_ms: Optional[int] = Query(None, description="End time in epoch milliseconds (inclusive, default now)"),
+@router.get("/db", response_model=List[TradeItem])
+async def get_mytrades_db(
+    acct_id: Optional[str] = Query(None, description="Optional account IDs CSV (e.g. '1,2,3'); empty means all user accounts"),
+    product_id: Optional[int] = Query(None, description="Optional product ID filter"),
+    symbol_id: Optional[str] = Query(None, description="Optional symbol IDs CSV (e.g. '10,12')"),
     side: str = Query("all", description="'buy', 'sell', or 'all'"),
-    symbol: Optional[str] = Query(None, description="Symbol filter (exact match)"),
-    limit: int = Query(200, ge=1, le=1000, description="Max records to return"),
+    start_ms: Optional[int] = Query(None, description="Optional start time in epoch milliseconds (inclusive)"),
+    end_ms: Optional[int] = Query(None, description="Optional end time in epoch milliseconds (inclusive)"),
+    limit: int = Query(1000, ge=1, le=5000, description="Max records to return"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if source not in ("db", "exch"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="source must be 'db' or 'exch'",
-        )
-
-    acct_repo = AccountRepository(db)
-    account = acct_repo.get_by_user_and_id(current_user.id, acct_id)
-    if not account:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Account not found or does not belong to user",
-        )
-
-    product = db.query(RefProduct).filter(RefProduct.id == product_id).first()
-    if not product:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Product not found",
-        )
-
+    """Query mytrades from DB. Supports multi-account and multi-symbol filtering."""
     side_lower = side.lower()
     if side_lower not in ("buy", "sell", "all"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="side must be 'buy', 'sell', or 'all'",
         )
+    side_filter = SIDE_MAP.get(side_lower)  # None when 'all'
 
-    end_ms_resolved = end_ms if end_ms is not None else int(datetime.now(timezone.utc).timestamp() * 1000)
-    since_dt = datetime.fromtimestamp(start_ms / 1000.0, tz=timezone.utc)
-    until_dt = datetime.fromtimestamp(end_ms_resolved / 1000.0, tz=timezone.utc)
+    acct_repo = AccountRepository(db)
+    user_accounts = acct_repo.query(user_id=current_user.id, skip=0, limit=5000)
+    user_acct_ids = {a.id for a in user_accounts}
+    if not user_acct_ids:
+        return []
 
-    if source == "db":
-        return _query_from_db(
-            db=db,
-            acct_id=acct_id,
-            product_id=product_id,
-            side=side_lower,
-            symbol=symbol,
-            since=since_dt,
-            until=until_dt,
-            limit=limit,
+    requested_acct_ids = _parse_csv_ints(acct_id, "acct_id")
+    if requested_acct_ids:
+        requested_set = set(requested_acct_ids)
+        if not requested_set.issubset(user_acct_ids):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="One or more account IDs not found or do not belong to user",
+            )
+        target_acct_ids = requested_set
+    else:
+        target_acct_ids = user_acct_ids
+
+    symbol_names: List[str] = []
+    symbol_ids = _parse_csv_ints(symbol_id, "symbol_id")
+    if symbol_ids:
+        symbol_repo = SymbolRepository(db)
+        symbols = []
+        for sid in symbol_ids:
+            sym = symbol_repo.get(sid)
+            if not sym:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Symbol with ID {sid} not found",
+                )
+            symbols.append(sym)
+        symbol_names = [s.name for s in symbols]
+
+    if start_ms is not None and end_ms is not None and start_ms > end_ms:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_ms must be less than or equal to end_ms",
         )
+    since_dt = datetime.fromtimestamp(start_ms / 1000.0, tz=timezone.utc) if start_ms is not None else None
+    until_dt = datetime.fromtimestamp(end_ms / 1000.0, tz=timezone.utc) if end_ms is not None else None
 
-    # source == 'exch'
-    return _query_from_exchange(
-        db=db,
-        account=account,
-        product=product,
-        side=side_lower,
-        symbol=symbol,
-        start_ms=start_ms,
-        end_ms=end_ms_resolved,
-        limit=limit,
-    )
+    query = db.query(TradingHistory).filter(TradingHistory.acct_id.in_(target_acct_ids))
+    if product_id is not None:
+        product = db.query(RefProduct).filter(RefProduct.id == product_id).first()
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Product not found",
+            )
+        query = query.filter(TradingHistory.product_id == product_id)
+    if side_filter is not None:
+        query = query.filter(TradingHistory.side == side_filter)
+    if symbol_names:
+        query = query.filter(TradingHistory.symbol.in_(symbol_names))
+    if since_dt is not None:
+        query = query.filter(TradingHistory.exec_time >= since_dt)
+    if until_dt is not None:
+        query = query.filter(TradingHistory.exec_time <= until_dt)
 
-
-# ── source = db ──────────────────────────────────────────────────────
-
-def _query_from_db(
-    db: Session,
-    acct_id: int,
-    product_id: int,
-    side: str,
-    symbol: Optional[str],
-    since: datetime,
-    until: datetime,
-    limit: int,
-) -> List[TradeItem]:
-    repo = TradingHistoryRepository(db)
-    side_filter = SIDE_MAP.get(side)  # None when 'all'
-    rows = repo.query_trading_history(
-        acct_id=acct_id,
-        product_id=product_id,
-        side=side_filter,
-        symbol=symbol,
-        since=since,
-        until=until,
-        limit=limit,
-    )
+    rows = query.order_by(TradingHistory.exec_time.desc()).limit(limit).all()
     return [
         TradeItem(
             exch_id=r.exch_id,
@@ -323,7 +332,83 @@ def _query_from_db(
     ]
 
 
-# ── source = exch ────────────────────────────────────────────────────
+@router.get("/exch", response_model=List[TradeItem])
+async def get_mytrades_exch(
+    acct_id: int = Query(..., description="Account ID (required)"),
+    product_id: int = Query(..., description="Product ID (required)"),
+    symbol_id: int = Query(..., description="Symbol ID (required)"),
+    start_ms: int = Query(..., description="Start time in epoch milliseconds (inclusive)"),
+    end_ms: int = Query(..., description="End time in epoch milliseconds (inclusive)"),
+    side: str = Query("all", description="'buy', 'sell', or 'all'"),
+    limit: int = Query(100, ge=1, le=199, description="Max records to return (<200)"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Query mytrades from exchange with strict input restrictions."""
+    if start_ms > end_ms:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_ms must be less than or equal to end_ms",
+        )
+    if end_ms - start_ms > MAX_EXCHANGE_WINDOW_MS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="For /mytrades/exch, time range cannot exceed 24 hours",
+        )
+
+    side_lower = side.lower()
+    if side_lower not in ("buy", "sell", "all"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="side must be 'buy', 'sell', or 'all'",
+        )
+
+    acct_repo = AccountRepository(db)
+    account = acct_repo.get_by_user_and_id(current_user.id, acct_id)
+    if not account:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Account not found or does not belong to user",
+        )
+
+    product = db.query(RefProduct).filter(RefProduct.id == product_id).first()
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found",
+        )
+
+    symbol_repo = SymbolRepository(db)
+    symbol = symbol_repo.get(symbol_id)
+    if not symbol:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Symbol not found",
+        )
+    if symbol.exchange_id != account.exch_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Symbol does not belong to the account exchange",
+        )
+    if symbol.product_id != product.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Symbol does not belong to the specified product",
+        )
+
+    return _query_from_exchange(
+        db=db,
+        account=account,
+        product=product,
+        side=side_lower,
+        symbol=symbol.name,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        limit=limit,
+    )
+
+
+# ── exch helper ──────────────────────────────────────────────────────
 
 def _select_best_api(apis: list) -> object:
     """Pick the API key with highest priority (HMAC > ED25519 > RSA)."""
@@ -338,7 +423,7 @@ def _query_from_exchange(
     account,
     product,
     side: str,
-    symbol: Optional[str],
+    symbol: str,
     start_ms: int,
     end_ms: int,
     limit: int,
@@ -371,6 +456,12 @@ def _query_from_exchange(
     api_service = APIService()
     all_items: List[TradeItem] = []
 
+    if start_ms > end_ms:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_ms must be less than or equal to end_ms",
+        )
+
     try:
         client = api_service.get_exchange_client_from_api_info(exchange_slug, api)
         raw_trades = client.get_mytrades(
@@ -380,37 +471,35 @@ def _query_from_exchange(
             symbol=symbol,
             limit=limit,
         )
+        logger.info("_query_from_exchange: %s/%s returned %d raw trades", exchange_slug, slug, len(raw_trades))
+        for t in raw_trades:
+            trade_side = t.get("side", "")
+            if side_filter and trade_side != side_filter:
+                continue
+            exec_time_ms = t.get("exec_time_ms", 0)
+            exec_dt = datetime.fromtimestamp(exec_time_ms / 1000.0, tz=timezone.utc) if exec_time_ms else datetime.now(timezone.utc)
+            all_items.append(
+                TradeItem(
+                    exch_id=account.exch_id,
+                    exch_tid=t.get("exch_tid", 0),
+                    acct_id=account.id,
+                    order_id=t.get("order_id", 0),
+                    symbol=t.get("symbol", ""),
+                    product_id=product.id,
+                    side=trade_side,
+                    exec_px=t.get("exec_px", "0"),
+                    exec_qty=t.get("exec_qty", "0"),
+                    exec_fee=t.get("exec_fee", "0"),
+                    fee_currency=t.get("fee_currency", ""),
+                    is_maker=t.get("is_maker", False),
+                    exec_time=exec_dt,
+                )
+            )
     except (NetworkError, ExchangeError) as exc:
         logger.warning("_query_from_exchange: failed %s/%s: %s", exchange_slug, slug, exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Exchange error: {exc}",
-        )
-
-    logger.info("_query_from_exchange: %s/%s returned %d raw trades", exchange_slug, slug, len(raw_trades))
-
-    for t in raw_trades:
-        trade_side = t.get("side", "")
-        if side_filter and trade_side != side_filter:
-            continue
-        exec_time_ms = t.get("exec_time_ms", 0)
-        exec_dt = datetime.fromtimestamp(exec_time_ms / 1000.0, tz=timezone.utc) if exec_time_ms else datetime.now(timezone.utc)
-        all_items.append(
-            TradeItem(
-                exch_id=account.exch_id,
-                exch_tid=t.get("exch_tid", 0),
-                acct_id=account.id,
-                order_id=t.get("order_id", 0),
-                symbol=t.get("symbol", ""),
-                product_id=product.id,
-                side=trade_side,
-                exec_px=t.get("exec_px", "0"),
-                exec_qty=t.get("exec_qty", "0"),
-                exec_fee=t.get("exec_fee", "0"),
-                fee_currency=t.get("fee_currency", ""),
-                is_maker=t.get("is_maker", False),
-                exec_time=exec_dt,
-            )
         )
 
     all_items.sort(key=lambda x: x.exec_time, reverse=True)
