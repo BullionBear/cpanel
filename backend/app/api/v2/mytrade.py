@@ -45,6 +45,7 @@ SIDE_MAP = {"buy": "Buy", "sell": "Sell"}
 
 class CursorCreatePayload(BaseModel):
     acct_id: int
+    symbol_id: int
     product_id: int
 
 
@@ -54,12 +55,14 @@ class CursorUpdateFields(BaseModel):
 
 class CursorUpdatePayload(BaseModel):
     acct_id: int
+    symbol_id: int
     product_id: int
     update: CursorUpdateFields
 
 
 class CursorResponse(BaseModel):
     acct_id: int
+    symbol_id: int
     product_id: int
     cursor_start: int
     cursor_end: int
@@ -97,7 +100,7 @@ async def create_cursor(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Create or reset cursor for (acct_id, product_id) with cursor_start = cursor_end = start of current month (UTC)."""
+    """Create or reset cursor for (acct_id, symbol_id, product_id)."""
     acct_repo = AccountRepository(db)
     account = acct_repo.get_by_user_and_id(current_user.id, payload.acct_id)
     if not account:
@@ -112,15 +115,33 @@ async def create_cursor(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Product not found",
         )
+    symbol_repo = SymbolRepository(db)
+    symbol = symbol_repo.get(payload.symbol_id)
+    if not symbol:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Symbol not found",
+        )
+    if symbol.exchange_id != account.exch_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Symbol does not belong to the account exchange",
+        )
+    if symbol.product_id != payload.product_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Symbol does not belong to the specified product",
+        )
 
     start_ms = _start_of_month_utc_ms()
     repo = TradingHistoryRepository(db)
-    existing = repo.get_cursor(payload.acct_id, payload.product_id)
+    existing = repo.get_cursor(payload.acct_id, payload.symbol_id, payload.product_id)
 
     if existing:
         repo.update_cursor(existing, cursor_start=start_ms, cursor_end=start_ms)
         return CursorResponse(
             acct_id=payload.acct_id,
+            symbol_id=payload.symbol_id,
             product_id=payload.product_id,
             cursor_start=start_ms,
             cursor_end=start_ms,
@@ -128,12 +149,14 @@ async def create_cursor(
 
     repo.create_cursor(
         acct_id=payload.acct_id,
+        symbol_id=payload.symbol_id,
         product_id=payload.product_id,
         cursor_start=start_ms,
         cursor_end=start_ms,
     )
     return CursorResponse(
         acct_id=payload.acct_id,
+        symbol_id=payload.symbol_id,
         product_id=payload.product_id,
         cursor_start=start_ms,
         cursor_end=start_ms,
@@ -143,11 +166,12 @@ async def create_cursor(
 @router.get("/cursor", response_model=CursorResponse)
 async def get_cursor(
     acct_id: int = Query(..., description="Account ID"),
+    symbol_id: int = Query(..., description="Symbol ID"),
     product_id: int = Query(..., description="Product ID"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Get cursor for (acct_id, product_id). If it doesn't exist and account exists, create it automatically."""
+    """Get cursor for (acct_id, symbol_id, product_id). If missing, create automatically."""
     acct_repo = AccountRepository(db)
     account = acct_repo.get_by_user_and_id(current_user.id, acct_id)
     if not account:
@@ -162,25 +186,44 @@ async def get_cursor(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Product not found",
         )
+    symbol_repo = SymbolRepository(db)
+    symbol = symbol_repo.get(symbol_id)
+    if not symbol:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Symbol not found",
+        )
+    if symbol.exchange_id != account.exch_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Symbol does not belong to the account exchange",
+        )
+    if symbol.product_id != product_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Symbol does not belong to the specified product",
+        )
 
     repo = TradingHistoryRepository(db)
-    cursor = repo.get_cursor(acct_id, product_id)
+    cursor = repo.get_cursor(acct_id, symbol_id, product_id)
 
     if cursor:
         start_ms = _start_of_month_utc_ms()
         cs = cursor.cursor_start if cursor.cursor_start is not None else start_ms
         ce = cursor.cursor_end if cursor.cursor_end is not None else start_ms
-        return CursorResponse(acct_id=acct_id, product_id=product_id, cursor_start=cs, cursor_end=ce)
+        return CursorResponse(acct_id=acct_id, symbol_id=symbol_id, product_id=product_id, cursor_start=cs, cursor_end=ce)
 
     start_ms = _start_of_month_utc_ms()
     repo.create_cursor(
         acct_id=acct_id,
+        symbol_id=symbol_id,
         product_id=product_id,
         cursor_start=start_ms,
         cursor_end=start_ms,
     )
     return CursorResponse(
         acct_id=acct_id,
+        symbol_id=symbol_id,
         product_id=product_id,
         cursor_start=start_ms,
         cursor_end=start_ms,
@@ -193,7 +236,7 @@ async def update_cursor(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Update cursor for (acct_id, product_id). Supports update.cursor_end."""
+    """Update cursor for (acct_id, symbol_id, product_id). Supports update.cursor_end."""
     acct_repo = AccountRepository(db)
     account = acct_repo.get_by_user_and_id(current_user.id, payload.acct_id)
     if not account:
@@ -208,13 +251,30 @@ async def update_cursor(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Product not found",
         )
+    symbol_repo = SymbolRepository(db)
+    symbol = symbol_repo.get(payload.symbol_id)
+    if not symbol:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Symbol not found",
+        )
+    if symbol.exchange_id != account.exch_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Symbol does not belong to the account exchange",
+        )
+    if symbol.product_id != payload.product_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Symbol does not belong to the specified product",
+        )
 
     repo = TradingHistoryRepository(db)
-    cursor = repo.get_cursor(payload.acct_id, payload.product_id)
+    cursor = repo.get_cursor(payload.acct_id, payload.symbol_id, payload.product_id)
     if not cursor:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Cursor not found for this account and product",
+            detail="Cursor not found for this account, symbol, and product",
         )
 
     if payload.update.cursor_end is not None:
@@ -225,6 +285,7 @@ async def update_cursor(
     ce = cursor.cursor_end if cursor.cursor_end is not None else start_ms
     return CursorResponse(
         acct_id=payload.acct_id,
+        symbol_id=payload.symbol_id,
         product_id=payload.product_id,
         cursor_start=cs,
         cursor_end=ce,

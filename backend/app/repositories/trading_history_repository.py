@@ -125,13 +125,14 @@ class TradingHistoryRepository:
 
     # --- trading_history_cursor (TradingHistoryCursor) ---
 
-    def get_cursor(self, acct_id: int, product_id: int) -> Optional[TradingHistoryCursor]:
-        """Get cursor for (acct_id, product_id). At most one per (acct_id, product_id)."""
+    def get_cursor(self, acct_id: int, symbol_id: int, product_id: int) -> Optional[TradingHistoryCursor]:
+        """Get cursor for (acct_id, symbol_id, product_id)."""
         return (
             self.db.query(TradingHistoryCursor)
             .filter(
                 and_(
                     TradingHistoryCursor.acct_id == acct_id,
+                    TradingHistoryCursor.symbol_id == symbol_id,
                     TradingHistoryCursor.product_id == product_id,
                 )
             )
@@ -145,6 +146,7 @@ class TradingHistoryRepository:
     def query_cursors(
         self,
         acct_id: Optional[int] = None,
+        symbol_id: Optional[int] = None,
         product_id: Optional[int] = None,
         skip: int = 0,
         limit: int = 100,
@@ -153,6 +155,8 @@ class TradingHistoryRepository:
         query = self.db.query(TradingHistoryCursor)
         if acct_id is not None:
             query = query.filter(TradingHistoryCursor.acct_id == acct_id)
+        if symbol_id is not None:
+            query = query.filter(TradingHistoryCursor.symbol_id == symbol_id)
         if product_id is not None:
             query = query.filter(TradingHistoryCursor.product_id == product_id)
         return query.offset(skip).limit(limit).all()
@@ -160,13 +164,15 @@ class TradingHistoryRepository:
     def create_cursor(
         self,
         acct_id: int,
+        symbol_id: int,
         product_id: int,
         cursor_start: Optional[int] = None,
         cursor_end: Optional[int] = None,
     ) -> TradingHistoryCursor:
-        """Create a new cursor row for (acct_id, product_id)."""
+        """Create a new cursor row for (acct_id, symbol_id, product_id)."""
         row = TradingHistoryCursor(
             acct_id=acct_id,
+            symbol_id=symbol_id,
             product_id=product_id,
             cursor_start=cursor_start,
             cursor_end=cursor_end,
