@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from app.services.api_service import (
-    ApiService,
+    APIService,
     NetworkError,
     ExchangeError,
 )
@@ -25,7 +25,7 @@ def test_binance():
     print("Testing Binance API Verification")
     print("="*60)
     
-    service = ApiService()
+    service = APIService()
     
     try:
         service.verify_api(
@@ -61,7 +61,7 @@ def test_bybit():
     print("Testing Bybit API Verification")
     print("="*60)
     
-    service = ApiService()
+    service = APIService()
     
     try:
         service.verify_api(
@@ -97,7 +97,7 @@ def test_direct_methods():
     print("Testing Direct Verification Methods")
     print("="*60)
     
-    service = ApiService()
+    service = APIService()
     
     # Test Binance direct method
     print("\n1. Testing verify_binance_api() directly:")
@@ -136,7 +136,7 @@ def test_invalid_exchange():
     print("Testing Invalid Exchange Handling")
     print("="*60)
     
-    service = ApiService()
+    service = APIService()
     
     try:
         service.verify_api(
@@ -160,7 +160,7 @@ def test_invalid_credentials():
     print("Testing Exception Handling with Invalid Credentials")
     print("="*60)
     
-    service = ApiService()
+    service = APIService()
     
     # Test Binance with invalid credentials
     print("\n1. Testing Binance with invalid API key:")
@@ -201,7 +201,7 @@ def test_binance_balance():
     print("Testing Binance Balance Retrieval")
     print("="*60)
     
-    service = ApiService()
+    service = APIService()
     
     try:
         balance = service.get_balance(
@@ -250,7 +250,7 @@ def test_bybit_balance():
     print("Testing Bybit Balance Retrieval")
     print("="*60)
     
-    service = ApiService()
+    service = APIService()
     
     try:
         balance = service.get_balance(
@@ -299,7 +299,7 @@ def test_balance_format():
     print("Testing Balance Format Validation")
     print("="*60)
     
-    service = ApiService()
+    service = APIService()
     
     # Test Binance format
     print("\n1. Testing Binance balance format:")

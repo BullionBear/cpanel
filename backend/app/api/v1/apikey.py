@@ -8,7 +8,7 @@ from app.db.session import get_db
 from app.models import User
 from app.middleware.auth import get_current_user
 from app.repositories.api_repository import APIArchivedRepository
-from app.services.api_service import ApiService, NetworkError, ExchangeError
+from app.services.api_service import APIService, NetworkError, ExchangeError
 
 router = APIRouter(prefix="/apikey", tags=["api-keys"])
 
@@ -65,15 +65,16 @@ async def register_api_key(
         )
     
     # Verify API credentials with exchange
-    api_service = ApiService()
+    api_service = APIService()
     try:
-        api_service.verify_api(
+        client = api_service.get_exchange_client(
             exchange=exchange,  # type: ignore
             api_key=api_data.api_key,
             api_secret=api_data.api_secret,
             passphrase=api_data.passphrase,
             api_type=api_data.api_type  # type: ignore
         )
+        client.verify_api()
     except NetworkError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -90,13 +91,7 @@ async def register_api_key(
     
     # Get account UID from exchange
     try:
-        uid = api_service.get_account_uid(
-            exchange=exchange,  # type: ignore
-            api_key=api_data.api_key,
-            api_secret=api_data.api_secret,
-            passphrase=api_data.passphrase,
-            api_type=api_data.api_type  # type: ignore
-        )
+        uid = client.get_account_uid()
     except NetworkError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

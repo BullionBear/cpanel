@@ -15,7 +15,7 @@ from app.middleware.auth import get_current_user
 from app.repositories.account_repository import AccountRepository
 from app.repositories.api_repository import APIRepository
 from app.repositories.trading_history_repository import TradingHistoryRepository
-from app.services.api_service import ApiService, NetworkError, ExchangeError
+from app.services.api_service import APIService, NetworkError, ExchangeError
 
 router = APIRouter(prefix="/mytrades", tags=["mytrades-v2"])
 
@@ -368,21 +368,17 @@ def _query_from_exchange(
     logger.info("_query_from_exchange: exchange=%s (id=%s) category=%s (product_id=%s)", exchange_slug, account.exch_id, slug, product.id)
 
     side_filter = SIDE_MAP.get(side)
-    api_service = ApiService()
+    api_service = APIService()
     all_items: List[TradeItem] = []
 
     try:
-        raw_trades = api_service.get_mytrades(
-            exchange=exchange_slug,
-            api_key=api.api_key,
-            api_secret=api.api_secret,
+        client = api_service.get_exchange_client_from_api_info(exchange_slug, api)
+        raw_trades = client.get_mytrades(
             category=slug,
             start_ms=start_ms,
             end_ms=end_ms,
             symbol=symbol,
             limit=limit,
-            passphrase=api.passphrase,
-            api_type=api.api_type,
         )
     except (NetworkError, ExchangeError) as exc:
         logger.warning("_query_from_exchange: failed %s/%s: %s", exchange_slug, slug, exc)

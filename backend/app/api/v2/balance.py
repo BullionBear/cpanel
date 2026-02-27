@@ -10,7 +10,7 @@ from app.middleware.auth import get_current_user
 from app.repositories.api_repository import APIRepository
 from app.repositories.account_repository import AccountRepository
 from app.repositories.wallet_repository import WalletRepository
-from app.services.api_service import ApiService, NetworkError, ExchangeError
+from app.services.api_service import APIService, NetworkError, ExchangeError
 
 router = APIRouter(prefix="/balance", tags=["balance-v2"])
 
@@ -60,15 +60,10 @@ class BalanceResponse(BaseModel):
     wallets: List[WalletBalance]
 
 
-def _get_balance_for_api(api: Any, exchange_name: str, api_service: ApiService) -> BalanceResponse:
+def _get_balance_for_api(api: Any, exchange_name: str, api_service: APIService) -> BalanceResponse:
     """Get balance for a single API and convert to response model."""
-    balance_data = api_service.get_balance(
-        exchange=exchange_name,
-        api_key=api.api_key,
-        api_secret=api.api_secret,
-        passphrase=api.passphrase,
-        api_type=api.api_type,
-    )
+    client = api_service.get_exchange_client_from_api_info(exchange_name, api)
+    balance_data = client.get_balance()
     wallets = [
         WalletBalance(
             wallet=wallet["wallet"],
@@ -127,7 +122,7 @@ async def get_balances(
     wallet_repo = WalletRepository(db)
     api_repo = APIRepository(db)
     account_repo = AccountRepository(db)
-    api_service = ApiService()
+    api_service = APIService()
 
     # Resolve wallets -> account -> APIs (only wallets owned by user)
     api_exchange_uid_list: List[Tuple[Any, str, int]] = []
@@ -201,7 +196,7 @@ async def get_balance_by_wallet_id(
     exchange = db.query(RefExchange).filter(RefExchange.id == api.exch_id).first()
     exchange_name = (exchange.slug or exchange.name or "").upper() if exchange else ""
 
-    api_service = ApiService()
+    api_service = APIService()
     try:
         return _get_balance_for_api(api, exchange_name, api_service)
     except NetworkError as e:
