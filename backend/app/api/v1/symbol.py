@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from app.db.session import get_db
 from app.repositories.symbol_repository import SymbolRepository
 from app.models import RefExchange, RefProduct, RefToken
-from app.services.api_service import ApiService, NetworkError, ExchangeError
+from app.services.api_service import APIService, NetworkError, ExchangeError
 
 router = APIRouter(prefix="/symbol", tags=["symbols"])
 
@@ -232,12 +232,10 @@ async def create_symbol(
         )
     
     # Get symbol info from exchange API
-    api_service = ApiService()
+    api_service = APIService()
     try:
-        symbol_info = api_service.get_symbol_info(
-            exchange=exchange.slug.upper(),  # type: ignore
-            symbol=symbol_data.symbol
-        )
+        client = api_service.get_exchange_client(exchange=exchange.slug.upper(), api_key="", api_secret="")  # type: ignore
+        symbol_info = client.get_symbol_info(symbol_data.symbol)
     except NetworkError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -9,7 +9,7 @@ from app.models import User
 from app.middleware.auth import get_current_user
 from app.repositories.api_repository import APIArchivedRepository
 from app.repositories.symbol_repository import SymbolRepository
-from app.services.api_service import ApiService, NetworkError, ExchangeError
+from app.services.api_service import APIService, NetworkError, ExchangeError
 
 router = APIRouter(prefix="/order", tags=["orders"])
 
@@ -147,19 +147,15 @@ async def create_order(
         )
     
     # Place order using API service
-    api_service = ApiService()
+    api_service = APIService()
     try:
-        order_result = api_service.create_order(
-            exchange=exchange_slug,  # type: ignore
-            api_key=api.api_key,
-            api_secret=api.api_secret,
+        client = api_service.get_exchange_client_from_api_info(exchange_slug, api)  # type: ignore
+        order_result = client.create_order(
             symbol=symbol.name,
             side=order_data.side,  # type: ignore
             order_type=order_data.type,  # type: ignore
             quantity=order_data.qty,
             price=order_data.price,
-            passphrase=api.passphrase,
-            api_type=api.api_type  # type: ignore
         )
         
         return OrderResponse(
@@ -199,7 +195,7 @@ async def create_order(
 
 def _get_open_orders_for_api(
     api,
-    api_service: ApiService,
+    api_service: APIService,
     symbol_name: Optional[str] = None,
 ) -> List[OrderResponse]:
     """
@@ -207,7 +203,7 @@ def _get_open_orders_for_api(
     
     Args:
         api: API model instance
-        api_service: ApiService instance
+        api_service: APIService instance
         symbol_name: Optional symbol name to filter orders
         
     Returns:
@@ -219,14 +215,8 @@ def _get_open_orders_for_api(
     """
     exchange_slug = api.exchange.upper()
     
-    open_orders = api_service.get_open_orders(
-        exchange=exchange_slug,  # type: ignore
-        api_key=api.api_key,
-        api_secret=api.api_secret,
-        symbol=symbol_name,
-        passphrase=api.passphrase,
-        api_type=api.api_type  # type: ignore
-    )
+    client = api_service.get_exchange_client_from_api_info(exchange_slug, api)  # type: ignore
+    open_orders = client.get_open_orders(symbol=symbol_name)
     
     # Convert to OrderResponse format
     return [
@@ -263,7 +253,7 @@ async def get_open_orders(
     Optionally filtered by symbol_id.
     """
     api_repo = APIArchivedRepository(db)
-    api_service = ApiService()
+    api_service = APIService()
     
     # If symbol_id is provided, get symbol info (we'll validate against each exchange)
     symbol = None
@@ -396,18 +386,14 @@ async def cancel_order(
         )
     
     # Cancel order using API service
-    api_service = ApiService()
+    api_service = APIService()
     
     try:
-        cancel_result = api_service.cancel_order(
-            exchange=exchange_slug,  # type: ignore
-            api_key=api.api_key,
-            api_secret=api.api_secret,
+        client = api_service.get_exchange_client_from_api_info(exchange_slug, api)  # type: ignore
+        cancel_result = client.cancel_order(
             symbol=symbol.name,
             order_id=cancel_data.order_id,
             client_order_id=cancel_data.client_order_id,
-            passphrase=api.passphrase,
-            api_type=api.api_type  # type: ignore
         )
         
         return OrderResponse(

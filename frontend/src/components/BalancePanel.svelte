@@ -2,10 +2,18 @@
 	import { onMount } from 'svelte';
 	import { getWalletsV2, getBalancesV2, type BalanceResponse } from '$lib/api';
 
-	let balances: BalanceResponse[] = [];
+	type WalletBalanceRow = {
+		walletId: number;
+		walletName: string;
+		apiId: number | null;
+		exchange: string;
+		wallets: BalanceResponse['wallets'];
+	};
+
+	let walletRows: WalletBalanceRow[] = [];
 	let loading = true;
 	let error: string | null = null;
-	let expandedAccounts: Set<number> = new Set();
+	let expandedWallets: Set<number> = new Set();
 
 	async function loadBalances() {
 		try {
@@ -15,17 +23,39 @@
 			// Get all wallets (v2)
 			const wallets = await getWalletsV2();
 			if (wallets.length === 0) {
-				balances = [];
+				walletRows = [];
 				loading = false;
 				return;
 			}
 
-			// Get balances for all wallet IDs (v2)
-			const walletIds = wallets.map((w) => w.id);
-			balances = await getBalancesV2(walletIds);
+			const rows = await Promise.all(
+				wallets.map(async (wallet) => {
+					try {
+						// Resolve each wallet through v2 balance endpoint.
+						const walletBalance = await getBalancesV2([wallet.id]);
+						const resolved = walletBalance[0];
+						return {
+							walletId: wallet.id,
+							walletName: wallet.name,
+							apiId: resolved?.api_id ?? null,
+							exchange: resolved?.exchange ?? '',
+							wallets: resolved?.wallets ?? []
+						} satisfies WalletBalanceRow;
+					} catch {
+						return {
+							walletId: wallet.id,
+							walletName: wallet.name,
+							apiId: null,
+							exchange: '',
+							wallets: []
+						} satisfies WalletBalanceRow;
+					}
+				})
+			);
+			walletRows = rows;
 
-			// Expand all accounts by default
-			expandedAccounts = new Set(balances.map((b) => b.api_id));
+			// Expand all wallets by default
+			expandedWallets = new Set(rows.map((r) => r.walletId));
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load balances';
 		} finally {
@@ -33,13 +63,13 @@
 		}
 	}
 
-	function toggleAccount(apiId: number) {
-		if (expandedAccounts.has(apiId)) {
-			expandedAccounts.delete(apiId);
+	function toggleWallet(walletId: number) {
+		if (expandedWallets.has(walletId)) {
+			expandedWallets.delete(walletId);
 		} else {
-			expandedAccounts.add(apiId);
+			expandedWallets.add(walletId);
 		}
-		expandedAccounts = expandedAccounts; // trigger reactivity
+		expandedWallets = expandedWallets; // trigger reactivity
 	}
 
 	function getExchangeColor(exchange: string): string {
@@ -89,21 +119,21 @@
 			<div class="loading">Loading balances...</div>
 		{:else if error}
 			<div class="error">{error}</div>
-		{:else if balances.length === 0}
+		{:else if walletRows.length === 0}
 			<div class="empty">No wallets configured. Add wallets in Account page.</div>
 		{:else}
 			<div class="balances-list">
-				{#each balances as account (account.api_id)}
+				{#each walletRows as row (row.walletId)}
 					<div class="account-section">
 						<button 
 							class="account-header" 
-							on:click={() => toggleAccount(account.api_id)}
-							aria-expanded={expandedAccounts.has(account.api_id)}
+							on:click={() => toggleWallet(row.walletId)}
+							aria-expanded={expandedWallets.has(row.walletId)}
 						>
 							<div class="account-info">
 								<svg 
 									class="chevron" 
-									class:expanded={expandedAccounts.has(account.api_id)}
+									class:expanded={expandedWallets.has(row.walletId)}
 									width="16" 
 									height="16" 
 									viewBox="0 0 24 24" 
@@ -111,33 +141,39 @@
 								>
 									<path d="M9 18L15 12L9 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 								</svg>
-								<span class="account-name">{account.name}</span>
+								<span class="account-name">{row.walletName}</span>
 							</div>
-							<span class="exchange-badge" style="background-color: {getExchangeColor(account.exchange)};">
-								{account.exchange}
+							<span class="exchange-badge" style="background-color: {getExchangeColor(row.exchange)};">
+								{row.exchange || 'N/A'}
 							</span>
 						</button>
 
-						{#if expandedAccounts.has(account.api_id)}
+						{#if expandedWallets.has(row.walletId)}
 							<div class="account-content">
-								{#each account.wallets as w}
+								{#if row.wallets.length === 0}
 									<div class="wallet-section">
-										<div class="wallet-name">{w.wallet}</div>
-										<div class="token-list">
-											{#each w.balance as token}
-												<div class="token-row">
-													<span class="token-name">{token.token}</span>
-													<div class="token-amounts">
-														<span class="amount available" title="Available">{formatBalance(token.available)}</span>
-														{#if parseFloat(token.frozen) > 0}
-															<span class="amount frozen" title="Frozen">({formatBalance(token.frozen)})</span>
-														{/if}
-													</div>
-												</div>
-											{/each}
-										</div>
+										<div class="empty">No balance data for this wallet.</div>
 									</div>
-								{/each}
+								{:else}
+									{#each row.wallets as w}
+										<div class="wallet-section">
+											<div class="wallet-name">{w.wallet}</div>
+											<div class="token-list">
+												{#each w.balance as token}
+													<div class="token-row">
+														<span class="token-name">{token.token}</span>
+														<div class="token-amounts">
+															<span class="amount available" title="Available">{formatBalance(token.available)}</span>
+															{#if parseFloat(token.frozen) > 0}
+																<span class="amount frozen" title="Frozen">({formatBalance(token.frozen)})</span>
+															{/if}
+														</div>
+													</div>
+												{/each}
+											</div>
+										</div>
+									{/each}
+								{/if}
 							</div>
 						{/if}
 					</div>

@@ -15,7 +15,7 @@ from app.middleware.auth import get_current_user
 from app.repositories.account_repository import AccountRepository
 from app.repositories.api_repository import APIRepository
 from app.repositories.trading_history_repository import TradingHistoryRepository
-from app.services.api_service import ApiService, NetworkError, ExchangeError
+from app.services.api_service import APIService, NetworkError, ExchangeError
 
 router = APIRouter(prefix="/mytrades", tags=["mytrades-v2"])
 
@@ -213,6 +213,7 @@ async def update_cursor(
 @router.get("", response_model=List[TradeItem])
 async def get_mytrades(
     acct_id: int = Query(..., description="Account ID (required)"),
+    product_id: int = Query(..., description="Product ID (required)"),
     source: str = Query(..., description="Data source: 'db' or 'exch'"),
     start_ms: int = Query(..., description="Start time in epoch milliseconds (inclusive)"),
     end_ms: Optional[int] = Query(None, description="End time in epoch milliseconds (inclusive, default now)"),
@@ -236,6 +237,13 @@ async def get_mytrades(
             detail="Account not found or does not belong to user",
         )
 
+    product = db.query(RefProduct).filter(RefProduct.id == product_id).first()
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found",
+        )
+
     side_lower = side.lower()
     if side_lower not in ("buy", "sell", "all"):
         raise HTTPException(
@@ -251,6 +259,7 @@ async def get_mytrades(
         return _query_from_db(
             db=db,
             acct_id=acct_id,
+            product_id=product_id,
             side=side_lower,
             symbol=symbol,
             since=since_dt,
@@ -262,6 +271,7 @@ async def get_mytrades(
     return _query_from_exchange(
         db=db,
         account=account,
+        product=product,
         side=side_lower,
         symbol=symbol,
         start_ms=start_ms,
@@ -275,6 +285,7 @@ async def get_mytrades(
 def _query_from_db(
     db: Session,
     acct_id: int,
+    product_id: int,
     side: str,
     symbol: Optional[str],
     since: datetime,
@@ -285,6 +296,7 @@ def _query_from_db(
     side_filter = SIDE_MAP.get(side)  # None when 'all'
     rows = repo.query_trading_history(
         acct_id=acct_id,
+        product_id=product_id,
         side=side_filter,
         symbol=symbol,
         since=since,
@@ -324,14 +336,15 @@ def _select_best_api(apis: list) -> object:
 def _query_from_exchange(
     db: Session,
     account,
+    product,
     side: str,
     symbol: Optional[str],
     start_ms: int,
     end_ms: int,
     limit: int,
 ) -> List[TradeItem]:
-    logger.info("_query_from_exchange: acct_id=%s exch_id=%s start_ms=%s end_ms=%s side=%s symbol=%s limit=%s",
-        account.id, account.exch_id, start_ms, end_ms, side, symbol, limit)
+    logger.info("_query_from_exchange: acct_id=%s exch_id=%s product_id=%s start_ms=%s end_ms=%s side=%s symbol=%s limit=%s",
+        account.id, account.exch_id, product.id, start_ms, end_ms, side, symbol, limit)
 
     api_repo = APIRepository(db)
     apis = api_repo.get_by_acct(account.id)
@@ -351,60 +364,54 @@ def _query_from_exchange(
             detail="Exchange not found for this account",
         )
     exchange_slug = (exchange.slug or exchange.name or "").upper()
-    logger.info("_query_from_exchange: exchange=%s (id=%s)", exchange_slug, account.exch_id)
-
-    products = db.query(RefProduct).all()
-    product_slug_map = {p.slug.upper(): p for p in products}  # slug -> RefProduct
-    logger.info("_query_from_exchange: will query products: %s", list(product_slug_map.keys()))
+    slug = (product.slug or "").upper()
+    logger.info("_query_from_exchange: exchange=%s (id=%s) category=%s (product_id=%s)", exchange_slug, account.exch_id, slug, product.id)
 
     side_filter = SIDE_MAP.get(side)
-    api_service = ApiService()
+    api_service = APIService()
     all_items: List[TradeItem] = []
 
-    for slug, product in product_slug_map.items():
-        logger.info("_query_from_exchange: requesting category=%s (product_id=%s)", slug, product.id)
-        try:
-            raw_trades = api_service.get_mytrades(
-                exchange=exchange_slug,
-                api_key=api.api_key,
-                api_secret=api.api_secret,
-                category=slug,
-                start_ms=start_ms,
-                end_ms=end_ms,
-                symbol=symbol,
-                limit=limit,
-                passphrase=api.passphrase,
-                api_type=api.api_type,
-            )
-        except (NetworkError, ExchangeError) as exc:
-            logger.warning("_query_from_exchange: skipping %s/%s: %s", exchange_slug, slug, exc)
+    try:
+        client = api_service.get_exchange_client_from_api_info(exchange_slug, api)
+        raw_trades = client.get_mytrades(
+            category=slug,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            symbol=symbol,
+            limit=limit,
+        )
+    except (NetworkError, ExchangeError) as exc:
+        logger.warning("_query_from_exchange: failed %s/%s: %s", exchange_slug, slug, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Exchange error: {exc}",
+        )
+
+    logger.info("_query_from_exchange: %s/%s returned %d raw trades", exchange_slug, slug, len(raw_trades))
+
+    for t in raw_trades:
+        trade_side = t.get("side", "")
+        if side_filter and trade_side != side_filter:
             continue
-
-        logger.info("_query_from_exchange: %s/%s returned %d raw trades", exchange_slug, slug, len(raw_trades))
-
-        for t in raw_trades:
-            trade_side = t.get("side", "")
-            if side_filter and trade_side != side_filter:
-                continue
-            exec_time_ms = t.get("exec_time_ms", 0)
-            exec_dt = datetime.fromtimestamp(exec_time_ms / 1000.0, tz=timezone.utc) if exec_time_ms else datetime.now(timezone.utc)
-            all_items.append(
-                TradeItem(
-                    exch_id=account.exch_id,
-                    exch_tid=t.get("exch_tid", 0),
-                    acct_id=account.id,
-                    order_id=t.get("order_id", 0),
-                    symbol=t.get("symbol", ""),
-                    product_id=product.id,
-                    side=trade_side,
-                    exec_px=t.get("exec_px", "0"),
-                    exec_qty=t.get("exec_qty", "0"),
-                    exec_fee=t.get("exec_fee", "0"),
-                    fee_currency=t.get("fee_currency", ""),
-                    is_maker=t.get("is_maker", False),
-                    exec_time=exec_dt,
-                )
+        exec_time_ms = t.get("exec_time_ms", 0)
+        exec_dt = datetime.fromtimestamp(exec_time_ms / 1000.0, tz=timezone.utc) if exec_time_ms else datetime.now(timezone.utc)
+        all_items.append(
+            TradeItem(
+                exch_id=account.exch_id,
+                exch_tid=t.get("exch_tid", 0),
+                acct_id=account.id,
+                order_id=t.get("order_id", 0),
+                symbol=t.get("symbol", ""),
+                product_id=product.id,
+                side=trade_side,
+                exec_px=t.get("exec_px", "0"),
+                exec_qty=t.get("exec_qty", "0"),
+                exec_fee=t.get("exec_fee", "0"),
+                fee_currency=t.get("fee_currency", ""),
+                is_maker=t.get("is_maker", False),
+                exec_time=exec_dt,
             )
+        )
 
     all_items.sort(key=lambda x: x.exec_time, reverse=True)
     result = all_items[:limit]

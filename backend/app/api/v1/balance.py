@@ -8,7 +8,7 @@ from app.db.session import get_db
 from app.models import User
 from app.middleware.auth import get_current_user
 from app.repositories.api_repository import APIArchivedRepository
-from app.services.api_service import ApiService, NetworkError, ExchangeError
+from app.services.api_service import APIService, NetworkError, ExchangeError
 
 router = APIRouter(prefix="/balance", tags=["balance"])
 
@@ -69,13 +69,13 @@ class BalanceResponse(BaseModel):
     wallets: List[WalletBalance]
 
 
-def _get_balance_for_api(api, api_service: ApiService) -> BalanceResponse:
+def _get_balance_for_api(api, api_service: APIService) -> BalanceResponse:
     """
     Helper function to get balance for a single API and convert to response model.
     
     Args:
         api: API model instance
-        api_service: ApiService instance
+        api_service: APIService instance
         
     Returns:
         BalanceResponse object
@@ -84,13 +84,8 @@ def _get_balance_for_api(api, api_service: ApiService) -> BalanceResponse:
         NetworkError: If network error occurs
         ExchangeError: If exchange error occurs
     """
-    balance_data = api_service.get_balance(
-        exchange=api.exchange,  # type: ignore
-        api_key=api.api_key,
-        api_secret=api.api_secret,
-        passphrase=api.passphrase,
-        api_type=api.api_type  # type: ignore
-    )
+    client = api_service.get_exchange_client_from_api_info(api.exchange, api)  # type: ignore
+    balance_data = client.get_balance()
     
     # Convert to response model
     wallets = [
@@ -154,7 +149,7 @@ async def get_balances(
     
     # Get API repository and service
     api_repo = APIArchivedRepository(db)
-    api_service = ApiService()
+    api_service = APIService()
     
     # First, collect all valid APIs
     valid_apis = []
@@ -218,7 +213,7 @@ async def get_balance_by_api_id(
         )
     
     # Get balance using API service
-    api_service = ApiService()
+    api_service = APIService()
     try:
         return _get_balance_for_api(api, api_service)
         

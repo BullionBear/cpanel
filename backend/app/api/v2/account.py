@@ -12,7 +12,7 @@ from app.middleware.auth import get_current_user
 from app.repositories.api_repository import APIRepository
 from app.repositories.account_repository import AccountRepository
 from app.repositories.wallet_repository import WalletRepository
-from app.services.api_service import ApiService, NetworkError, ExchangeError
+from app.services.api_service import APIService, NetworkError, ExchangeError
 
 router = APIRouter(prefix="/account", tags=["account-v2"])
 
@@ -198,14 +198,16 @@ async def register_api_key(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Exchange with ID {api_data.exch_id} not found",
         )
-    api_service = ApiService()
+    api_service = APIService()
     try:
-        api_service.verify_api(
+        client = api_service.get_exchange_client(
             exchange=exchange.name.upper(),
             api_key=api_data.api_key,
             api_secret=api_data.api_secret,
             passphrase=api_data.passphrase,
+            api_type=api_data.api_type,
         )
+        client.verify_api()
     except NetworkError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -216,12 +218,7 @@ async def register_api_key(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Exchange error while verifying API: {e.message}",
         )
-    uid = api_service.get_account_uid(
-        exchange=exchange.name.upper(),
-        api_key=api_data.api_key,
-        api_secret=api_data.api_secret,
-        passphrase=api_data.passphrase,
-    )
+    uid = client.get_account_uid()
 
     account_repo = AccountRepository(db)
     account = account_repo.get_by_user_and_uid(current_user.id, api_data.exch_id, uid)

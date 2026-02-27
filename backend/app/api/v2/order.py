@@ -10,7 +10,7 @@ from app.middleware.auth import get_current_user
 from app.repositories.api_repository import APIRepository
 from app.repositories.account_repository import AccountRepository
 from app.repositories.symbol_repository import SymbolRepository
-from app.services.api_service import ApiService, NetworkError, ExchangeError
+from app.services.api_service import APIService, NetworkError, ExchangeError
 
 router = APIRouter(prefix="/order", tags=["orders-v2"])
 
@@ -138,19 +138,15 @@ async def create_order(
             detail=f"Symbol belongs to exchange '{symbol.exchange.slug}', but API key is for '{exchange_slug}'",
         )
 
-    api_service = ApiService()
+    api_service = APIService()
     try:
-        order_result = api_service.create_order(
-            exchange=exchange_slug,
-            api_key=api.api_key,
-            api_secret=api.api_secret,
+        client = api_service.get_exchange_client_from_api_info(exchange_slug, api)
+        order_result = client.create_order(
             symbol=symbol.name,
             side=order_data.side,
             order_type=order_data.type,
             quantity=order_data.qty,
             price=order_data.price,
-            passphrase=api.passphrase,
-            api_type=api.api_type,
         )
         return OrderResponse(
             order_id=order_result.get("order_id", ""),
@@ -186,19 +182,13 @@ async def create_order(
 def _get_open_orders_for_api(
     api: Any,
     exchange_slug: str,
-    api_service: ApiService,
+    api_service: APIService,
     account_name: str,
     symbol_name: Optional[str] = None,
 ) -> List[OrderResponse]:
     """Get open orders for a single API and convert to response model."""
-    open_orders = api_service.get_open_orders(
-        exchange=exchange_slug,
-        api_key=api.api_key,
-        api_secret=api.api_secret,
-        symbol=symbol_name,
-        passphrase=api.passphrase,
-        api_type=api.api_type,
-    )
+    client = api_service.get_exchange_client_from_api_info(exchange_slug, api)
+    open_orders = client.get_open_orders(symbol=symbol_name)
     return [
         OrderResponse(
             order_id=order.get("order_id", ""),
@@ -228,7 +218,7 @@ async def get_open_orders(
     """Get all open orders. Optionally filter by account_id (API key ID) and symbol_id."""
     api_repo = APIRepository(db)
     account_repo = AccountRepository(db)
-    api_service = ApiService()
+    api_service = APIService()
 
     symbol = None
     if symbol_id:
@@ -337,17 +327,13 @@ async def cancel_order(
             detail=f"Symbol belongs to exchange '{symbol.exchange.slug}', but API key is for '{exchange_slug}'",
         )
 
-    api_service = ApiService()
+    api_service = APIService()
     try:
-        cancel_result = api_service.cancel_order(
-            exchange=exchange_slug,
-            api_key=api.api_key,
-            api_secret=api.api_secret,
+        client = api_service.get_exchange_client_from_api_info(exchange_slug, api)
+        cancel_result = client.cancel_order(
             symbol=symbol.name,
             order_id=cancel_data.order_id,
             client_order_id=cancel_data.client_order_id,
-            passphrase=api.passphrase,
-            api_type=api.api_type,
         )
         return OrderResponse(
             order_id=cancel_result.get("order_id", ""),
