@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String
 
 from . import Base
 
@@ -10,9 +10,9 @@ class TradingHistory(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     exch_id = Column(Integer, ForeignKey("ref_exchange.id", ondelete="CASCADE"), nullable=False, index=True)
-    exch_tid = Column(Integer, nullable=False, index=True)  # trading uid with respect to the exchange
+    exch_tid = Column(BigInteger, nullable=False, index=True)  # trading uid with respect to the exchange
     acct_id = Column(Integer, ForeignKey("account.id", ondelete="CASCADE"), nullable=False, index=True)
-    order_id = Column(Integer, nullable=False, index=True)  # order id of the trade in exchange
+    order_id = Column(BigInteger, nullable=False, index=True)  # order id of the trade in exchange
     symbol = Column(String(32), nullable=False, index=True)
     product_id = Column(Integer, ForeignKey("ref_product.id", ondelete="CASCADE"), nullable=False, index=True)
     side = Column(String(8), nullable=False)  # 'Buy' or 'Sell'
