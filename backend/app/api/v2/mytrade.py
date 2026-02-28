@@ -249,6 +249,7 @@ async def update_cursor(
 @router.get("/db", response_model=List[TradeItem])
 async def get_mytrades_db(
     acct_id: Optional[str] = Query(None, description="Optional account IDs CSV (e.g. '1,2,3'); empty means all user accounts"),
+    product_id: Optional[int] = Query(None, description="Optional product ID filter"),
     symbol_id: Optional[str] = Query(None, description="Optional symbol IDs CSV (e.g. '10,12')"),
     side: str = Query("all", description="'buy', 'sell', or 'all'"),
     start_ms: Optional[int] = Query(None, description="Optional start time in epoch milliseconds (inclusive)"),
@@ -308,6 +309,14 @@ async def get_mytrades_db(
     until_dt = datetime.fromtimestamp(end_ms / 1000.0, tz=timezone.utc) if end_ms is not None else None
 
     query = db.query(TradingHistory).filter(TradingHistory.acct_id.in_(target_acct_ids))
+    if product_id is not None:
+        product = db.query(RefProduct).filter(RefProduct.id == product_id).first()
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Product not found",
+            )
+        query = query.filter(TradingHistory.product_id == product_id)
     if side_filter is not None:
         query = query.filter(TradingHistory.side == side_filter)
     if symbol_names:
@@ -341,7 +350,6 @@ async def get_mytrades_db(
 @router.get("/exch", response_model=List[TradeItem])
 async def get_mytrades_exch(
     acct_id: int = Query(..., description="Account ID (required)"),
-    product_id: int = Query(..., description="Product ID (required)"),
     symbol_id: int = Query(..., description="Symbol ID (required)"),
     start_ms: int = Query(..., description="Start time in epoch milliseconds (inclusive)"),
     end_ms: int = Query(..., description="End time in epoch milliseconds (inclusive)"),
@@ -377,13 +385,6 @@ async def get_mytrades_exch(
             detail="Account not found or does not belong to user",
         )
 
-    product = db.query(RefProduct).filter(RefProduct.id == product_id).first()
-    if not product:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Product not found",
-        )
-
     symbol_repo = SymbolRepository(db)
     symbol = symbol_repo.get(symbol_id)
     if not symbol:
@@ -396,12 +397,12 @@ async def get_mytrades_exch(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Symbol does not belong to the account exchange",
         )
-    if symbol.product_id != product.id:
+    product = db.query(RefProduct).filter(RefProduct.id == symbol.product_id).first()
+    if not product:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Symbol does not belong to the specified product",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product for symbol not found",
         )
-
     return _query_from_exchange(
         db=db,
         account=account,
