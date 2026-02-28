@@ -6,7 +6,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 logger = logging.getLogger(__name__)
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -24,6 +24,14 @@ API_TYPE_PRIORITY = {"HMAC": 0, "ED25519": 1, "RSA": 2}
 MAX_EXCHANGE_WINDOW_MS = 24 * 60 * 60 * 1000
 
 
+def _format_exec_time(dt: datetime) -> str:
+    """Format datetime as ISO 8601 with milliseconds, e.g. 2026-02-20T12:00:00.996Z."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    ms = int(dt.microsecond / 1000)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{ms:03d}Z"
+
+
 class TradeItem(BaseModel):
     exch_id: int
     exch_tid: int
@@ -38,6 +46,10 @@ class TradeItem(BaseModel):
     fee_currency: str
     is_maker: bool
     exec_time: datetime
+
+    @field_serializer("exec_time")
+    def serialize_exec_time(self, dt: datetime) -> str:
+        return _format_exec_time(dt)
 
 
 SIDE_MAP = {"buy": "Buy", "sell": "Sell"}
