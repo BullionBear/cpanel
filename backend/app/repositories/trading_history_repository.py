@@ -8,7 +8,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
-from app.models import TradingHistory, TradingHistoryCursor
+from app.models import Account, TradingHistory, TradingHistoryCursor
 
 
 class TradingHistoryRepository:
@@ -151,6 +151,26 @@ class TradingHistoryRepository:
     ) -> List[TradingHistoryCursor]:
         """Query trading_history_cursor with optional filters."""
         query = self.db.query(TradingHistoryCursor)
+        if acct_id is not None:
+            query = query.filter(TradingHistoryCursor.acct_id == acct_id)
+        if symbol_id is not None:
+            query = query.filter(TradingHistoryCursor.symbol_id == symbol_id)
+        return query.offset(skip).limit(limit).all()
+
+    def query_cursors_by_user_id(
+        self,
+        user_id: int,
+        acct_id: Optional[int] = None,
+        symbol_id: Optional[int] = None,
+        skip: int = 0,
+        limit: int = 500,
+    ) -> List[TradingHistoryCursor]:
+        """Query cursors scoped to user via account.user_id."""
+        query = (
+            self.db.query(TradingHistoryCursor)
+            .join(Account, TradingHistoryCursor.acct_id == Account.id)
+            .filter(Account.user_id == user_id)
+        )
         if acct_id is not None:
             query = query.filter(TradingHistoryCursor.acct_id == acct_id)
         if symbol_id is not None:

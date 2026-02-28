@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Integer
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Integer, UniqueConstraint
 from sqlalchemy.sql import func
 
 from . import Base
@@ -8,6 +8,7 @@ class TradingHistoryCursor(Base):
     """Cursor for trading history sync per account and symbol."""
 
     __tablename__ = "trading_history_cursor"
+    __table_args__ = (UniqueConstraint("acct_id", "symbol_id", name="uq_trading_history_cursor_acct_symbol"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     acct_id = Column(Integer, ForeignKey("account.id", ondelete="CASCADE"), nullable=False, index=True)

@@ -118,19 +118,15 @@ async def create_cursor(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Symbol does not belong to the account exchange",
         )
-    start_ms = _start_of_month_utc_ms()
     repo = TradingHistoryRepository(db)
     existing = repo.get_cursor(payload.acct_id, payload.symbol_id)
-
     if existing:
-        repo.update_cursor(existing, cursor_start=start_ms, cursor_end=start_ms)
-        return CursorResponse(
-            acct_id=payload.acct_id,
-            symbol_id=payload.symbol_id,
-            cursor_start=start_ms,
-            cursor_end=start_ms,
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cursor already exists for this account and symbol. Use PUT to update.",
         )
 
+    start_ms = _start_of_month_utc_ms()
     repo.create_cursor(
         acct_id=payload.acct_id,
         symbol_id=payload.symbol_id,
@@ -143,6 +139,36 @@ async def create_cursor(
         cursor_start=start_ms,
         cursor_end=start_ms,
     )
+
+
+@router.get("/cursors", response_model=List[CursorResponse])
+async def list_cursors(
+    acct_id: Optional[int] = Query(None, description="Optional filter by account ID"),
+    symbol_id: Optional[int] = Query(None, description="Optional filter by symbol ID"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(500, ge=1, le=1000),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List all cursors for the current user (scoped via account.user_id)."""
+    repo = TradingHistoryRepository(db)
+    cursors = repo.query_cursors_by_user_id(
+        user_id=current_user.id,
+        acct_id=acct_id,
+        symbol_id=symbol_id,
+        skip=skip,
+        limit=limit,
+    )
+    start_ms = _start_of_month_utc_ms()
+    return [
+        CursorResponse(
+            acct_id=c.acct_id,
+            symbol_id=c.symbol_id,
+            cursor_start=c.cursor_start if c.cursor_start is not None else start_ms,
+            cursor_end=c.cursor_end if c.cursor_end is not None else start_ms,
+        )
+        for c in cursors
+    ]
 
 
 @router.get("/cursor", response_model=CursorResponse)
