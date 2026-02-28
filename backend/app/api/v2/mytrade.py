@@ -322,6 +322,157 @@ async def update_cursor(
     )
 
 
+SYNC_LIMIT = 100
+HALF_DAY_MS = 12 * 60 * 60 * 1000
+
+
+class SyncCursorResult(BaseModel):
+    acct_id: int
+    symbol_id: int
+    trades_inserted: int
+    cursor_end: int
+    error: Optional[str] = None
+
+
+class SyncResponse(BaseModel):
+    total_cursors: int
+    total_inserted: int
+    results: List[SyncCursorResult]
+
+
+@router.post("/sync", response_model=SyncResponse)
+async def sync_mytrades(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Sync trades from exchange into DB for all user cursors."""
+    repo = TradingHistoryRepository(db)
+    acct_repo = AccountRepository(db)
+    symbol_repo = SymbolRepository(db)
+
+    cursors = repo.query_cursors_by_user_id(user_id=current_user.id, skip=0, limit=500)
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    results: List[SyncCursorResult] = []
+    total_inserted = 0
+
+    for cursor in cursors:
+        c_start = cursor.cursor_start or 0
+        c_end = cursor.cursor_end or c_start
+        start_ms = c_end + 1
+        end_ms = min(start_ms + HALF_DAY_MS, now_ms)
+
+        if start_ms >= now_ms:
+            results.append(SyncCursorResult(
+                acct_id=cursor.acct_id,
+                symbol_id=cursor.symbol_id,
+                trades_inserted=0,
+                cursor_end=c_end,
+            ))
+            continue
+
+        account = acct_repo.get_by_user_and_id(current_user.id, cursor.acct_id)
+        if not account:
+            results.append(SyncCursorResult(
+                acct_id=cursor.acct_id,
+                symbol_id=cursor.symbol_id,
+                trades_inserted=0,
+                cursor_end=c_end,
+                error="Account not found",
+            ))
+            continue
+
+        symbol = symbol_repo.get(cursor.symbol_id)
+        if not symbol:
+            results.append(SyncCursorResult(
+                acct_id=cursor.acct_id,
+                symbol_id=cursor.symbol_id,
+                trades_inserted=0,
+                cursor_end=c_end,
+                error="Symbol not found",
+            ))
+            continue
+
+        product = db.query(RefProduct).filter(RefProduct.id == symbol.product_id).first()
+        if not product:
+            results.append(SyncCursorResult(
+                acct_id=cursor.acct_id,
+                symbol_id=cursor.symbol_id,
+                trades_inserted=0,
+                cursor_end=c_end,
+                error="Product not found",
+            ))
+            continue
+
+        try:
+            trade_items = _query_from_exchange(
+                db=db,
+                account=account,
+                product=product,
+                side="all",
+                symbol=symbol.name,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                limit=SYNC_LIMIT,
+            )
+        except HTTPException as exc:
+            results.append(SyncCursorResult(
+                acct_id=cursor.acct_id,
+                symbol_id=cursor.symbol_id,
+                trades_inserted=0,
+                cursor_end=c_end,
+                error=str(exc.detail),
+            ))
+            continue
+
+        if len(trade_items) == SYNC_LIMIT:
+            oldest = trade_items[-1]
+            new_cursor_end = int(oldest.exec_time.timestamp() * 1000) + 1
+        else:
+            new_cursor_end = end_ms
+
+        if trade_items:
+            rows = [
+                TradingHistory(
+                    exch_id=t.exch_id,
+                    exch_tid=t.exch_tid,
+                    acct_id=t.acct_id,
+                    order_id=t.order_id,
+                    symbol=t.symbol,
+                    product_id=t.product_id,
+                    side=t.side,
+                    exec_px=t.exec_px,
+                    exec_qty=t.exec_qty,
+                    exec_fee=t.exec_fee,
+                    fee_currency=t.fee_currency,
+                    is_maker=t.is_maker,
+                    exec_time=t.exec_time,
+                )
+                for t in trade_items
+            ]
+            repo.create_trading_history_bulk(rows)
+            total_inserted += len(rows)
+
+        repo.update_cursor(cursor, cursor_end=new_cursor_end)
+        logger.info(
+            "sync: acct_id=%s symbol_id=%s inserted=%d cursor_end=%s",
+            cursor.acct_id, cursor.symbol_id, len(trade_items), new_cursor_end,
+        )
+
+        results.append(SyncCursorResult(
+            acct_id=cursor.acct_id,
+            symbol_id=cursor.symbol_id,
+            trades_inserted=len(trade_items),
+            cursor_end=new_cursor_end,
+        ))
+
+    return SyncResponse(
+        total_cursors=len(cursors),
+        total_inserted=total_inserted,
+        results=results,
+    )
+
+
 @router.get("/db", response_model=List[TradeItem])
 async def get_mytrades_db(
     acct_id: Optional[str] = Query(None, description="Optional account IDs CSV (e.g. '1,2,3'); empty means all user accounts"),

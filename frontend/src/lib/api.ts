@@ -1073,3 +1073,33 @@ export async function getMyTradesDb(params: MyTradesDbParams = {}): Promise<Trad
 	const err = await res.json();
 	throw new Error(err.detail || 'Failed to fetch trading history');
 }
+
+export interface SyncCursorResult {
+	acct_id: number;
+	symbol_id: number;
+	trades_inserted: number;
+	cursor_end: number;
+	error?: string;
+}
+
+export interface SyncResponse {
+	total_cursors: number;
+	total_inserted: number;
+	results: SyncCursorResult[];
+}
+
+export async function syncMyTrades(): Promise<SyncResponse> {
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const res = await fetch(`${API_V2}/mytrades/sync`, {
+		method: 'POST',
+		headers: { Authorization: `Bearer ${token}` }
+	});
+	if (res.ok) return await res.json();
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await res.json();
+	throw new Error(err.detail || 'Failed to sync trades');
+}
