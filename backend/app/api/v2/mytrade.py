@@ -1,6 +1,6 @@
 """MyTrade router (v2): query trading history from DB or exchange."""
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -91,6 +91,13 @@ def _start_of_month_utc_ms() -> int:
     return int(start.timestamp() * 1000)
 
 
+def _now_minus_12h_utc_ms() -> int:
+    """Now minus 12 hours in UTC, as epoch milliseconds."""
+    now = datetime.now(timezone.utc)
+    past = now - timedelta(hours=12)
+    return int(past.timestamp() * 1000)
+
+
 @router.post("/cursor", response_model=CursorResponse, status_code=status.HTTP_201_CREATED)
 async def create_cursor(
     payload: CursorCreatePayload,
@@ -126,7 +133,7 @@ async def create_cursor(
             detail="Cursor already exists for this account and symbol. Use PUT to update.",
         )
 
-    start_ms = _start_of_month_utc_ms()
+    start_ms = _now_minus_12h_utc_ms()
     repo.create_cursor(
         acct_id=payload.acct_id,
         symbol_id=payload.symbol_id,
