@@ -242,6 +242,37 @@ async def get_cursor(
     )
 
 
+class CursorDeletePayload(BaseModel):
+    acct_id: int
+    symbol_id: int
+
+
+@router.delete("/cursor", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_cursor(
+    payload: CursorDeletePayload,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Delete cursor for (acct_id, symbol_id)."""
+    acct_repo = AccountRepository(db)
+    account = acct_repo.get_by_user_and_id(current_user.id, payload.acct_id)
+    if not account:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Account not found or does not belong to user",
+        )
+
+    repo = TradingHistoryRepository(db)
+    cursor = repo.get_cursor(payload.acct_id, payload.symbol_id)
+    if not cursor:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Cursor not found for this account and symbol",
+        )
+    repo.delete_cursor(cursor.id)
+    return None
+
+
 @router.put("/cursor", response_model=CursorResponse)
 async def update_cursor(
     payload: CursorUpdatePayload,

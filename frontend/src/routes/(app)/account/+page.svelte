@@ -8,10 +8,17 @@
 		renameAccountV2,
 		createWalletV2,
 		deleteApiKeyV2,
+		getSymbols,
+		getSymbolsByExchange,
+		getCursorsV2,
+		createCursorV2,
+		deleteCursorV2,
 		type AccountV2,
 		type APIKeyV2,
 		type WalletV2,
-		type WalletType
+		type WalletType,
+		type SymbolInfo,
+		type CursorV2
 	} from '$lib/api';
 	import RegisterAPIKeyModalV2 from '../../../components/RegisterAPIKeyModalV2.svelte';
 
@@ -43,6 +50,16 @@
 	let deleteLoading = false;
 	let deleteError: string | null = null;
 
+	let tickerDialogAcct: AccountV2 | null = null;
+	let tickerSymbols: SymbolInfo[] = [];
+	let tickerFilter = '';
+	let tickerLoading = false;
+	let tickerError: string | null = null;
+
+	let cursors: CursorV2[] = [];
+	let symbolMap: Record<number, SymbolInfo> = {};
+	let allSymbols: SymbolInfo[] = [];
+
 	onMount(() => {
 		loadAll();
 		if (typeof document !== 'undefined') {
@@ -60,12 +77,22 @@
 		loading = true;
 		error = null;
 		try {
-			[accounts, apiKeys, wallets, walletTypes] = await Promise.all([
+			const [accts, keys, wals, wtypes, syms, curs] = await Promise.all([
 				getAccountsV2(),
 				getApiKeysV2(),
 				getWalletsV2(),
-				getWalletTypes()
+				getWalletTypes(),
+				getSymbols(500).catch(() => [] as SymbolInfo[]),
+				getCursorsV2().catch(() => [] as CursorV2[])
 			]);
+			accounts = accts;
+			apiKeys = keys;
+			wallets = wals;
+			walletTypes = wtypes;
+			allSymbols = syms;
+			cursors = curs;
+			symbolMap = {};
+			for (const s of allSymbols) symbolMap[s.id] = s;
 			// Default open first exchange and first account per exchange
 			const exchanges = [...new Set(accounts.map((a) => a.exchange))];
 			exchanges.forEach((ex, i) => {
@@ -256,6 +283,70 @@
 			deleteLoading = false;
 		}
 	}
+
+	function getCursorsForAccount(acctId: number): CursorV2[] {
+		return cursors.filter((c) => c.acct_id === acctId);
+	}
+
+	function getTickerName(symbolId: number): string {
+		return symbolMap[symbolId]?.universal_ticker ?? `symbol#${symbolId}`;
+	}
+
+	async function openTickerDialog(acct: AccountV2, e: MouseEvent) {
+		e.stopPropagation();
+		openMenuAcctId = null;
+		tickerDialogAcct = acct;
+		tickerFilter = '';
+		tickerError = null;
+		tickerLoading = true;
+		try {
+			tickerSymbols = await getSymbolsByExchange(acct.exch_id, 500);
+		} catch (err) {
+			tickerSymbols = allSymbols.filter((s) => s.exchange.id === acct.exch_id);
+		} finally {
+			tickerLoading = false;
+		}
+	}
+
+	function closeTickerDialog() {
+		if (!tickerLoading) {
+			tickerDialogAcct = null;
+			tickerSymbols = [];
+			tickerFilter = '';
+			tickerError = null;
+		}
+	}
+
+	$: filteredTickers = tickerSymbols.filter((s) =>
+		s.universal_ticker.toLowerCase().includes(tickerFilter.toLowerCase())
+	);
+
+	$: acctCursorSymbolIds = (() => {
+		if (!tickerDialogAcct) return new Set<number>();
+		return new Set(
+			cursors.filter((c) => c.acct_id === tickerDialogAcct!.id).map((c) => c.symbol_id)
+		);
+	})();
+
+	async function toggleTicker(sym: SymbolInfo) {
+		if (!tickerDialogAcct) return;
+		tickerLoading = true;
+		tickerError = null;
+		const isAssociated = acctCursorSymbolIds.has(sym.id);
+		try {
+			if (isAssociated) {
+				await deleteCursorV2(tickerDialogAcct.id, sym.id);
+			} else {
+				await createCursorV2(tickerDialogAcct.id, sym.id);
+			}
+			cursors = await getCursorsV2().catch(() => cursors);
+		} catch (err) {
+			tickerError = err instanceof Error ? err.message : (isAssociated ? 'Failed to remove ticker' : 'Failed to associate ticker');
+			tickerLoading = false;
+			return;
+		}
+		tickerLoading = false;
+	}
 </script>
 
 <div class="account-page">
@@ -364,12 +455,15 @@
 												<button type="button" class="widget-item" role="menuitem" on:click={(e) => openRenameDialog(acct, e)}>
 													Rename
 												</button>
-												<button type="button" class="widget-item" role="menuitem" on:click={(e) => openWalletDialog(acct, e)}>
-													Associate Wallet
-												</button>
-												<button type="button" class="widget-item widget-item-danger" role="menuitem" on:click={(e) => openDeleteDialog(acct, e)}>
-													Delete
-												</button>
+											<button type="button" class="widget-item" role="menuitem" on:click={(e) => openWalletDialog(acct, e)}>
+												Associate Wallet
+											</button>
+											<button type="button" class="widget-item" role="menuitem" on:click={(e) => openTickerDialog(acct, e)}>
+												Associate Ticker
+											</button>
+											<button type="button" class="widget-item widget-item-danger" role="menuitem" on:click={(e) => openDeleteDialog(acct, e)}>
+												Delete
+											</button>
 											</div>
 										{/if}
 									</div>
@@ -405,11 +499,22 @@
 													</div>
 												{/each}
 											</div>
-										{:else}
-											<p class="no-wallets">No wallets for this account.</p>
-										{/if}
-									</div>
-								{/if}
+									{:else}
+										<p class="no-wallets">No wallets for this account.</p>
+									{/if}
+
+									{#if getCursorsForAccount(acct.id).length > 0}
+										<div class="cursors-section">
+											<div class="cursors-title">Associated Tickers</div>
+											<div class="cursors-list">
+												{#each getCursorsForAccount(acct.id) as cur}
+													<span class="cursor-tag">{getTickerName(cur.symbol_id)}</span>
+												{/each}
+											</div>
+										</div>
+									{/if}
+								</div>
+							{/if}
 							</div>
 						{/each}
 					</div>
@@ -471,6 +576,54 @@
 						</button>
 					</div>
 				</form>
+			</div>
+		</div>
+	{/if}
+
+	<!-- Associate Ticker dialog -->
+	{#if tickerDialogAcct}
+		<div class="dialog-backdrop" role="presentation" on:click={(e) => e.target === e.currentTarget && closeTickerDialog()}>
+			<div class="dialog ticker-dialog" role="dialog" aria-labelledby="ticker-title">
+				<h2 id="ticker-title" class="dialog-title">Associate Ticker</h2>
+				<p class="dialog-desc">Select a ticker to associate with <strong>{tickerDialogAcct.name}</strong>.</p>
+				<div class="form-group">
+					<input
+						type="text"
+						bind:value={tickerFilter}
+						placeholder="Filter tickers..."
+						disabled={tickerLoading}
+					/>
+				</div>
+				{#if tickerError}
+					<div class="dialog-error">{tickerError}</div>
+				{/if}
+				{#if tickerLoading && tickerSymbols.length === 0}
+					<div class="ticker-loading">Loading tickers...</div>
+				{:else}
+					<div class="ticker-list">
+						{#each filteredTickers as sym (sym.id)}
+							{@const alreadyAssociated = acctCursorSymbolIds.has(sym.id)}
+							<button
+								type="button"
+								class="ticker-item"
+								class:associated={alreadyAssociated}
+								disabled={tickerLoading}
+								on:click={() => toggleTicker(sym)}
+							>
+								<span class="ticker-name">{sym.universal_ticker}</span>
+								{#if alreadyAssociated}
+									<span class="ticker-check">&#10003;</span>
+								{/if}
+							</button>
+						{/each}
+						{#if filteredTickers.length === 0 && !tickerLoading}
+							<p class="ticker-empty">No tickers found.</p>
+						{/if}
+					</div>
+				{/if}
+				<div class="dialog-actions">
+					<button type="button" class="btn-cancel" on:click={closeTickerDialog} disabled={tickerLoading}>Close</button>
+				</div>
 			</div>
 		</div>
 	{/if}
@@ -930,6 +1083,108 @@
 		margin: 0;
 		color: #6b7280;
 		font-size: 14px;
+	}
+
+	/* Cursors section */
+	.cursors-section {
+		margin-top: 16px;
+		padding-top: 12px;
+		border-top: 1px solid #f3f4f6;
+	}
+
+	.cursors-title {
+		font-size: 12px;
+		font-weight: 500;
+		color: #374151;
+		margin-bottom: 8px;
+	}
+
+	.cursors-list {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+
+	.cursor-tag {
+		display: inline-block;
+		padding: 3px 10px;
+		background: #eef2ff;
+		border: 1px solid #c7d2fe;
+		border-radius: 12px;
+		font-size: 12px;
+		font-weight: 500;
+		color: #4338ca;
+	}
+
+	/* Ticker dialog */
+	.ticker-dialog {
+		max-width: 480px;
+	}
+
+	.ticker-loading {
+		text-align: center;
+		padding: 20px;
+		color: #6b7280;
+		font-size: 14px;
+	}
+
+	.ticker-list {
+		max-height: 320px;
+		overflow-y: auto;
+		border: 1px solid #e5e7eb;
+		border-radius: 6px;
+		margin-bottom: 8px;
+	}
+
+	.ticker-item {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		width: 100%;
+		padding: 10px 12px;
+		border: none;
+		border-bottom: 1px solid #f3f4f6;
+		background: white;
+		text-align: left;
+		font-size: 13px;
+		cursor: pointer;
+		transition: background 0.15s;
+	}
+
+	.ticker-item:last-child {
+		border-bottom: none;
+	}
+
+	.ticker-item:hover:not(:disabled) {
+		background: #f0f4ff;
+	}
+
+	.ticker-item.associated {
+		background: #f0fdf4;
+		cursor: default;
+	}
+
+	.ticker-name {
+		font-weight: 500;
+		color: #111827;
+	}
+
+	.ticker-item.associated .ticker-name {
+		color: #15803d;
+	}
+
+	.ticker-check {
+		color: #16a34a;
+		font-size: 14px;
+		font-weight: 700;
+	}
+
+	.ticker-empty {
+		text-align: center;
+		padding: 20px;
+		color: #9ca3af;
+		font-size: 14px;
+		margin: 0;
 	}
 
 	/* Dialogs */
