@@ -957,3 +957,149 @@ export async function deleteApiKeyV2(apiId: number): Promise<void> {
 	const err = await res.json();
 	throw new Error(err.detail || 'Failed to delete API key');
 }
+
+export interface CursorV2 {
+	acct_id: number;
+	symbol_id: number;
+	cursor_start: number;
+	cursor_end: number;
+}
+
+export async function getCursorsV2(acctId?: number): Promise<CursorV2[]> {
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const q = acctId != null ? `?acct_id=${acctId}` : '';
+	const res = await fetch(`${API_V2}/mytrades/cursors${q}`, {
+		headers: { Authorization: `Bearer ${token}` }
+	});
+	if (res.ok) return await res.json();
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	return [];
+}
+
+export async function createCursorV2(acctId: number, symbolId: number): Promise<CursorV2> {
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const res = await fetch(`${API_V2}/mytrades/cursor`, {
+		method: 'POST',
+		headers: {
+			Authorization: `Bearer ${token}`,
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify({ acct_id: acctId, symbol_id: symbolId })
+	});
+	if (res.ok) return await res.json();
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await res.json();
+	throw new Error(err.detail || 'Failed to create cursor');
+}
+
+export async function deleteCursorV2(acctId: number, symbolId: number): Promise<void> {
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const res = await fetch(`${API_V2}/mytrades/cursor`, {
+		method: 'DELETE',
+		headers: {
+			Authorization: `Bearer ${token}`,
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify({ acct_id: acctId, symbol_id: symbolId })
+	});
+	if (res.ok || res.status === 204) return;
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await res.json();
+	throw new Error(err.detail || 'Failed to delete cursor');
+}
+
+export async function getSymbolsByExchange(exchangeId: number, limit: number = 500): Promise<SymbolInfo[]> {
+	const res = await fetch(`${API_V1}/symbol?exchange_id=${exchangeId}&limit=${limit}`);
+	if (res.ok) return await res.json();
+	return [];
+}
+
+export interface TradeItemV2 {
+	exch_id: number;
+	exch_tid: number;
+	acct_id: number;
+	order_id: number;
+	symbol: string;
+	product_id: number;
+	side: string;
+	exec_px: string;
+	exec_qty: string;
+	exec_fee: string;
+	fee_currency: string;
+	is_maker: boolean;
+	exec_time: string;
+}
+
+export interface MyTradesDbParams {
+	acct_id?: string;
+	symbol_id?: string;
+	side?: string;
+	start_ms?: number;
+	end_ms?: number;
+	limit?: number;
+}
+
+export async function getMyTradesDb(params: MyTradesDbParams = {}): Promise<TradeItemV2[]> {
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const q = new URLSearchParams();
+	if (params.acct_id) q.set('acct_id', params.acct_id);
+	if (params.symbol_id) q.set('symbol_id', params.symbol_id);
+	if (params.side && params.side !== 'all') q.set('side', params.side);
+	if (params.start_ms != null) q.set('start_ms', String(params.start_ms));
+	if (params.end_ms != null) q.set('end_ms', String(params.end_ms));
+	if (params.limit != null) q.set('limit', String(params.limit));
+	const qs = q.toString();
+	const res = await fetch(`${API_V2}/mytrades/db${qs ? '?' + qs : ''}`, {
+		headers: { Authorization: `Bearer ${token}` }
+	});
+	if (res.ok) return await res.json();
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await res.json();
+	throw new Error(err.detail || 'Failed to fetch trading history');
+}
+
+export interface SyncCursorResult {
+	acct_id: number;
+	symbol_id: number;
+	trades_inserted: number;
+	cursor_end: number;
+	error?: string;
+}
+
+export interface SyncResponse {
+	total_cursors: number;
+	total_inserted: number;
+	results: SyncCursorResult[];
+}
+
+export async function syncMyTrades(): Promise<SyncResponse> {
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const res = await fetch(`${API_V2}/mytrades/sync`, {
+		method: 'POST',
+		headers: { Authorization: `Bearer ${token}` }
+	});
+	if (res.ok) return await res.json();
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await res.json();
+	throw new Error(err.detail || 'Failed to sync trades');
+}
