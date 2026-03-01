@@ -88,6 +88,15 @@
 		return v.replace(/\.?0+$/, '');
 	}
 
+	function shortId(v: number | string): string {
+		const raw = String(v);
+		const digits = raw.replace(/\D/g, '');
+		const suffix = digits.slice(-8);
+		if (!suffix) return raw;
+		const trimmed = suffix.replace(/^0+/, '');
+		return trimmed || '0';
+	}
+
 	function formatTime(iso: string): string {
 		const d = new Date(iso);
 		const pad = (n: number) => String(n).padStart(2, '0');
@@ -312,8 +321,8 @@
 									<tr class="trade-row" class:expanded={expandedIdx === idx}>
 										<td class="mono">{formatTime(trade.exec_time)}</td>
 										<td>{resolveExchange(trade.exch_id)}</td>
-										<td class="mono">{trade.exch_tid}</td>
-										<td class="mono">{trade.order_id}</td>
+										<td class="mono">{shortId(trade.exch_tid)}</td>
+										<td class="mono">{shortId(trade.order_id)}</td>
 										<td>{resolveAccount(trade.acct_id)}</td>
 										<td class="ticker">{resolveTicker(trade)}</td>
 										<td>
