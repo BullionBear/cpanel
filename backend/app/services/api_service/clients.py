@@ -739,6 +739,9 @@ class BybitExchangeClient(ExchangeClient):
                 "qty": quantity,
                 "orderLinkId": client_order_id,
             }
+            # Standardize spot market qty semantics: always treat qty as base coin.
+            if order_type == "MARKET":
+                params["marketUnit"] = "baseCoin"
             if order_type == "LIMIT":
                 if price is None:
                     raise ExchangeError("Price is required for LIMIT orders", exchange="BYBIT")
