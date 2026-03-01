@@ -34,9 +34,9 @@ def _format_exec_time(dt: datetime) -> str:
 
 class TradeItem(BaseModel):
     exch_id: int
-    exch_tid: int
+    exch_tid: str
     acct_id: int
-    order_id: int
+    order_id: str
     symbol: str
     product_id: int
     side: str
@@ -435,9 +435,9 @@ async def sync_mytrades(
             rows = [
                 TradingHistory(
                     exch_id=t.exch_id,
-                    exch_tid=t.exch_tid,
+                    exch_tid=int(t.exch_tid),
                     acct_id=t.acct_id,
-                    order_id=t.order_id,
+                    order_id=int(t.order_id),
                     symbol=t.symbol,
                     product_id=t.product_id,
                     side=t.side,
@@ -557,9 +557,9 @@ async def get_mytrades_db(
     return [
         TradeItem(
             exch_id=r.exch_id,
-            exch_tid=r.exch_tid,
+            exch_tid=str(r.exch_tid),
             acct_id=r.acct_id,
-            order_id=r.order_id,
+            order_id=str(r.order_id),
             symbol=r.symbol,
             product_id=r.product_id,
             side=r.side,
@@ -715,9 +715,9 @@ def _query_from_exchange(
             all_items.append(
                 TradeItem(
                     exch_id=account.exch_id,
-                    exch_tid=t.get("exch_tid", 0),
+                    exch_tid=str(t.get("exch_tid", 0)),
                     acct_id=account.id,
-                    order_id=t.get("order_id", 0),
+                    order_id=str(t.get("order_id", 0)),
                     symbol=t.get("symbol", ""),
                     product_id=product.id,
                     side=trade_side,

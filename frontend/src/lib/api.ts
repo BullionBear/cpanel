@@ -1028,9 +1028,9 @@ export async function getSymbolsByExchange(exchangeId: number, limit: number = 5
 
 export interface TradeItemV2 {
 	exch_id: number;
-	exch_tid: number;
+	exch_tid: string;
 	acct_id: number;
-	order_id: number;
+	order_id: string;
 	symbol: string;
 	product_id: number;
 	side: string;
