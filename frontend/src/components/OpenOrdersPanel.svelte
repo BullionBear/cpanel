@@ -8,6 +8,11 @@
 	let loading = true;
 	let error: string | null = null;
 	let cancelingOrderId: string | null = null;
+	let expandedOrderId: string | null = null;
+
+	function toggleDetail(orderId: string) {
+		expandedOrderId = expandedOrderId === orderId ? null : orderId;
+	}
 
 	async function loadData() {
 		try {
@@ -137,7 +142,8 @@
 						<th>Price</th>
 						<th>Size</th>
 						<th>Created</th>
-						<th></th>
+						<th>Detail</th>
+						<th>Cancel</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -160,7 +166,17 @@
 							<td class="price">{order.price}</td>
 							<td class="size">{order.quantity}</td>
 							<td class="time">{formatDateTime(order.created_at)}</td>
-							<td>
+						<td>
+								<button
+									class="detail-btn"
+									class:active={expandedOrderId === order.order_id}
+									on:click={() => toggleDetail(order.order_id)}
+									title="Order details"
+								>
+									Detail
+								</button>
+						</td>
+						<td>
 								<button 
 									class="cancel-btn" 
 									on:click={() => handleCancel(order)}
@@ -169,8 +185,24 @@
 								>
 									{cancelingOrderId === order.order_id ? '...' : '✕'}
 								</button>
+						</td>
+					</tr>
+					{#if expandedOrderId === order.order_id}
+						<tr class="detail-row">
+							<td colspan="3">
+								<div class="detail-label">Order ID</div>
+								<div class="detail-value mono">{order.order_id}</div>
+							</td>
+							<td colspan="3">
+								<div class="detail-label">Client Order ID</div>
+								<div class="detail-value mono">{order.client_order_id}</div>
+							</td>
+							<td colspan="2">
+								<div class="detail-label">Type</div>
+								<div class="detail-value">{order.type}</div>
 							</td>
 						</tr>
+					{/if}
 					{/each}
 				</tbody>
 			</table>
@@ -268,7 +300,7 @@
 
 	.orders-table th {
 		padding: 10px 12px;
-		text-align: left;
+		text-align: center;
 		font-weight: 600;
 		color: #6b7280;
 		border-bottom: 1px solid #e5e7eb;
@@ -277,6 +309,7 @@
 
 	.orders-table td {
 		padding: 12px;
+		text-align: center;
 		border-bottom: 1px solid #f3f4f6;
 		vertical-align: middle;
 	}
@@ -288,6 +321,7 @@
 	.account-cell {
 		display: flex;
 		align-items: center;
+		justify-content: center;
 		gap: 8px;
 	}
 
@@ -340,6 +374,58 @@
 		white-space: nowrap;
 	}
 
+	.detail-btn {
+		padding: 4px 10px;
+		border: 1px solid #d1d5db;
+		background: #f9fafb;
+		border-radius: 6px;
+		cursor: pointer;
+		color: #374151;
+		font-size: 12px;
+		font-weight: 500;
+		transition: all 0.2s;
+		white-space: nowrap;
+	}
+
+	.detail-btn:hover {
+		background: #e5e7eb;
+		border-color: #9ca3af;
+	}
+
+	.detail-btn.active {
+		background: #eef2ff;
+		border-color: #818cf8;
+		color: #4338ca;
+	}
+
+	.detail-row td {
+		padding: 8px 12px !important;
+		border-bottom: 1px solid #e5e7eb !important;
+		background: #f9fafb;
+		text-align: center;
+	}
+
+	.detail-label {
+		font-size: 11px;
+		color: #6b7280;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.03em;
+		margin-bottom: 2px;
+	}
+
+	.detail-value {
+		font-size: 13px;
+		color: #1f2937;
+		font-weight: 500;
+		word-break: break-all;
+	}
+
+	.detail-value.mono {
+		font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+		font-size: 12px;
+	}
+
 	.cancel-btn {
 		display: flex;
 		align-items: center;
@@ -381,7 +467,7 @@
 
 		.account-cell {
 			flex-direction: column;
-			align-items: flex-start;
+			align-items: center;
 			gap: 4px;
 		}
 	}
