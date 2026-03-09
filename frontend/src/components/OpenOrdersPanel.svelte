@@ -432,6 +432,7 @@
 		justify-content: center;
 		width: 28px;
 		height: 28px;
+		margin: 0 auto;
 		border: none;
 		background: #fee2e2;
 		border-radius: 6px;
