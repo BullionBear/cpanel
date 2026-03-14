@@ -1,5 +1,5 @@
 <script>
-	import { API_V1 } from '../lib/config';
+	import { API_V2 } from '../lib/config';
 	
 	let username = '';
 	let email = '';
@@ -32,7 +32,7 @@
 		loading = true;
 
 		try {
-			const response = await fetch(`${API_V1}/auth/register`, {
+			const response = await fetch(`${API_V2}/auth/register`, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json'

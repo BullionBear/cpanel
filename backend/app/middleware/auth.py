@@ -9,7 +9,7 @@ from app.core.security import decode_access_token
 from app.repositories.user_repository import UserRepository
 from app.repositories.access_repository import AccessRepository
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v2/auth/login")
 
 
 async def get_current_user(

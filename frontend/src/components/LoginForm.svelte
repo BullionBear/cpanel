@@ -1,5 +1,5 @@
 <script>
-	import { API_V1 } from '../lib/config';
+	import { API_V2 } from '../lib/config';
 	
 	let username = '';
 	let password = '';
@@ -17,7 +17,7 @@
 			formData.append('username', username);
 			formData.append('password', password);
 
-			const response = await fetch(`${API_V1}/auth/login`, {
+			const response = await fetch(`${API_V2}/auth/login`, {
 				method: 'POST',
 				body: formData
 			});

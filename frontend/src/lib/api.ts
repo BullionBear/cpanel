@@ -1,4 +1,4 @@
-import { API_V1, API_V2 } from './config';
+import { API_V2 } from './config';
 
 // Key generation types
 export type KeyType = 'RSA' | 'ED25519';
@@ -11,7 +11,7 @@ export interface KeyGenerateResponse {
 
 export async function generateKeyPair(keyType: KeyType, keySize?: number): Promise<KeyGenerateResponse> {
 	try {
-		const response = await fetch(`${API_V1}/tool/keygen`, {
+		const response = await fetch(`${API_V2}/tool/keygen`, {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json'
@@ -47,7 +47,7 @@ export async function getCurrentUser(): Promise<User | null> {
 	}
 
 	try {
-		const response = await fetch(`${API_V1}/auth/me`, {
+		const response = await fetch(`${API_V2}/auth/me`, {
 			headers: {
 				'Authorization': `Bearer ${token}`
 			}
@@ -103,7 +103,7 @@ export async function getAPIKeys(): Promise<APIKey[]> {
 	}
 
 	try {
-		const response = await fetch(`${API_V1}/apikey`, {
+		const response = await fetch(`${API_V2}/apikey`, {
 			headers: {
 				'Authorization': `Bearer ${token}`
 			}
@@ -130,7 +130,7 @@ export async function registerAPIKey(data: APIKeyCreate): Promise<APIKey> {
 	}
 
 	try {
-		const response = await fetch(`${API_V1}/apikey/register`, {
+		const response = await fetch(`${API_V2}/apikey/register`, {
 			method: 'POST',
 			headers: {
 				'Authorization': `Bearer ${token}`,
@@ -160,7 +160,7 @@ export async function deleteAPIKey(apiId: number): Promise<void> {
 	}
 
 	try {
-		const response = await fetch(`${API_V1}/apikey/${apiId}`, {
+		const response = await fetch(`${API_V2}/apikey/${apiId}`, {
 			method: 'DELETE',
 			headers: {
 				'Authorization': `Bearer ${token}`
@@ -195,7 +195,7 @@ export async function getPreference(layout: string = 'execution'): Promise<Prefe
 	}
 
 	try {
-		const response = await fetch(`${API_V1}/preference?layout=${layout}`, {
+		const response = await fetch(`${API_V2}/preference?layout=${layout}`, {
 			headers: {
 				'Authorization': `Bearer ${token}`
 			}
@@ -226,7 +226,7 @@ export interface BBOData {
 export async function getBBOs(symbolIds: number[]): Promise<BBOData[]> {
 	try {
 		const symbolIdParam = symbolIds.join(',');
-		const response = await fetch(`${API_V1}/market/bbos?symbol_id=${symbolIdParam}`);
+		const response = await fetch(`${API_V2}/market/bbos?symbol_id=${symbolIdParam}`);
 
 		if (response.ok) {
 			return await response.json();
@@ -246,7 +246,7 @@ export async function updatePreference(preference: Record<string, any>, layout: 
 	}
 
 	try {
-		const response = await fetch(`${API_V1}/preference?layout=${layout}`, {
+		const response = await fetch(`${API_V2}/preference?layout=${layout}`, {
 			method: 'PUT',
 			headers: {
 				'Authorization': `Bearer ${token}`,
@@ -299,7 +299,7 @@ export interface SymbolInfo {
 
 export async function getSymbols(limit: number = 100): Promise<SymbolInfo[]> {
 	try {
-		const response = await fetch(`${API_V1}/symbol?limit=${limit}`);
+		const response = await fetch(`${API_V2}/symbol?limit=${limit}`);
 
 		if (response.ok) {
 			return await response.json();
@@ -397,7 +397,7 @@ export async function getBalances(apiIds: number[]): Promise<BalanceResponse[]> 
 
 	try {
 		const idParam = apiIds.join(',');
-		const response = await fetch(`${API_V1}/balance?id=${idParam}`, {
+		const response = await fetch(`${API_V2}/balance?id=${idParam}`, {
 			headers: {
 				'Authorization': `Bearer ${token}`
 			}
@@ -566,7 +566,7 @@ export async function getAPIToken(): Promise<APIToken | null> {
 	}
 
 	try {
-		const response = await fetch(`${API_V1}/auth/api-token`, {
+		const response = await fetch(`${API_V2}/auth/api-token`, {
 			headers: {
 				'Authorization': `Bearer ${token}`
 			}
@@ -596,7 +596,7 @@ export async function createAPIToken(): Promise<APIToken> {
 	}
 
 	try {
-		const response = await fetch(`${API_V1}/auth/api-token`, {
+		const response = await fetch(`${API_V2}/auth/api-token`, {
 			method: 'POST',
 			headers: {
 				'Authorization': `Bearer ${token}`,
@@ -625,7 +625,7 @@ export async function deleteAPIToken(): Promise<void> {
 	}
 
 	try {
-		const response = await fetch(`${API_V1}/auth/api-token`, {
+		const response = await fetch(`${API_V2}/auth/api-token`, {
 			method: 'DELETE',
 			headers: {
 				'Authorization': `Bearer ${token}`
@@ -673,7 +673,7 @@ export async function getWallets(): Promise<Wallet[]> {
 	if (!token) {
 		throw new Error('Not authenticated');
 	}
-	const response = await fetch(`${API_V1}/wallet`, {
+	const response = await fetch(`${API_V2}/wallet`, {
 		headers: { 'Authorization': `Bearer ${token}` }
 	});
 	if (response.ok) return await response.json();
@@ -690,7 +690,7 @@ export async function getWalletTypes(): Promise<WalletType[]> {
 	if (!token) {
 		throw new Error('Not authenticated');
 	}
-	const response = await fetch(`${API_V1}/wallet/types`, {
+	const response = await fetch(`${API_V2}/wallet/types`, {
 		headers: { 'Authorization': `Bearer ${token}` }
 	});
 	if (response.ok) return await response.json();
@@ -707,7 +707,7 @@ export async function createWallet(data: WalletCreate): Promise<Wallet> {
 	if (!token) {
 		throw new Error('Not authenticated');
 	}
-	const response = await fetch(`${API_V1}/wallet`, {
+	const response = await fetch(`${API_V2}/wallet`, {
 		method: 'POST',
 		headers: {
 			'Authorization': `Bearer ${token}`,
@@ -729,7 +729,7 @@ export async function deleteWallet(walletId: number): Promise<void> {
 	if (!token) {
 		throw new Error('Not authenticated');
 	}
-	const response = await fetch(`${API_V1}/wallet/${walletId}`, {
+	const response = await fetch(`${API_V2}/wallet/${walletId}`, {
 		method: 'DELETE',
 		headers: { 'Authorization': `Bearer ${token}` }
 	});
@@ -1021,7 +1021,7 @@ export async function deleteCursorV2(acctId: number, symbolId: number): Promise<
 }
 
 export async function getSymbolsByExchange(exchangeId: number, limit: number = 500): Promise<SymbolInfo[]> {
-	const res = await fetch(`${API_V1}/symbol?exchange_id=${exchangeId}&limit=${limit}`);
+	const res = await fetch(`${API_V2}/symbol?exchange_id=${exchangeId}&limit=${limit}`);
 	if (res.ok) return await res.json();
 	return [];
 }

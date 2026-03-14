@@ -106,7 +106,7 @@ async def register(
     )
 
     # Create activation URL
-    activation_url = f"{settings.HOST_URL}{settings.API_V1_PREFIX}/auth/activate?token={activation_token}"
+    activation_url = f"{settings.HOST_URL}{settings.API_PREFIX}/v2/auth/activate?token={activation_token}"
 
     # Send activation email
     email_subject = "Activate Your CPanel Account"
@@ -270,7 +270,7 @@ async def login(
         )
         
         # Create activation URL
-        activation_url = f"{settings.HOST_URL}{settings.API_V1_PREFIX}/auth/activate?token={activation_token}"
+        activation_url = f"{settings.HOST_URL}{settings.API_PREFIX}/v2/auth/activate?token={activation_token}"
         
         # Send activation email
         email_subject = "Activate Your CPanel Account"
@@ -429,7 +429,7 @@ async def get_api_token(
     if not api_token_access:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="No API token found. Create one using POST /api/v1/auth/api-token"
+            detail="No API token found. Create one using POST /api/v2/auth/api-token"
         )
     
     return Token(access_token=api_token_access.access_token, token_type="bearer")
