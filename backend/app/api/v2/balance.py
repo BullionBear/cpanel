@@ -212,3 +212,8 @@ async def get_balance_by_wallet_id(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=error_detail,
         )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch balance from {exchange_name}: {str(e)}",
+        )

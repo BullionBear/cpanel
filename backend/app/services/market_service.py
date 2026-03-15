@@ -2,6 +2,7 @@ from typing import Dict, Any, List
 from pybit.unified_trading import HTTP as BybitHTTP
 from pybit.exceptions import FailedRequestError
 import binance as bn
+import requests
 import logging
 from app.services.api_service import EXCHANGES
 from app.utils import trim_decimal_string
@@ -33,6 +34,8 @@ class MarketService:
                 return self.get_bybit_best_bid_ask(symbol)
             case 'BINANCE':
                 return self.get_binance_best_bid_ask(symbol)
+            case 'BITGET':
+                return self.get_bitget_best_bid_ask(symbol)
             case _:
                 raise ValueError(f"Unsupported exchange: {exchange}")
 
@@ -160,3 +163,47 @@ class MarketService:
         except Exception as e:
             logger.error(f"Unexpected error getting Binance best bid/ask: {e}", exc_info=True)
             raise Exception(f"Unexpected error getting Binance best bid/ask: {str(e)}")
+
+    def get_bitget_best_bid_ask(self, symbol: str) -> Dict[str, List[str]]:
+        """
+        Get the best bid and ask for a given symbol on Bitget.
+
+        Uses public endpoint (orderbook), no authentication required.
+        """
+        try:
+            resp = requests.get(
+                "https://api.bitget.com/api/v2/spot/market/orderbook",
+                params={"symbol": symbol, "limit": "1"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            body = resp.json()
+
+            if str(body.get("code", "")) != "00000":
+                raise Exception(f"Bitget API error: {body.get('msg', 'Unknown error')}")
+
+            data = body.get("data", {})
+            bids = data.get("bids", [])
+            asks = data.get("asks", [])
+
+            if not bids or not asks:
+                raise Exception(f"No bid/ask data found for symbol {symbol}")
+
+            best_bid = bids[0]
+            bid_price = trim_decimal_string(str(best_bid[0]))
+            bid_quantity = trim_decimal_string(str(best_bid[1]))
+
+            best_ask = asks[0]
+            ask_price = trim_decimal_string(str(best_ask[0]))
+            ask_quantity = trim_decimal_string(str(best_ask[1]))
+
+            return {
+                "bid": [bid_price, bid_quantity],
+                "ask": [ask_price, ask_quantity],
+            }
+
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"Network error while connecting to Bitget: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error getting Bitget best bid/ask: {e}", exc_info=True)
+            raise Exception(f"Unexpected error getting Bitget best bid/ask: {str(e)}")
