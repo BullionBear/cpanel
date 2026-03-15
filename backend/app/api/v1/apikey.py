@@ -58,10 +58,10 @@ async def register_api_key(
     exchange = api_data.exchange.upper()
     
     # Validate exchange
-    if exchange not in ['BINANCE', 'BYBIT']:
+    if exchange not in ['BINANCE', 'BYBIT', 'BITGET']:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported exchange: {api_data.exchange}. Supported exchanges: BINANCE, BYBIT"
+            detail=f"Unsupported exchange: {api_data.exchange}. Supported exchanges: BINANCE, BYBIT, BITGET"
         )
     
     # Verify API credentials with exchange

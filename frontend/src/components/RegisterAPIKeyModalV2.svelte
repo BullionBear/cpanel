@@ -39,10 +39,10 @@
 		try {
 			exchanges = await getExchanges();
 			if (exchanges.length > 0 && exchId == null) exchId = exchanges[0].id;
-		} catch (e) {
-			exchanges = [{ id: 1, name: 'Binance' }, { id: 2, name: 'Bybit' }];
-			exchId = exchanges[0]?.id ?? 1;
-		}
+	} catch (e) {
+		exchanges = [{ id: 1, name: 'Binance' }, { id: 2, name: 'Bybit' }, { id: 3, name: 'Bitget' }];
+		exchId = exchanges[0]?.id ?? 1;
+	}
 	}
 
 	function close() {

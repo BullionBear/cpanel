@@ -412,8 +412,12 @@ export async function getBalances(apiIds: number[]): Promise<BalanceResponse[]> 
 			// No balances found, return empty array
 			return [];
 		}
-		const error = await response.json();
-		throw new Error(error.detail || 'Failed to fetch balances');
+		let detail = 'Failed to fetch balances';
+		try {
+			const error = await response.json();
+			if (error.detail) detail = error.detail;
+		} catch { /* non-JSON body */ }
+		throw new Error(detail);
 	} catch (error) {
 		console.error('Failed to get balances:', error);
 		throw error;
@@ -444,8 +448,12 @@ export async function getBalancesByWalletIds(walletIds: number[]): Promise<Balan
 		} else if (response.status === 404) {
 			return [];
 		}
-		const err = await response.json();
-		throw new Error(err.detail || 'Failed to fetch balances');
+		let detail = 'Failed to fetch balances';
+		try {
+			const err = await response.json();
+			if (err.detail) detail = err.detail;
+		} catch { /* non-JSON body */ }
+		throw new Error(detail);
 	} catch (error) {
 		console.error('Failed to get balances by wallets:', error);
 		throw error;
@@ -469,8 +477,14 @@ export async function getBalanceByWalletId(walletId: number): Promise<BalanceRes
 	if (response.status === 404) {
 		throw new Error('Wallet not found');
 	}
-	const err = await response.json();
-	throw new Error(err.detail || 'Failed to fetch balance');
+	let detail = `Failed to fetch balance (HTTP ${response.status})`;
+	try {
+		const err = await response.json();
+		if (err.detail) detail = err.detail;
+	} catch {
+		// non-JSON error body
+	}
+	throw new Error(detail);
 }
 
 export interface OpenOrder {
@@ -838,8 +852,12 @@ export async function getBalancesV2(walletIds: number[]): Promise<BalanceRespons
 		throw new Error('Unauthorized');
 	}
 	if (res.status === 404) return [];
-	const err = await res.json();
-	throw new Error(err.detail || 'Failed to fetch balances');
+	let detail = 'Failed to fetch balances';
+	try {
+		const err = await res.json();
+		if (err.detail) detail = err.detail;
+	} catch { /* non-JSON body */ }
+	throw new Error(detail);
 }
 
 /** Unique exchanges from symbols; fallback to known list if symbols unavailable. */
@@ -847,6 +865,12 @@ export interface ExchangeOption {
 	id: number;
 	name: string;
 }
+
+const KNOWN_EXCHANGES: ExchangeOption[] = [
+	{ id: 1, name: 'Binance' },
+	{ id: 2, name: 'Bybit' },
+	{ id: 3, name: 'Bitget' }
+];
 
 export async function getExchanges(): Promise<ExchangeOption[]> {
 	try {
@@ -857,12 +881,15 @@ export async function getExchanges(): Promise<ExchangeOption[]> {
 				byId.set(s.exchange.id, s.exchange.name);
 			}
 		}
+		// Merge in known exchanges that may not have symbols yet
+		for (const known of KNOWN_EXCHANGES) {
+			if (!byId.has(known.id)) {
+				byId.set(known.id, known.name);
+			}
+		}
 		return [...byId.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
 	} catch {
-		return [
-			{ id: 1, name: 'Binance' },
-			{ id: 2, name: 'Bybit' }
-		];
+		return [...KNOWN_EXCHANGES];
 	}
 }
 

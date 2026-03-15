@@ -16,6 +16,7 @@ router = APIRouter(prefix="/wallet", tags=["wallets"])
 EXCHANGE_ALLOWED_WALLET_SLUGS: dict[str, list[str]] = {
     "BINANCE": ["SPOT", "UMARGIN", "CMARGIN", "LEVERAGE"],
     "BYBIT": ["UNIFIED"],
+    "BITGET": ["SPOT"],
 }
 
 

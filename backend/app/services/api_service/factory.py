@@ -1,5 +1,5 @@
 from .base import APIContext, ExchangeClient
-from .clients import BinanceExchangeClient, BybitExchangeClient
+from .clients import BinanceExchangeClient, BitgetExchangeClient, BybitExchangeClient
 from .common import EXCHANGES
 
 
@@ -11,4 +11,6 @@ class ExchangeClientFactory:
             return BinanceExchangeClient(context)
         if exchange_slug == "BYBIT":
             return BybitExchangeClient(context)
+        if exchange_slug == "BITGET":
+            return BitgetExchangeClient(context)
         raise ValueError(f"Invalid exchange: {exchange}")

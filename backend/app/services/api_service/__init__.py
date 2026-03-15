@@ -11,6 +11,7 @@ from .common import (
     ExchangeError,
     NetworkError,
     create_binance_client,
+    create_bitget_client,
     create_bybit_client,
     normalize_order_status,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "ORDER_TYPES",
     "WALLETS",
     "create_binance_client",
+    "create_bitget_client",
     "create_bybit_client",
     "generate_client_order_id",
     "normalize_order_status",

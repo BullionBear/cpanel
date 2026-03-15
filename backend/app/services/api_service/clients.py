@@ -1,15 +1,19 @@
 import logging
+import math
 import random
 import string
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import binance as bn
+import requests
 from pybit.exceptions import FailedRequestError
 from pybit.unified_trading import HTTP as BybitHTTP
 
 from .base import APIContext, ExchangeClient
 from .common import (
+    BitgetClient,
     ENDING_STATUSES,
     PRODUCT_TO_BYBIT_CATEGORY,
     ExchangeError,
@@ -17,6 +21,7 @@ from .common import (
     ORDER_SIDES,
     ORDER_TYPES,
     create_binance_client,
+    create_bitget_client,
     create_bybit_client,
     exchange_info_cache,
     normalize_order_status,
@@ -845,6 +850,476 @@ class BybitExchangeClient(ExchangeClient):
                     "exec_fee": str(t.get("execFee", "0")),
                     "fee_currency": str(t.get("feeCurrency", "")),
                     "is_maker": t.get("isMaker") == "true" or t.get("isMaker") is True,
+                    "exec_time_ms": exec_time_ms,
+                }
+            )
+        return results
+
+
+class BitgetExchangeClient(ExchangeClient):
+    """Bitget spot exchange client using REST API v2."""
+
+    def __init__(self, context: APIContext):
+        self.context = context
+        self.client: BitgetClient = create_bitget_client(
+            context.api_key, context.api_secret, context.passphrase or "", context.api_type
+        )
+
+    def _check_response(self, response: Dict[str, Any], action: str) -> None:
+        if not response:
+            raise ExchangeError(f"Empty response from Bitget ({action})", exchange="BITGET")
+        code = response.get("code", "")
+        if str(code) != "00000":
+            raise ExchangeError(
+                response.get("msg", f"Bitget error during {action}"),
+                exchange="BITGET",
+                error_code=int(code) if code else None,
+            )
+
+    @staticmethod
+    def _price_decimals(price_str: str) -> int:
+        """Infer decimal places from an orderbook price string."""
+        if "." in price_str:
+            return len(price_str.rstrip("0").split(".")[1])
+        return 0
+
+    def _get_aggressive_price(self, symbol: str, side: str, slippage: float = 0.01) -> str:
+        """Fetch orderbook and return an aggressive limit price for IOC execution.
+
+        For BUY: worst ask in top-5 * (1 + slippage), rounded up to price precision.
+        For SELL: worst bid in top-5 * (1 - slippage), rounded down to price precision.
+        """
+        try:
+            resp = requests.get(
+                "https://api.bitget.com/api/v2/spot/market/orderbook",
+                params={"symbol": symbol, "limit": "5"},
+                timeout=5,
+            )
+            data = resp.json()
+            if str(data.get("code", "")) != "00000":
+                raise ExchangeError(
+                    f"Failed to fetch orderbook for {symbol}: {data.get('msg', 'unknown')}",
+                    exchange="BITGET",
+                )
+            book = data.get("data", {})
+            if side == "BUY":
+                asks = book.get("asks", [])
+                if not asks:
+                    raise ExchangeError(f"No asks in orderbook for {symbol}", exchange="BITGET")
+                decimals = max(self._price_decimals(a[0]) for a in asks)
+                worst_ask = max(float(a[0]) for a in asks)
+                raw = worst_ask * (1 + slippage)
+                price = math.ceil(raw * 10**decimals) / 10**decimals
+                return f"{price:.{decimals}f}"
+            else:
+                bids = book.get("bids", [])
+                if not bids:
+                    raise ExchangeError(f"No bids in orderbook for {symbol}", exchange="BITGET")
+                decimals = max(self._price_decimals(b[0]) for b in bids)
+                worst_bid = min(float(b[0]) for b in bids)
+                raw = worst_bid * (1 - slippage)
+                price = math.floor(raw * 10**decimals) / 10**decimals
+                return f"{price:.{decimals}f}"
+        except ExchangeError:
+            raise
+        except Exception as e:
+            raise ExchangeError(
+                f"Failed to get aggressive price from orderbook: {e}",
+                exchange="BITGET",
+                original_error=e,
+            )
+
+    def verify_api(self) -> None:
+        try:
+            response = self.client.get("/api/v2/spot/account/info")
+            self._check_response(response, "verify_api")
+        except (ExchangeError, NetworkError):
+            raise
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error during Bitget API verification: {e}",
+                exchange="BITGET",
+                original_error=e,
+            )
+
+    def get_account_uid(self) -> int:
+        try:
+            response = self.client.get("/api/v2/spot/account/info")
+            self._check_response(response, "get_account_uid")
+            user_id = response.get("data", {}).get("userId")
+            if user_id is None:
+                raise ExchangeError("userId not found in Bitget response", exchange="BITGET")
+            return int(user_id)
+        except (ExchangeError, NetworkError):
+            raise
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error getting Bitget account UID: {e}",
+                exchange="BITGET",
+                original_error=e,
+            )
+
+    def get_balance(self) -> List[Dict[str, Any]]:
+        try:
+            response = self.client.get("/api/v2/spot/account/assets", {"assetType": "hold_only"})
+            self._check_response(response, "get_balance")
+            spot_balances = []
+            for coin_data in response.get("data", []):
+                available = float(coin_data.get("available", "0") or "0")
+                frozen = float(coin_data.get("frozen", "0") or "0")
+                locked = float(coin_data.get("locked", "0") or "0")
+                total = available + frozen + locked
+                if total > 0:
+                    spot_balances.append(
+                        {
+                            "token": coin_data.get("coin", "").upper(),
+                            "total": str(total),
+                            "frozen": str(frozen + locked),
+                            "available": str(available),
+                        }
+                    )
+            result: List[Dict[str, Any]] = []
+            if spot_balances:
+                result.append({"wallet": "SPOT", "balance": spot_balances})
+            return result
+        except (ExchangeError, NetworkError):
+            raise
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error getting Bitget balance: {e}",
+                exchange="BITGET",
+                original_error=e,
+            )
+
+    def get_symbol_info(self, symbol: str) -> Dict[str, Any]:
+        try:
+            cached = exchange_info_cache.get("bitget_symbols_spot")
+            if cached is not None:
+                symbol_info = next(
+                    (s for s in cached if s.get("symbol", "").upper() == symbol.upper()), None
+                )
+                if symbol_info:
+                    return self._normalize_symbol(symbol, symbol_info)
+
+            import requests as _req
+            resp = _req.get(
+                "https://api.bitget.com/api/v2/spot/public/symbols",
+                params={"symbol": symbol},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            response = resp.json()
+            if str(response.get("code", "")) != "00000":
+                raise ExchangeError(
+                    response.get("msg", f"Symbol {symbol} not found on Bitget"),
+                    exchange="BITGET",
+                )
+            data_list = response.get("data", [])
+            if not data_list:
+                raise ExchangeError(f"Symbol {symbol} not found on Bitget", exchange="BITGET")
+            return self._normalize_symbol(symbol, data_list[0])
+        except ExchangeError:
+            raise
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(f"Network error connecting to Bitget: {e}", exchange="BITGET", original_error=e)
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error getting Bitget symbol info: {e}",
+                exchange="BITGET",
+                original_error=e,
+            )
+
+    def _normalize_symbol(self, symbol: str, symbol_info: Dict[str, Any]) -> Dict[str, Any]:
+        price_precision = int(symbol_info.get("pricePrecision", "2"))
+        quantity_precision = int(symbol_info.get("quantityPrecision", "4"))
+        return {
+            "symbol": symbol_info.get("symbol", symbol).upper(),
+            "base_asset": symbol_info.get("baseCoin", ""),
+            "quote_asset": symbol_info.get("quoteCoin", ""),
+            "price_precision": price_precision,
+            "size_precision": quantity_precision,
+            "exists": symbol_info.get("status", "") == "online",
+        }
+
+    def get_order_status(
+        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        try:
+            if not order_id and not client_order_id:
+                raise ExchangeError("Either order_id or client_order_id must be provided", exchange="BITGET")
+
+            params: Dict[str, Any] = {"symbol": symbol}
+            if order_id:
+                params["orderId"] = order_id
+            if client_order_id:
+                params["clientOid"] = client_order_id
+
+            response = self.client.get("/api/v2/spot/trade/unfilled-orders", params)
+            if response and str(response.get("code", "")) == "00000":
+                orders = response.get("data", [])
+                if orders:
+                    order = orders[0]
+                    return self._parse_order(order, symbol)
+
+            response = self.client.get("/api/v2/spot/trade/history-orders", params)
+            self._check_response(response, "get_order_status")
+            orders = response.get("data", [])
+            if not orders:
+                raise ExchangeError("Order not found on Bitget", exchange="BITGET")
+            return self._parse_order(orders[0], symbol)
+        except (ExchangeError, NetworkError):
+            raise
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error getting Bitget order status: {e}",
+                exchange="BITGET",
+                original_error=e,
+            )
+
+    def _parse_order(self, order: Dict[str, Any], symbol: str) -> Dict[str, Any]:
+        return {
+            "order_id": str(order.get("orderId", "")),
+            "status": order.get("status", ""),
+            "symbol": order.get("symbol", symbol).upper(),
+            "side": order.get("side", "").upper(),
+            "type": order.get("orderType", "").upper(),
+            "quantity": order.get("size", "0"),
+            "price": order.get("priceAvg", order.get("price", "0")),
+            "base_volume": order.get("baseVolume", "0"),
+        }
+
+    def get_open_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        try:
+            params: Dict[str, Any] = {}
+            if symbol:
+                params["symbol"] = symbol
+            response = self.client.get("/api/v2/spot/trade/unfilled-orders", params)
+            self._check_response(response, "get_open_orders")
+
+            normalized_orders = []
+            for order in response.get("data", []):
+                ctime = order.get("cTime", "0")
+                utime = order.get("uTime", ctime)
+                created_at = int(float(ctime) / 1000) if ctime else int(datetime.now(timezone.utc).timestamp())
+                updated_at = int(float(utime) / 1000) if utime else created_at
+                side = order.get("side", "").upper()
+                order_type = order.get("orderType", "").upper()
+                normalized_orders.append(
+                    {
+                        "order_id": str(order.get("orderId", "")),
+                        "symbol": order.get("symbol", "").upper(),
+                        "side": side,
+                        "type": order_type,
+                        "quantity": normalize_quantity(order.get("size", "0")),
+                        "price": normalize_price(order.get("priceAvg", order.get("price", "0"))),
+                        "status": normalize_order_status("BITGET", order.get("status", "")),
+                        "client_order_id": order.get("clientOid", ""),
+                        "created_at": created_at,
+                        "updated_at": updated_at,
+                    }
+                )
+            return normalized_orders
+        except (ExchangeError, NetworkError):
+            raise
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error getting Bitget open orders: {e}",
+                exchange="BITGET",
+                original_error=e,
+            )
+
+    def cancel_order(
+        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        try:
+            payload: Dict[str, Any] = {"symbol": symbol}
+            if client_order_id:
+                payload["clientOid"] = client_order_id
+            elif order_id:
+                payload["orderId"] = order_id
+            else:
+                raise ExchangeError("Either order_id or client_order_id must be provided", exchange="BITGET")
+
+            response = self.client.post("/api/v2/spot/trade/cancel-order", payload)
+            self._check_response(response, "cancel_order")
+            result = response.get("data", {})
+            now_ts = int(datetime.now(timezone.utc).timestamp())
+            return {
+                "order_id": str(result.get("orderId", order_id or "")),
+                "symbol": symbol,
+                "side": "",
+                "type": "",
+                "quantity": "0",
+                "price": "-1",
+                "status": "CANCEL",
+                "client_order_id": result.get("clientOid", client_order_id or ""),
+                "created_at": now_ts,
+                "updated_at": now_ts,
+                "exchange_response": response,
+            }
+        except (ExchangeError, NetworkError):
+            raise
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error canceling Bitget order: {e}",
+                exchange="BITGET",
+                original_error=e,
+            )
+
+    def create_order(
+        self, symbol: str, side: ORDER_SIDES, order_type: ORDER_TYPES, quantity: str, price: Optional[str] = None
+    ) -> Dict[str, Any]:
+        try:
+            client_order_id = generate_client_order_id()
+
+            is_market = order_type == "MARKET"
+            if is_market:
+                aggressive_price = self._get_aggressive_price(symbol, side)
+
+            payload: Dict[str, Any] = {
+                "symbol": symbol,
+                "side": "buy" if side == "BUY" else "sell",
+                "orderType": "limit",
+                "size": quantity,
+                "clientOid": client_order_id,
+            }
+            if is_market:
+                payload["price"] = aggressive_price
+                payload["force"] = "ioc"
+            else:
+                if price is None:
+                    raise ExchangeError("Price is required for LIMIT orders", exchange="BITGET")
+                payload["price"] = price
+                payload["force"] = "gtc"
+
+            response = self.client.post("/api/v2/spot/trade/place-order", payload)
+            self._check_response(response, "create_order")
+            result = response.get("data", {})
+            bitget_order_id = result.get("orderId", "")
+
+            if is_market:
+                time.sleep(0.3)
+
+            status_info = self.get_order_status(
+                symbol=symbol,
+                order_id=str(bitget_order_id),
+                client_order_id=client_order_id,
+            )
+            raw_status = status_info.get("status", "")
+            normalized_status = normalize_order_status("BITGET", raw_status)
+
+            if is_market and normalized_status not in ENDING_STATUSES:
+                for _ in range(3):
+                    time.sleep(0.3)
+                    status_info = self.get_order_status(
+                        symbol=symbol,
+                        order_id=str(bitget_order_id),
+                        client_order_id=client_order_id,
+                    )
+                    raw_status = status_info.get("status", "")
+                    normalized_status = normalize_order_status("BITGET", raw_status)
+                    if normalized_status in ENDING_STATUSES:
+                        break
+
+            if is_market:
+                filled_qty = float(status_info.get("base_volume", "0") or "0")
+                requested_qty = float(quantity)
+                if requested_qty > 0 and filled_qty >= requested_qty * 0.999:
+                    normalized_status = "FILLED"
+                elif normalized_status != "FILLED":
+                    raise ExchangeError(
+                        f"Market order not fully filled (status: {raw_status}, "
+                        f"filled: {filled_qty}, requested: {requested_qty}). "
+                        "Insufficient liquidity in the orderbook.",
+                        exchange="BITGET",
+                    )
+
+            fill_price = status_info.get("price", aggressive_price if is_market else price)
+
+            now_ts = int(datetime.now(timezone.utc).timestamp())
+            return {
+                "order_id": str(bitget_order_id),
+                "symbol": symbol,
+                "side": side,
+                "type": order_type,
+                "quantity": normalize_quantity(quantity),
+                "price": normalize_price(fill_price),
+                "status": normalized_status,
+                "client_order_id": client_order_id,
+                "created_at": now_ts,
+                "updated_at": now_ts,
+                "exchange_response": response,
+            }
+        except (ExchangeError, NetworkError):
+            raise
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error creating Bitget order: {e}",
+                exchange="BITGET",
+                original_error=e,
+            )
+
+    def get_mytrades(
+        self, category: str, start_ms: int, end_ms: int, symbol: Optional[str] = None, limit: int = 200
+    ) -> List[Dict[str, Any]]:
+        try:
+            cap = min(limit, 100)
+            params: Dict[str, Any] = {
+                "startTime": str(start_ms),
+                "endTime": str(end_ms),
+                "limit": str(cap),
+            }
+            if symbol:
+                params["symbol"] = symbol
+
+            all_trades: List[Dict[str, Any]] = []
+            while True:
+                response = self.client.get("/api/v2/spot/trade/fills", params)
+                self._check_response(response, "get_mytrades")
+                page = response.get("data", [])
+                all_trades.extend(self._normalize_bitget_trades(page))
+                if len(page) < cap or len(all_trades) >= limit:
+                    break
+                last_trade_id = page[-1].get("tradeId", "")
+                if not last_trade_id:
+                    break
+                params["idLessThan"] = last_trade_id
+
+            all_trades.sort(key=lambda x: x["exec_time_ms"], reverse=True)
+            return all_trades[:limit]
+        except (ExchangeError, NetworkError):
+            raise
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error getting Bitget trade history: {e}",
+                exchange="BITGET",
+                original_error=e,
+            )
+
+    def _normalize_bitget_trades(self, page: list) -> List[Dict[str, Any]]:
+        results = []
+        for t in page:
+            try:
+                ctime = t.get("cTime", "0")
+                exec_time_ms = int(ctime)
+            except (TypeError, ValueError):
+                exec_time_ms = 0
+            trade_id_raw = str(t.get("tradeId", "0"))
+            order_id_raw = str(t.get("orderId", "0"))
+            fee_detail = t.get("feeDetail", {})
+            total_fee = fee_detail.get("totalFee", "0") if isinstance(fee_detail, dict) else "0"
+            fee_coin = fee_detail.get("feeCoin", "") if isinstance(fee_detail, dict) else ""
+            results.append(
+                {
+                    "exch_tid": int(trade_id_raw) if trade_id_raw.isdigit() else 0,
+                    "order_id": int(order_id_raw) if order_id_raw.isdigit() else 0,
+                    "symbol": (t.get("symbol", "") or "").upper(),
+                    "side": "Buy" if t.get("side", "").lower() == "buy" else "Sell",
+                    "exec_px": str(t.get("priceAvg", "0")),
+                    "exec_qty": str(t.get("size", "0")),
+                    "exec_fee": str(total_fee).lstrip("-"),
+                    "fee_currency": fee_coin,
+                    "is_maker": t.get("tradeScope", "") == "maker",
                     "exec_time_ms": exec_time_ms,
                 }
             )
