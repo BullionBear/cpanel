@@ -85,17 +85,19 @@ class SymbolRepository:
     def get_by_exchange_and_name(
         self,
         exchange_id: int,
-        name: str
+        name: str,
+        product_id: Optional[int] = None,
     ) -> Optional[RefSymbol]:
-        """Get symbol by exchange ID and name with all relationships loaded."""
+        """Get symbol by exchange ID, name, and optionally product ID."""
+        filters = [RefSymbol.exchange_id == exchange_id, RefSymbol.name == name]
+        if product_id is not None:
+            filters.append(RefSymbol.product_id == product_id)
         return self.db.query(RefSymbol).options(
             joinedload(RefSymbol.exchange),
             joinedload(RefSymbol.product),
             joinedload(RefSymbol.base_token),
             joinedload(RefSymbol.quote_token)
-        ).filter(
-            and_(RefSymbol.exchange_id == exchange_id, RefSymbol.name == name)
-        ).first()
+        ).filter(and_(*filters)).first()
 
     def create(
         self,

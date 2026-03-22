@@ -220,15 +220,16 @@ async def create_symbol(
             detail=f"Product with ID {symbol_data.product_id} not found"
         )
     
-    # Check if symbol already exists
+    # Check if symbol already exists for the same exchange + product
     existing_symbol = symbol_repo.get_by_exchange_and_name(
         exchange_id=symbol_data.exchange_id,
-        name=symbol_data.symbol
+        name=symbol_data.symbol,
+        product_id=symbol_data.product_id,
     )
     if existing_symbol:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Symbol {symbol_data.symbol} already exists for exchange {exchange.name}"
+            detail=f"Symbol {symbol_data.symbol} already exists for exchange {exchange.name} / product {product.name}"
         )
     
     # Get symbol info from exchange API
