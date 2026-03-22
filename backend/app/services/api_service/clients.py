@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import binance as bn
 import requests
-from pybit.exceptions import FailedRequestError
+from pybit.exceptions import FailedRequestError, InvalidRequestError
 from pybit.unified_trading import HTTP as BybitHTTP
 
 from .base import APIContext, ExchangeClient
@@ -557,7 +557,7 @@ class BybitExchangeClient(ExchangeClient):
                 exchange="BYBIT",
                 error_code=response.get("retCode"),
             )
-        except FailedRequestError as e:
+        except (FailedRequestError, InvalidRequestError) as e:
             raise ExchangeError(str(e), exchange="BYBIT", error_code=None, original_error=e)
         except (ConnectionError, TimeoutError, OSError) as e:
             raise NetworkError(f"Network error while connecting to Bybit: {e}", exchange="BYBIT", original_error=e)
@@ -579,7 +579,7 @@ class BybitExchangeClient(ExchangeClient):
             return int(user_id)
         except ExchangeError:
             raise
-        except FailedRequestError as e:
+        except (FailedRequestError, InvalidRequestError) as e:
             raise ExchangeError(str(e), exchange="BYBIT", error_code=None, original_error=e)
         except (ConnectionError, TimeoutError, OSError) as e:
             raise NetworkError(f"Network error while connecting to Bybit: {e}", exchange="BYBIT", original_error=e)
@@ -632,7 +632,7 @@ class BybitExchangeClient(ExchangeClient):
             except Exception as e:
                 logger.warning("Failed to get Bybit FUNDING balance: %s", e)
             return result
-        except FailedRequestError as e:
+        except (FailedRequestError, InvalidRequestError) as e:
             raise ExchangeError(str(e), exchange="BYBIT", error_code=None, original_error=e)
         except (ConnectionError, TimeoutError, OSError) as e:
             raise NetworkError(f"Network error while connecting to Bybit: {e}", exchange="BYBIT", original_error=e)
@@ -668,7 +668,7 @@ class BybitExchangeClient(ExchangeClient):
             return self._normalize_symbol(symbol, list_data[0])
         except ExchangeError:
             raise
-        except FailedRequestError as e:
+        except (FailedRequestError, InvalidRequestError) as e:
             raise ExchangeError(str(e), exchange="BYBIT", error_code=None, original_error=e)
         except (ConnectionError, TimeoutError, OSError) as e:
             raise NetworkError(f"Network error while connecting to Bybit: {e}", exchange="BYBIT", original_error=e)
@@ -724,7 +724,7 @@ class BybitExchangeClient(ExchangeClient):
             }
         except ExchangeError:
             raise
-        except FailedRequestError as e:
+        except (FailedRequestError, InvalidRequestError) as e:
             raise ExchangeError(str(e), exchange="BYBIT", error_code=None, original_error=e)
         except (ConnectionError, TimeoutError, OSError) as e:
             raise NetworkError(f"Network error while connecting to Bybit: {e}", exchange="BYBIT", original_error=e)
@@ -733,6 +733,8 @@ class BybitExchangeClient(ExchangeClient):
         params: Dict[str, Any] = {"category": category}
         if symbol:
             params["symbol"] = symbol
+        elif category == "linear":
+            params["settleCoin"] = "USDT"
         response = self.client.get_open_orders(**params)
         if not response:
             raise ExchangeError(f"Empty response from Bybit API ({category})", exchange="BYBIT")
@@ -785,7 +787,7 @@ class BybitExchangeClient(ExchangeClient):
             return all_orders
         except ExchangeError:
             raise
-        except FailedRequestError as e:
+        except (FailedRequestError, InvalidRequestError) as e:
             raise ExchangeError(str(e), exchange="BYBIT", error_code=None, original_error=e)
         except (ConnectionError, TimeoutError, OSError) as e:
             raise NetworkError(f"Network error while connecting to Bybit: {e}", exchange="BYBIT", original_error=e)
@@ -841,7 +843,7 @@ class BybitExchangeClient(ExchangeClient):
             }
         except ExchangeError:
             raise
-        except FailedRequestError as e:
+        except (FailedRequestError, InvalidRequestError) as e:
             raise ExchangeError(str(e), exchange="BYBIT", error_code=None, original_error=e)
         except (ConnectionError, TimeoutError, OSError) as e:
             raise NetworkError(f"Network error while connecting to Bybit: {e}", exchange="BYBIT", original_error=e)
@@ -905,7 +907,7 @@ class BybitExchangeClient(ExchangeClient):
             }
         except ExchangeError:
             raise
-        except FailedRequestError as e:
+        except (FailedRequestError, InvalidRequestError) as e:
             raise ExchangeError(str(e), exchange="BYBIT", error_code=None, original_error=e)
         except (ConnectionError, TimeoutError, OSError) as e:
             raise NetworkError(f"Network error while connecting to Bybit: {e}", exchange="BYBIT", original_error=e)
@@ -941,7 +943,7 @@ class BybitExchangeClient(ExchangeClient):
             return all_trades[:limit]
         except ExchangeError:
             raise
-        except FailedRequestError as e:
+        except (FailedRequestError, InvalidRequestError) as e:
             raise ExchangeError(str(e), exchange="BYBIT", error_code=None, original_error=e)
         except (ConnectionError, TimeoutError, OSError) as e:
             raise NetworkError(f"Network error connecting to Bybit: {e}", exchange="BYBIT", original_error=e)
@@ -1006,7 +1008,7 @@ class BybitExchangeClient(ExchangeClient):
             return positions
         except ExchangeError:
             raise
-        except FailedRequestError as e:
+        except (FailedRequestError, InvalidRequestError) as e:
             raise ExchangeError(str(e), exchange="BYBIT", error_code=None, original_error=e)
         except (ConnectionError, TimeoutError, OSError) as e:
             raise NetworkError(f"Network error connecting to Bybit: {e}", exchange="BYBIT", original_error=e)
