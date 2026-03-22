@@ -220,9 +220,9 @@
 							{#if filteredSymbols.length === 0}
 								<option value={null}>No symbols</option>
 							{:else}
-								{#each filteredSymbols as symbol}
-									<option value={symbol.id}>{symbol.name}</option>
-								{/each}
+							{#each filteredSymbols as symbol}
+								<option value={symbol.id}>{symbol.universal_ticker}</option>
+							{/each}
 							{/if}
 						</select>
 					</div>
