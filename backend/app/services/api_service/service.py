@@ -49,13 +49,13 @@ class APIService:
         return self._client(exchange, api_key, api_secret, passphrase, api_type).get_balance()
 
     def get_symbol_info(
-        self, exchange: EXCHANGES, symbol: str, api_key: Optional[str] = None, api_secret: Optional[str] = None
+        self, exchange: EXCHANGES, symbol: str, product: str = "SPOT", api_key: Optional[str] = None, api_secret: Optional[str] = None
     ) -> Dict[str, Any]:
         if api_key and api_secret:
             client = self._client(exchange, api_key, api_secret)
         else:
             client = self._client(exchange, "", "")
-        return client.get_symbol_info(symbol)
+        return client.get_symbol_info(symbol, product=product)
 
     def get_order_status(
         self,
@@ -167,9 +167,9 @@ class APIService:
     ) -> List[Dict[str, Any]]:
         return self.get_balance("BYBIT", api_key, api_secret, passphrase, api_type)
 
-    def get_binance_symbol_info(self, symbol: str) -> Dict[str, Any]:
-        return self.get_symbol_info("BINANCE", symbol)
+    def get_binance_symbol_info(self, symbol: str, product: str = "SPOT") -> Dict[str, Any]:
+        return self.get_symbol_info("BINANCE", symbol, product=product)
 
-    def get_bybit_symbol_info(self, symbol: str) -> Dict[str, Any]:
-        return self.get_symbol_info("BYBIT", symbol)
+    def get_bybit_symbol_info(self, symbol: str, product: str = "SPOT") -> Dict[str, Any]:
+        return self.get_symbol_info("BYBIT", symbol, product=product)
 

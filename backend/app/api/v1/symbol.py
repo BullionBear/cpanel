@@ -235,7 +235,7 @@ async def create_symbol(
     api_service = APIService()
     try:
         client = api_service.get_exchange_client(exchange=exchange.slug.upper(), api_key="", api_secret="")  # type: ignore
-        symbol_info = client.get_symbol_info(symbol_data.symbol)
+        symbol_info = client.get_symbol_info(symbol_data.symbol, product=product.slug.upper())
     except NetworkError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
