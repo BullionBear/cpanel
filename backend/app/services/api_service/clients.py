@@ -478,6 +478,50 @@ class BinanceExchangeClient(ExchangeClient):
         except (ConnectionError, TimeoutError, OSError) as e:
             raise NetworkError(f"Network error connecting to Binance: {e}", exchange="BINANCE", original_error=e)
 
+    def get_positions(self) -> List[Dict[str, Any]]:
+        try:
+            raw = self.client.futures_position_information()
+            positions = []
+            for p in raw:
+                amt = float(p.get("positionAmt", 0))
+                if amt == 0:
+                    continue
+                side = "LONG" if amt > 0 else "SHORT"
+                positions.append(
+                    {
+                        "symbol": p.get("symbol", ""),
+                        "side": side,
+                        "size": str(abs(amt)),
+                        "entry_price": str(p.get("entryPrice", "0")),
+                        "mark_price": str(p.get("markPrice", "0")),
+                        "liq_price": str(p.get("liquidationPrice", "0")),
+                        "unrealized_pnl": str(p.get("unRealizedProfit", "0")),
+                        "leverage": str(p.get("leverage", "1")),
+                        "margin_type": (p.get("marginType", "cross") or "cross").lower(),
+                        "notional": str(abs(float(p.get("notional", 0)))),
+                        "update_time_ms": int(p.get("updateTime", 0)),
+                    }
+                )
+            return positions
+        except bn.exceptions.BinanceAPIException as e:
+            raise ExchangeError(
+                str(e.message) if hasattr(e, "message") else str(e),
+                exchange="BINANCE",
+                error_code=e.code,
+                original_error=e,
+            )
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(f"Network error connecting to Binance: {e}", exchange="BINANCE", original_error=e)
+        except ExchangeError:
+            raise
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error getting Binance positions: {e}",
+                exchange="BINANCE",
+                error_code=None,
+                original_error=e,
+            )
+
 
 class BybitExchangeClient(ExchangeClient):
     def __init__(self, context: APIContext):
@@ -898,6 +942,9 @@ class BybitExchangeClient(ExchangeClient):
                 }
             )
         return results
+
+    def get_positions(self) -> List[Dict[str, Any]]:
+        return []
 
 
 class BitgetExchangeClient(ExchangeClient):
@@ -1368,3 +1415,6 @@ class BitgetExchangeClient(ExchangeClient):
                 }
             )
         return results
+
+    def get_positions(self) -> List[Dict[str, Any]]:
+        return []
