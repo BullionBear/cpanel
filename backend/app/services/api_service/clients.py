@@ -169,43 +169,11 @@ class BinanceExchangeClient(ExchangeClient):
                 f"Unexpected error getting Binance balance: {e}", exchange="BINANCE", error_code=None, original_error=e
             )
 
-    def get_symbol_info(self, symbol: str) -> Dict[str, Any]:
+    def get_symbol_info(self, symbol: str, product: str = "SPOT") -> Dict[str, Any]:
         try:
-            exchange_info = exchange_info_cache.get("binance_exchange_info")
-            if exchange_info is None:
-                exchange_info = bn.Client().get_exchange_info()
-                exchange_info_cache.set("binance_exchange_info", exchange_info)
-
-            if not exchange_info or "symbols" not in exchange_info:
-                raise ExchangeError("Invalid response from Binance exchange info", exchange="BINANCE", error_code=None)
-
-            symbol_info = None
-            for item in exchange_info["symbols"]:
-                if item["symbol"] == symbol and item["status"] == "TRADING":
-                    symbol_info = item
-                    break
-
-            if not symbol_info:
-                raise ExchangeError(f"Symbol {symbol} not found or not trading on Binance", exchange="BINANCE")
-
-            price_precision = 8
-            size_precision = 8
-            for filter_item in symbol_info.get("filters", []):
-                if filter_item.get("filterType") == "PRICE_FILTER":
-                    tick_size = filter_item.get("tickSize", "1")
-                    price_precision = len(tick_size.split(".")[-1].rstrip("0")) if "." in tick_size else 0
-                elif filter_item.get("filterType") == "LOT_SIZE":
-                    step = filter_item.get("stepSize", "1")
-                    size_precision = len(step.split(".")[-1].rstrip("0")) if "." in step else 0
-
-            return {
-                "symbol": symbol,
-                "base_asset": symbol_info.get("baseAsset", ""),
-                "quote_asset": symbol_info.get("quoteAsset", ""),
-                "price_precision": price_precision,
-                "size_precision": size_precision,
-                "exists": True,
-            }
+            if product == "UMARGIN":
+                return self._get_futures_symbol_info(symbol)
+            return self._get_spot_symbol_info(symbol)
         except ExchangeError:
             raise
         except bn.exceptions.BinanceAPIException as e:
@@ -216,6 +184,82 @@ class BinanceExchangeClient(ExchangeClient):
             raise ExchangeError(
                 f"Unexpected error getting Binance symbol info: {e}", exchange="BINANCE", error_code=None, original_error=e
             )
+
+    def _get_spot_symbol_info(self, symbol: str) -> Dict[str, Any]:
+        exchange_info = exchange_info_cache.get("binance_exchange_info")
+        if exchange_info is None:
+            exchange_info = bn.Client().get_exchange_info()
+            exchange_info_cache.set("binance_exchange_info", exchange_info)
+
+        if not exchange_info or "symbols" not in exchange_info:
+            raise ExchangeError("Invalid response from Binance exchange info", exchange="BINANCE", error_code=None)
+
+        symbol_info = None
+        for item in exchange_info["symbols"]:
+            if item["symbol"] == symbol and item["status"] == "TRADING":
+                symbol_info = item
+                break
+
+        if not symbol_info:
+            raise ExchangeError(f"Symbol {symbol} not found or not trading on Binance", exchange="BINANCE")
+
+        price_precision, size_precision = self._parse_filters(symbol_info.get("filters", []))
+        return {
+            "symbol": symbol,
+            "base_asset": symbol_info.get("baseAsset", ""),
+            "quote_asset": symbol_info.get("quoteAsset", ""),
+            "price_precision": price_precision,
+            "size_precision": size_precision,
+            "exists": True,
+        }
+
+    def _get_futures_symbol_info(self, symbol: str) -> Dict[str, Any]:
+        exchange_info = exchange_info_cache.get("binance_futures_exchange_info")
+        if exchange_info is None:
+            exchange_info = bn.Client().futures_exchange_info()
+            exchange_info_cache.set("binance_futures_exchange_info", exchange_info)
+
+        if not exchange_info or "symbols" not in exchange_info:
+            raise ExchangeError("Invalid response from Binance futures exchange info", exchange="BINANCE", error_code=None)
+
+        symbol_info = None
+        for item in exchange_info["symbols"]:
+            if (
+                item["symbol"] == symbol
+                and item.get("status") == "TRADING"
+                and item.get("contractType") == "PERPETUAL"
+            ):
+                symbol_info = item
+                break
+
+        if not symbol_info:
+            raise ExchangeError(
+                f"Symbol {symbol} not found or not trading as PERPETUAL on Binance Futures", exchange="BINANCE"
+            )
+
+        price_precision, size_precision = self._parse_filters(symbol_info.get("filters", []))
+        return {
+            "symbol": symbol,
+            "base_asset": symbol_info.get("baseAsset", ""),
+            "quote_asset": symbol_info.get("quoteAsset", ""),
+            "price_precision": price_precision,
+            "size_precision": size_precision,
+            "exists": True,
+        }
+
+    @staticmethod
+    def _parse_filters(filters: list) -> tuple:
+        """Extract price_precision and size_precision from Binance filter array."""
+        price_precision = 8
+        size_precision = 8
+        for f in filters:
+            if f.get("filterType") == "PRICE_FILTER":
+                tick_size = f.get("tickSize", "1")
+                price_precision = len(tick_size.split(".")[-1].rstrip("0")) if "." in tick_size else 0
+            elif f.get("filterType") == "LOT_SIZE":
+                step = f.get("stepSize", "1")
+                size_precision = len(step.split(".")[-1].rstrip("0")) if "." in step else 0
+        return price_precision, size_precision
 
     def get_order_status(
         self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None
@@ -532,7 +576,7 @@ class BybitExchangeClient(ExchangeClient):
         except (ConnectionError, TimeoutError, OSError) as e:
             raise NetworkError(f"Network error while connecting to Bybit: {e}", exchange="BYBIT", original_error=e)
 
-    def get_symbol_info(self, symbol: str) -> Dict[str, Any]:
+    def get_symbol_info(self, symbol: str, product: str = "SPOT") -> Dict[str, Any]:
         try:
             response = exchange_info_cache.get("bybit_instruments_spot")
             if response is None:
@@ -991,7 +1035,7 @@ class BitgetExchangeClient(ExchangeClient):
                 original_error=e,
             )
 
-    def get_symbol_info(self, symbol: str) -> Dict[str, Any]:
+    def get_symbol_info(self, symbol: str, product: str = "SPOT") -> Dict[str, Any]:
         try:
             cached = exchange_info_cache.get("bitget_symbols_spot")
             if cached is not None:

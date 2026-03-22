@@ -27,7 +27,7 @@ class ExchangeClient(ABC):
         pass
 
     @abstractmethod
-    def get_symbol_info(self, symbol: str) -> Dict[str, Any]:
+    def get_symbol_info(self, symbol: str, product: str = "SPOT") -> Dict[str, Any]:
         pass
 
     @abstractmethod
