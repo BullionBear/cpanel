@@ -342,3 +342,18 @@ async def create_symbol(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create symbol: {str(e)}"
         )
+
+
+@router.delete("/{symbol_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_symbol(
+    symbol_id: int,
+    db: Session = Depends(get_db),
+):
+    """Delete a symbol by ID."""
+    symbol_repo = SymbolRepository(db)
+    deleted = symbol_repo.delete(symbol_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Symbol with ID {symbol_id} not found"
+        )

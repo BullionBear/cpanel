@@ -1053,6 +1053,79 @@ export async function getSymbolsByExchange(exchangeId: number, limit: number = 5
 	return [];
 }
 
+export interface SymbolCreate {
+	exchange_id: number;
+	product_id: number;
+	symbol: string;
+}
+
+export async function createSymbol(data: SymbolCreate): Promise<SymbolInfo> {
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const res = await fetch(`${API_V2}/symbol`, {
+		method: 'POST',
+		headers: {
+			Authorization: `Bearer ${token}`,
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify(data)
+	});
+	if (res.ok) return await res.json();
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await res.json();
+	throw new Error(err.detail || 'Failed to create symbol');
+}
+
+export async function deleteSymbol(symbolId: number): Promise<void> {
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const res = await fetch(`${API_V2}/symbol/${symbolId}`, {
+		method: 'DELETE',
+		headers: { Authorization: `Bearer ${token}` }
+	});
+	if (res.ok || res.status === 204) return;
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	const err = await res.json();
+	throw new Error(err.detail || 'Failed to delete symbol');
+}
+
+export interface ProductOption {
+	id: number;
+	name: string;
+	slug: string;
+}
+
+const KNOWN_PRODUCTS: ProductOption[] = [
+	{ id: 1, name: 'Spot', slug: 'SPOT' },
+	{ id: 2, name: 'USDT-Margined Perpetual', slug: 'UMARGIN' }
+];
+
+export async function getProducts(): Promise<ProductOption[]> {
+	try {
+		const symbols = await getSymbols(500);
+		const byId = new Map<number, ProductOption>();
+		for (const s of symbols) {
+			if (s.product?.id != null) {
+				byId.set(s.product.id, { id: s.product.id, name: s.product.name, slug: s.product.slug });
+			}
+		}
+		for (const known of KNOWN_PRODUCTS) {
+			if (!byId.has(known.id)) {
+				byId.set(known.id, known);
+			}
+		}
+		return [...byId.values()].sort((a, b) => a.id - b.id);
+	} catch {
+		return [...KNOWN_PRODUCTS];
+	}
+}
+
 export interface TradeItemV2 {
 	exch_id: number;
 	exch_tid: string;
