@@ -1203,3 +1203,47 @@ export async function syncMyTrades(): Promise<SyncResponse> {
 	const err = await res.json();
 	throw new Error(err.detail || 'Failed to sync trades');
 }
+
+// --- Positions ---
+
+export interface PositionItem {
+	symbol: string;
+	side: string;
+	size: string;
+	entry_price: string;
+	mark_price: string;
+	liq_price: string;
+	unrealized_pnl: string;
+	leverage: string;
+	margin_type: string;
+	notional: string;
+	update_time_ms: number;
+}
+
+export interface PositionResponse {
+	acct_id: number;
+	account_name: string;
+	exchange: string;
+	positions: PositionItem[];
+}
+
+export async function getPositions(acctIds?: number[]): Promise<PositionResponse[]> {
+	const token = localStorage.getItem('access_token');
+	if (!token) throw new Error('Not authenticated');
+	const q = acctIds && acctIds.length > 0 ? `?acct_id=${acctIds.join(',')}` : '';
+	const res = await fetch(`${API_V2}/position${q}`, {
+		headers: { Authorization: `Bearer ${token}` }
+	});
+	if (res.ok) return await res.json();
+	if (res.status === 401) {
+		localStorage.removeItem('access_token');
+		throw new Error('Unauthorized');
+	}
+	if (res.status === 404) return [];
+	let detail = 'Failed to fetch positions';
+	try {
+		const err = await res.json();
+		if (err.detail) detail = err.detail;
+	} catch { /* non-JSON body */ }
+	throw new Error(detail);
+}

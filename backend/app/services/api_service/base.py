@@ -57,3 +57,7 @@ class ExchangeClient(ABC):
         self, category: str, start_ms: int, end_ms: int, symbol: Optional[str] = None, limit: int = 200
     ) -> List[Dict[str, Any]]:
         pass
+
+    @abstractmethod
+    def get_positions(self) -> List[Dict[str, Any]]:
+        pass
