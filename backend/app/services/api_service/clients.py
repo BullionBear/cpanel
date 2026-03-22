@@ -286,28 +286,45 @@ class BinanceExchangeClient(ExchangeClient):
         except (ConnectionError, TimeoutError, OSError) as e:
             raise NetworkError(f"Network error while connecting to Binance: {e}", exchange="BINANCE", original_error=e)
 
+    def _normalize_binance_orders(self, raw_orders: list) -> List[Dict[str, Any]]:
+        normalized = []
+        for order in raw_orders:
+            created_at = int(order.get("time", datetime.now(timezone.utc).timestamp() * 1000) / 1000)
+            updated_at = int(order.get("updateTime", order.get("time", created_at * 1000)) / 1000)
+            normalized.append(
+                {
+                    "order_id": str(order.get("orderId", "")),
+                    "symbol": order.get("symbol", ""),
+                    "side": order.get("side", ""),
+                    "type": order.get("type", ""),
+                    "quantity": normalize_quantity(order.get("origQty", "0")),
+                    "price": normalize_price(order.get("price", "0")),
+                    "status": normalize_order_status("BINANCE", order.get("status", "")),
+                    "client_order_id": order.get("clientOrderId", ""),
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                }
+            )
+        return normalized
+
     def get_open_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         try:
-            open_orders = self.client.get_open_orders(symbol=symbol) if symbol else self.client.get_open_orders()
-            normalized_orders = []
-            for order in open_orders:
-                created_at = int(order.get("time", datetime.now(timezone.utc).timestamp() * 1000) / 1000)
-                updated_at = int(order.get("updateTime", order.get("time", created_at * 1000)) / 1000)
-                normalized_orders.append(
-                    {
-                        "order_id": str(order.get("orderId", "")),
-                        "symbol": order.get("symbol", ""),
-                        "side": order.get("side", ""),
-                        "type": order.get("type", ""),
-                        "quantity": normalize_quantity(order.get("origQty", "0")),
-                        "price": normalize_price(order.get("price", "0")),
-                        "status": normalize_order_status("BINANCE", order.get("status", "")),
-                        "client_order_id": order.get("clientOrderId", ""),
-                        "created_at": created_at,
-                        "updated_at": updated_at,
-                    }
+            all_orders: List[Dict[str, Any]] = []
+
+            spot_orders = self.client.get_open_orders(symbol=symbol) if symbol else self.client.get_open_orders()
+            all_orders.extend(self._normalize_binance_orders(spot_orders))
+
+            try:
+                futures_orders = (
+                    self.client.futures_get_open_orders(symbol=symbol)
+                    if symbol
+                    else self.client.futures_get_open_orders()
                 )
-            return normalized_orders
+                all_orders.extend(self._normalize_binance_orders(futures_orders))
+            except Exception as e:
+                logger.warning("Failed to get Binance futures open orders: %s", e)
+
+            return all_orders
         except bn.exceptions.BinanceAPIException as e:
             raise ExchangeError(
                 str(e.message) if hasattr(e, "message") else str(e),
@@ -712,50 +729,60 @@ class BybitExchangeClient(ExchangeClient):
         except (ConnectionError, TimeoutError, OSError) as e:
             raise NetworkError(f"Network error while connecting to Bybit: {e}", exchange="BYBIT", original_error=e)
 
+    def _get_open_orders_for_category(self, category: str, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {"category": category}
+        if symbol:
+            params["symbol"] = symbol
+        response = self.client.get_open_orders(**params)
+        if not response:
+            raise ExchangeError(f"Empty response from Bybit API ({category})", exchange="BYBIT")
+        if response.get("retCode") != 0:
+            raise ExchangeError(
+                f"Failed to get open orders from Bybit ({category}): {response.get('retMsg', 'Unknown error')}",
+                exchange="BYBIT",
+                error_code=response.get("retCode"),
+            )
+        normalized_orders = []
+        for order in response.get("result", {}).get("list", []):
+            created_at = int(float(order.get("createdTime", "0")) / 1000) if order.get("createdTime") else int(
+                datetime.now(timezone.utc).timestamp()
+            )
+            updated_at = int(float(order.get("updatedTime", order.get("createdTime", "0"))) / 1000) if order.get(
+                "updatedTime"
+            ) else created_at
+            side = "BUY" if order.get("side") == "Buy" else "SELL" if order.get("side") == "Sell" else order.get("side", "")
+            order_type = (
+                "MARKET"
+                if order.get("orderType") == "Market"
+                else "LIMIT" if order.get("orderType") == "Limit" else order.get("orderType", "")
+            )
+            normalized_orders.append(
+                {
+                    "order_id": str(order.get("orderId", "")),
+                    "symbol": order.get("symbol", ""),
+                    "side": side,
+                    "type": order_type,
+                    "quantity": normalize_quantity(order.get("qty", "0")),
+                    "price": normalize_price(order.get("price", "0")),
+                    "status": normalize_order_status("BYBIT", order.get("orderStatus", "")),
+                    "client_order_id": order.get("orderLinkId", ""),
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                }
+            )
+        return normalized_orders
+
     def get_open_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         try:
-            params: Dict[str, Any] = {"category": "spot"}
-            if symbol:
-                params["symbol"] = symbol
-            response = self.client.get_open_orders(**params)
-            if not response:
-                raise ExchangeError("Empty response from Bybit API", exchange="BYBIT")
-            if response.get("retCode") != 0:
-                raise ExchangeError(
-                    f"Failed to get open orders from Bybit: {response.get('retMsg', 'Unknown error')}",
-                    exchange="BYBIT",
-                    error_code=response.get("retCode"),
-                )
-
-            normalized_orders = []
-            for order in response.get("result", {}).get("list", []):
-                created_at = int(float(order.get("createdTime", "0")) / 1000) if order.get("createdTime") else int(
-                    datetime.now(timezone.utc).timestamp()
-                )
-                updated_at = int(float(order.get("updatedTime", order.get("createdTime", "0"))) / 1000) if order.get(
-                    "updatedTime"
-                ) else created_at
-                side = "BUY" if order.get("side") == "Buy" else "SELL" if order.get("side") == "Sell" else order.get("side", "")
-                order_type = (
-                    "MARKET"
-                    if order.get("orderType") == "Market"
-                    else "LIMIT" if order.get("orderType") == "Limit" else order.get("orderType", "")
-                )
-                normalized_orders.append(
-                    {
-                        "order_id": str(order.get("orderId", "")),
-                        "symbol": order.get("symbol", ""),
-                        "side": side,
-                        "type": order_type,
-                        "quantity": normalize_quantity(order.get("qty", "0")),
-                        "price": normalize_price(order.get("price", "0")),
-                        "status": normalize_order_status("BYBIT", order.get("orderStatus", "")),
-                        "client_order_id": order.get("orderLinkId", ""),
-                        "created_at": created_at,
-                        "updated_at": updated_at,
-                    }
-                )
-            return normalized_orders
+            all_orders: List[Dict[str, Any]] = []
+            for cat in ("spot", "linear"):
+                try:
+                    all_orders.extend(self._get_open_orders_for_category(cat, symbol))
+                except ExchangeError:
+                    if cat == "spot":
+                        raise
+                    logger.warning("Failed to get Bybit %s open orders, skipping", cat)
+            return all_orders
         except ExchangeError:
             raise
         except FailedRequestError as e:
@@ -944,7 +971,52 @@ class BybitExchangeClient(ExchangeClient):
         return results
 
     def get_positions(self) -> List[Dict[str, Any]]:
-        return []
+        try:
+            response = self.client.get_positions(category="linear", settleCoin="USDT")
+            if not response or response.get("retCode") != 0:
+                raise ExchangeError(
+                    f"Bybit get_positions failed: {(response or {}).get('retMsg', 'Unknown error')}",
+                    exchange="BYBIT",
+                    error_code=(response or {}).get("retCode"),
+                )
+            positions = []
+            for p in response.get("result", {}).get("list", []):
+                size = float(p.get("size", 0))
+                if size == 0:
+                    continue
+                raw_side = p.get("side", "")
+                side = "LONG" if raw_side == "Buy" else "SHORT"
+                trade_mode = p.get("tradeMode", 0)
+                margin_type = "isolated" if str(trade_mode) == "1" else "cross"
+                positions.append(
+                    {
+                        "symbol": p.get("symbol", ""),
+                        "side": side,
+                        "size": str(size),
+                        "entry_price": str(p.get("avgPrice", "0")),
+                        "mark_price": str(p.get("markPrice", "0")),
+                        "liq_price": str(p.get("liqPrice", "0")),
+                        "unrealized_pnl": str(p.get("unrealisedPnl", "0")),
+                        "leverage": str(p.get("leverage", "1")),
+                        "margin_type": margin_type,
+                        "notional": str(abs(float(p.get("positionValue", 0)))),
+                        "update_time_ms": int(p.get("updatedTime", 0)),
+                    }
+                )
+            return positions
+        except ExchangeError:
+            raise
+        except FailedRequestError as e:
+            raise ExchangeError(str(e), exchange="BYBIT", error_code=None, original_error=e)
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise NetworkError(f"Network error connecting to Bybit: {e}", exchange="BYBIT", original_error=e)
+        except Exception as e:
+            raise ExchangeError(
+                f"Unexpected error getting Bybit positions: {e}",
+                exchange="BYBIT",
+                error_code=None,
+                original_error=e,
+            )
 
 
 class BitgetExchangeClient(ExchangeClient):

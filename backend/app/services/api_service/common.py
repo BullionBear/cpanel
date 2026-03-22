@@ -28,6 +28,7 @@ ENDING_STATUSES = {"FILLED", "REJECT", "CANCEL"}
 PRODUCT_TO_BYBIT_CATEGORY = {
     "SPOT": "spot",
     "LINEAR": "linear",
+    "UMARGIN": "linear",
     "INVERSE": "inverse",
     "OPTION": "option",
 }
