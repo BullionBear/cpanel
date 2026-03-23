@@ -319,6 +319,7 @@ export interface OrderCreate {
 	price?: string;
 	qty: string;
 	side: 'BUY' | 'SELL';
+	reduce_only?: boolean;
 }
 
 export interface OrderResponse {

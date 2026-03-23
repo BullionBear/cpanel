@@ -25,6 +25,7 @@
 	let orderType: 'LIMIT' | 'MARKET' = 'LIMIT';
 	let price: string = '';
 	let qty: string = '';
+	let reduceOnly: boolean = false;
 
 	async function loadData() {
 		try {
@@ -151,7 +152,8 @@
 				type: orderType,
 				qty: qty,
 				side: side,
-				...(orderType === 'LIMIT' && price ? { price } : {})
+				...(orderType === 'LIMIT' && price ? { price } : {}),
+				...(reduceOnly ? { reduce_only: true } : {})
 			};
 
 			const result = await createOrder(orderData);
@@ -170,6 +172,12 @@
 	onMount(() => {
 		loadData();
 	});
+
+	$: selectedSymbol = filteredSymbols.find((s) => s.id === selectedSymbolId) ?? null;
+	$: isFutures = selectedSymbol
+		? ['UMARGIN', 'LINEAR', 'INVERSE'].includes(selectedSymbol.product?.slug?.toUpperCase() ?? '')
+		: false;
+	$: if (!isFutures) reduceOnly = false;
 
 	$: if (selectedAccountId) {
 		updateFilteredSymbols();
@@ -263,6 +271,15 @@
 						/>
 					</div>
 				</div>
+
+				{#if isFutures}
+				<div class="form-group-inline">
+					<label class="checkbox-label">
+						<input type="checkbox" bind:checked={reduceOnly} disabled={submitting} />
+						<span>Reduce Only</span>
+					</label>
+				</div>
+				{/if}
 			</div>
 		</div>
 
@@ -392,6 +409,29 @@
 
 	.form-group input::placeholder {
 		color: #9ca3af;
+	}
+
+	.form-group-inline {
+		display: flex;
+		align-items: center;
+	}
+
+	.checkbox-label {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 13px;
+		font-weight: 500;
+		color: #374151;
+		cursor: pointer;
+		user-select: none;
+	}
+
+	.checkbox-label input[type="checkbox"] {
+		width: 16px;
+		height: 16px;
+		accent-color: #667eea;
+		cursor: pointer;
 	}
 
 	.button-group {

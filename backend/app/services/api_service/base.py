@@ -32,7 +32,8 @@ class ExchangeClient(ABC):
 
     @abstractmethod
     def get_order_status(
-        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None
+        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None,
+        product: str = "SPOT",
     ) -> Dict[str, Any]:
         pass
 
@@ -42,13 +43,15 @@ class ExchangeClient(ABC):
 
     @abstractmethod
     def cancel_order(
-        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None
+        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None,
+        product: str = "SPOT",
     ) -> Dict[str, Any]:
         pass
 
     @abstractmethod
     def create_order(
-        self, symbol: str, side: ORDER_SIDES, order_type: ORDER_TYPES, quantity: str, price: Optional[str] = None
+        self, symbol: str, side: ORDER_SIDES, order_type: ORDER_TYPES, quantity: str,
+        price: Optional[str] = None, product: str = "SPOT", reduce_only: bool = False,
     ) -> Dict[str, Any]:
         pass
 

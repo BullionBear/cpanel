@@ -261,16 +261,26 @@ class BinanceExchangeClient(ExchangeClient):
                 size_precision = len(step.split(".")[-1].rstrip("0")) if "." in step else 0
         return price_precision, size_precision
 
+    def _is_futures(self, product: str) -> bool:
+        return product.upper() in ("UMARGIN", "LINEAR", "FUTURES")
+
     def get_order_status(
-        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None
+        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None,
+        product: str = "SPOT",
     ) -> Dict[str, Any]:
         try:
+            params: Dict[str, Any] = {"symbol": symbol}
             if client_order_id:
-                order = self.client.get_order(symbol=symbol, origClientOrderId=client_order_id)
+                params["origClientOrderId"] = client_order_id
             elif order_id:
-                order = self.client.get_order(symbol=symbol, orderId=int(order_id))
+                params["orderId"] = int(order_id)
             else:
                 raise ExchangeError("Either order_id or client_order_id must be provided", exchange="BINANCE")
+
+            if self._is_futures(product):
+                order = self.client.futures_get_order(**params)
+            else:
+                order = self.client.get_order(**params)
 
             return {
                 "order_id": str(order.get("orderId", "")),
@@ -336,7 +346,8 @@ class BinanceExchangeClient(ExchangeClient):
             raise NetworkError(f"Network error while connecting to Binance: {e}", exchange="BINANCE", original_error=e)
 
     def cancel_order(
-        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None
+        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None,
+        product: str = "SPOT",
     ) -> Dict[str, Any]:
         try:
             cancel_params: Dict[str, Any] = {"symbol": symbol}
@@ -347,7 +358,10 @@ class BinanceExchangeClient(ExchangeClient):
             else:
                 raise ExchangeError("Either order_id or client_order_id must be provided", exchange="BINANCE")
 
-            cancel_result = self.client.cancel_order(**cancel_params)
+            if self._is_futures(product):
+                cancel_result = self.client.futures_cancel_order(**cancel_params)
+            else:
+                cancel_result = self.client.cancel_order(**cancel_params)
             order_time_ms = cancel_result.get("time")
             created_at = int(order_time_ms / 1000) if order_time_ms else int(datetime.now(timezone.utc).timestamp())
             update_time_ms = cancel_result.get("updateTime", order_time_ms)
@@ -376,7 +390,8 @@ class BinanceExchangeClient(ExchangeClient):
             raise NetworkError(f"Network error while connecting to Binance: {e}", exchange="BINANCE", original_error=e)
 
     def create_order(
-        self, symbol: str, side: ORDER_SIDES, order_type: ORDER_TYPES, quantity: str, price: Optional[str] = None
+        self, symbol: str, side: ORDER_SIDES, order_type: ORDER_TYPES, quantity: str,
+        price: Optional[str] = None, product: str = "SPOT", reduce_only: bool = False,
     ) -> Dict[str, Any]:
         try:
             client_order_id = generate_client_order_id()
@@ -393,7 +408,12 @@ class BinanceExchangeClient(ExchangeClient):
                 params["price"] = price
                 params["timeInForce"] = "GTC"
 
-            order_result = self.client.create_order(**params)
+            if self._is_futures(product):
+                if reduce_only:
+                    params["reduceOnly"] = "true"
+                order_result = self.client.futures_create_order(**params)
+            else:
+                order_result = self.client.create_order(**params)
             raw_status = order_result.get("status", "")
             normalized_status = normalize_order_status("BINANCE", raw_status)
             if normalized_status not in ENDING_STATUSES:
@@ -402,6 +422,7 @@ class BinanceExchangeClient(ExchangeClient):
                         symbol=symbol,
                         order_id=str(order_result.get("orderId", "")),
                         client_order_id=client_order_id,
+                        product=product,
                     )
                     normalized_status = normalize_order_status("BINANCE", status_info.get("status", raw_status))
                 except Exception as e:
@@ -686,14 +707,19 @@ class BybitExchangeClient(ExchangeClient):
             "exists": True,
         }
 
+    def _bybit_category(self, product: str) -> str:
+        return PRODUCT_TO_BYBIT_CATEGORY.get(product.upper(), "spot")
+
     def get_order_status(
-        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None
+        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None,
+        product: str = "SPOT",
     ) -> Dict[str, Any]:
         try:
             if not order_id and not client_order_id:
                 raise ExchangeError("Either order_id or client_order_id must be provided", exchange="BYBIT")
 
-            params = {"category": "spot", "symbol": symbol}
+            category = self._bybit_category(product)
+            params = {"category": category, "symbol": symbol}
             if client_order_id:
                 params["orderLinkId"] = client_order_id
             elif order_id:
@@ -793,10 +819,12 @@ class BybitExchangeClient(ExchangeClient):
             raise NetworkError(f"Network error while connecting to Bybit: {e}", exchange="BYBIT", original_error=e)
 
     def cancel_order(
-        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None
+        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None,
+        product: str = "SPOT",
     ) -> Dict[str, Any]:
         try:
-            params: Dict[str, Any] = {"category": "spot", "symbol": symbol}
+            category = self._bybit_category(product)
+            params: Dict[str, Any] = {"category": category, "symbol": symbol}
             if client_order_id:
                 params["orderLinkId"] = client_order_id
             elif order_id:
@@ -849,25 +877,28 @@ class BybitExchangeClient(ExchangeClient):
             raise NetworkError(f"Network error while connecting to Bybit: {e}", exchange="BYBIT", original_error=e)
 
     def create_order(
-        self, symbol: str, side: ORDER_SIDES, order_type: ORDER_TYPES, quantity: str, price: Optional[str] = None
+        self, symbol: str, side: ORDER_SIDES, order_type: ORDER_TYPES, quantity: str,
+        price: Optional[str] = None, product: str = "SPOT", reduce_only: bool = False,
     ) -> Dict[str, Any]:
         try:
             client_order_id = generate_client_order_id()
+            category = self._bybit_category(product)
             params: Dict[str, Any] = {
-                "category": "spot",
+                "category": category,
                 "symbol": symbol,
                 "side": "Buy" if side == "BUY" else "Sell",
                 "orderType": "Market" if order_type == "MARKET" else "Limit",
                 "qty": quantity,
                 "orderLinkId": client_order_id,
             }
-            # Standardize spot market qty semantics: always treat qty as base coin.
-            if order_type == "MARKET":
+            if order_type == "MARKET" and category == "spot":
                 params["marketUnit"] = "baseCoin"
             if order_type == "LIMIT":
                 if price is None:
                     raise ExchangeError("Price is required for LIMIT orders", exchange="BYBIT")
                 params["price"] = price
+            if reduce_only and category != "spot":
+                params["reduceOnly"] = True
 
             response = self.client.place_order(**params)
             if not response or response.get("retCode") != 0:
@@ -882,7 +913,7 @@ class BybitExchangeClient(ExchangeClient):
             normalized_status = normalize_order_status("BYBIT", raw_status)
             if normalized_status not in ENDING_STATUSES:
                 try:
-                    status_info = self.get_order_status(symbol=symbol, order_id=str(order_id), client_order_id=client_order_id)
+                    status_info = self.get_order_status(symbol=symbol, order_id=str(order_id), client_order_id=client_order_id, product=product)
                     normalized_status = normalize_order_status("BYBIT", status_info.get("status", raw_status))
                 except Exception as e:
                     logger.warning("Failed to fetch Bybit order status for %s: %s", client_order_id, e)
@@ -1207,7 +1238,8 @@ class BitgetExchangeClient(ExchangeClient):
         }
 
     def get_order_status(
-        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None
+        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None,
+        product: str = "SPOT",
     ) -> Dict[str, Any]:
         try:
             if not order_id and not client_order_id:
@@ -1294,7 +1326,8 @@ class BitgetExchangeClient(ExchangeClient):
             )
 
     def cancel_order(
-        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None
+        self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None,
+        product: str = "SPOT",
     ) -> Dict[str, Any]:
         try:
             payload: Dict[str, Any] = {"symbol": symbol}
@@ -1332,7 +1365,8 @@ class BitgetExchangeClient(ExchangeClient):
             )
 
     def create_order(
-        self, symbol: str, side: ORDER_SIDES, order_type: ORDER_TYPES, quantity: str, price: Optional[str] = None
+        self, symbol: str, side: ORDER_SIDES, order_type: ORDER_TYPES, quantity: str,
+        price: Optional[str] = None, product: str = "SPOT", reduce_only: bool = False,
     ) -> Dict[str, Any]:
         try:
             client_order_id = generate_client_order_id()

@@ -55,6 +55,7 @@ class OrderCreate(BaseModel):
     price: Optional[str] = Field(None, description="Order price (required for LIMIT orders)")
     qty: str = Field(..., description="Order quantity")
     side: str = Field(..., description="Order side: BUY or SELL")
+    reduce_only: bool = Field(False, description="Reduce-only order (futures only, for closing positions)")
 
     @field_validator("type")
     @classmethod
@@ -138,6 +139,8 @@ async def create_order(
             detail=f"Symbol belongs to exchange '{symbol.exchange.slug}', but API key is for '{exchange_slug}'",
         )
 
+    product_slug = symbol.product.slug.upper() if symbol.product else "SPOT"
+
     api_service = APIService()
     try:
         client = api_service.get_exchange_client_from_api_info(exchange_slug, api)
@@ -147,6 +150,8 @@ async def create_order(
             order_type=order_data.type,
             quantity=order_data.qty,
             price=order_data.price,
+            product=product_slug,
+            reduce_only=order_data.reduce_only,
         )
         return OrderResponse(
             order_id=order_result.get("order_id", ""),
@@ -327,6 +332,8 @@ async def cancel_order(
             detail=f"Symbol belongs to exchange '{symbol.exchange.slug}', but API key is for '{exchange_slug}'",
         )
 
+    product_slug = symbol.product.slug.upper() if symbol.product else "SPOT"
+
     api_service = APIService()
     try:
         client = api_service.get_exchange_client_from_api_info(exchange_slug, api)
@@ -334,6 +341,7 @@ async def cancel_order(
             symbol=symbol.name,
             order_id=cancel_data.order_id,
             client_order_id=cancel_data.client_order_id,
+            product=product_slug,
         )
         return OrderResponse(
             order_id=cancel_result.get("order_id", ""),
