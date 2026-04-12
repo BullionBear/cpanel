@@ -1102,13 +1102,19 @@ export interface ProductOption {
 	slug: string;
 }
 
-const KNOWN_PRODUCTS: ProductOption[] = [
-	{ id: 1, name: 'Spot', slug: 'SPOT' },
-	{ id: 2, name: 'U Margined Perpetual', slug: 'UMARGIN' },
-	{ id: 3, name: 'Coin Margined', slug: 'CMARGIN' }
-];
-
 export async function getProducts(): Promise<ProductOption[]> {
+	const token = localStorage.getItem('access_token');
+	try {
+		const res = await fetch(`${API_V2}/product`, {
+			headers: token ? { Authorization: `Bearer ${token}` } : {}
+		});
+		if (res.ok) {
+			const data: ProductOption[] = await res.json();
+			if (data.length > 0) return data;
+		}
+	} catch {
+		// fall through to symbol-derived approach
+	}
 	try {
 		const symbols = await getSymbols(500);
 		const byId = new Map<number, ProductOption>();
@@ -1117,14 +1123,9 @@ export async function getProducts(): Promise<ProductOption[]> {
 				byId.set(s.product.id, { id: s.product.id, name: s.product.name, slug: s.product.slug });
 			}
 		}
-		for (const known of KNOWN_PRODUCTS) {
-			if (!byId.has(known.id)) {
-				byId.set(known.id, known);
-			}
-		}
 		return [...byId.values()].sort((a, b) => a.id - b.id);
 	} catch {
-		return [...KNOWN_PRODUCTS];
+		return [];
 	}
 }
 

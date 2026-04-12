@@ -8,7 +8,7 @@ from app.api.v2 import mytrade
 from app.api.v2 import position
 
 # Import in-use v1 modules (migrated to v2)
-from app.api.v1 import auth, apikey, symbol, market, preference, tool, wallet
+from app.api.v1 import auth, apikey, symbol, market, preference, tool, wallet, product
 
 api_router = APIRouter()
 api_router.include_router(balance.router)
@@ -25,3 +25,4 @@ api_router.include_router(market.router)
 api_router.include_router(preference.router)
 api_router.include_router(tool.router)
 api_router.include_router(wallet.router)
+api_router.include_router(product.router)
