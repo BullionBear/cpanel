@@ -1216,6 +1216,7 @@ export interface PositionItem {
 	mark_price: string;
 	liq_price: string;
 	unrealized_pnl: string;
+	pnl_currency: string;
 	leverage: string;
 	margin_type: string;
 	notional: string;

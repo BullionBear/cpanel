@@ -28,6 +28,7 @@ class PositionItem(BaseModel):
     mark_price: str
     liq_price: str
     unrealized_pnl: str
+    pnl_currency: str = "USDT"
     leverage: str
     margin_type: str
     notional: str
@@ -63,6 +64,7 @@ def _fetch_positions(
             mark_price=p["mark_price"],
             liq_price=p["liq_price"],
             unrealized_pnl=p["unrealized_pnl"],
+            pnl_currency=p.get("pnl_currency", "USDT"),
             leverage=p["leverage"],
             margin_type=p["margin_type"],
             notional=p["notional"],

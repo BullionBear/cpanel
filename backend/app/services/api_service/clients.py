@@ -595,7 +595,7 @@ class BinanceExchangeClient(ExchangeClient):
         except (ConnectionError, TimeoutError, OSError) as e:
             raise NetworkError(f"Network error connecting to Binance: {e}", exchange="BINANCE", original_error=e)
 
-    def _parse_binance_positions(self, raw: list) -> List[Dict[str, Any]]:
+    def _parse_usdtm_positions(self, raw: list) -> List[Dict[str, Any]]:
         positions = []
         for p in raw:
             amt = float(p.get("positionAmt", 0))
@@ -611,9 +611,38 @@ class BinanceExchangeClient(ExchangeClient):
                     "mark_price": str(p.get("markPrice", "0")),
                     "liq_price": str(p.get("liquidationPrice", "0")),
                     "unrealized_pnl": str(p.get("unRealizedProfit", "0")),
+                    "pnl_currency": "USDT",
                     "leverage": str(p.get("leverage", "1")),
                     "margin_type": (p.get("marginType", "cross") or "cross").lower(),
                     "notional": str(abs(float(p.get("notional", 0)))),
+                    "update_time_ms": int(p.get("updateTime", 0)),
+                }
+            )
+        return positions
+
+    def _parse_coin_margin_positions(self, raw: list) -> List[Dict[str, Any]]:
+        positions = []
+        for p in raw:
+            amt = float(p.get("positionAmt", 0))
+            if amt == 0:
+                continue
+            side = "LONG" if amt > 0 else "SHORT"
+            notional_value = abs(float(p.get("notionalValue", 0)))
+            symbol = p.get("symbol", "")
+            base_asset = p.get("baseAsset", symbol.split("USD")[0] if "USD" in symbol else "")
+            positions.append(
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "size": str(abs(amt)),
+                    "entry_price": str(p.get("entryPrice", "0")),
+                    "mark_price": str(p.get("markPrice", "0")),
+                    "liq_price": str(p.get("liquidationPrice", "0")),
+                    "unrealized_pnl": str(p.get("unRealizedProfit", "0")),
+                    "pnl_currency": base_asset,
+                    "leverage": str(p.get("leverage", "1")),
+                    "margin_type": (p.get("marginType", "cross") or "cross").lower(),
+                    "notional": str(notional_value),
                     "update_time_ms": int(p.get("updateTime", 0)),
                 }
             )
@@ -624,11 +653,11 @@ class BinanceExchangeClient(ExchangeClient):
             positions = []
 
             raw = self.client.futures_position_information()
-            positions.extend(self._parse_binance_positions(raw))
+            positions.extend(self._parse_usdtm_positions(raw))
 
             try:
                 coin_margin_raw = self.client.futures_coin_position_information()
-                positions.extend(self._parse_binance_positions(coin_margin_raw))
+                positions.extend(self._parse_coin_margin_positions(coin_margin_raw))
             except Exception as e:
                 logger.warning("Failed to get Binance coin-margin positions: %s", e)
 
@@ -1122,6 +1151,7 @@ class BybitExchangeClient(ExchangeClient):
                         "mark_price": str(p.get("markPrice", "0")),
                         "liq_price": str(p.get("liqPrice", "0")),
                         "unrealized_pnl": str(p.get("unrealisedPnl", "0")),
+                        "pnl_currency": "USDT",
                         "leverage": str(p.get("leverage", "1")),
                         "margin_type": margin_type,
                         "notional": str(abs(float(p.get("positionValue", 0)))),
