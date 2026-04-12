@@ -48,7 +48,7 @@ class TokenBalance(BaseModel):
 
 class WalletBalance(BaseModel):
     """Wallet balance model."""
-    wallet: str  # SPOT, MARGIN, FUTURES, UNIFIED, FUNDING
+    wallet: str  # SPOT, MARGIN, FUTURES, COIN_MARGIN, UNIFIED, FUNDING
     balance: List[TokenBalance]
 
 

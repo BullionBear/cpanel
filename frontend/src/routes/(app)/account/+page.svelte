@@ -170,12 +170,11 @@
 		return '•••••••••••••••' + key.slice(-4);
 	}
 
-	// Wallet card style class from category slug (SPOT -> spot, FUTURES/UNIFIED/PERP -> perp, MARGIN -> margin)
 	function walletCardClass(slug: string): string {
 		const s = (slug || '').toUpperCase();
 		if (s === 'SPOT') return 'spot';
 		if (s === 'MARGIN') return 'margin';
-		if (['FUTURES', 'UNIFIED', 'PERP', 'FUNDING'].includes(s)) return 'perp';
+		if (['FUTURES', 'UNIFIED', 'PERP', 'FUNDING', 'UMARGIN', 'CMARGIN', 'COIN_MARGIN'].includes(s)) return 'perp';
 		return 'default';
 	}
 

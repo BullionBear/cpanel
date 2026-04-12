@@ -1104,7 +1104,8 @@ export interface ProductOption {
 
 const KNOWN_PRODUCTS: ProductOption[] = [
 	{ id: 1, name: 'Spot', slug: 'SPOT' },
-	{ id: 2, name: 'U Margined Perpetual', slug: 'UMARGIN' }
+	{ id: 2, name: 'U Margined Perpetual', slug: 'UMARGIN' },
+	{ id: 3, name: 'Coin Margined', slug: 'CMARGIN' }
 ];
 
 export async function getProducts(): Promise<ProductOption[]> {
@@ -1215,6 +1216,7 @@ export interface PositionItem {
 	mark_price: string;
 	liq_price: string;
 	unrealized_pnl: string;
+	pnl_currency: string;
 	leverage: string;
 	margin_type: string;
 	notional: string;

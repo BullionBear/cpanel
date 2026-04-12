@@ -165,7 +165,7 @@
 
 					<div class="pnl-section {pnlClass(pos.unrealized_pnl)}">
 						<span class="pnl-label">Unrealized PnL</span>
-						<span class="pnl-value">{formatPnl(pos.unrealized_pnl)} USDT</span>
+						<span class="pnl-value">{formatPnl(pos.unrealized_pnl)} {pos.pnl_currency || 'USDT'}</span>
 					</div>
 
 					<div class="details-grid">

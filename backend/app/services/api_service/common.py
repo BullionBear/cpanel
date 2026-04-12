@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 API_TYPES = Literal["HMAC", "ED25519", "RSA"]
 EXCHANGES = Literal["BINANCE", "BYBIT", "BITGET"]
-WALLETS = Literal["SPOT", "MARGIN", "FUTURES", "UNIFIED", "FUNDING"]
+WALLETS = Literal["SPOT", "MARGIN", "FUTURES", "COIN_MARGIN", "UNIFIED", "FUNDING"]
 ORDER_TYPES = Literal["MARKET", "LIMIT"]
 ORDER_SIDES = Literal["BUY", "SELL"]
 ORDER_STATUS = Literal["NEW", "FILLED", "PARTIAL_FILLED", "REJECT", "CANCEL"]

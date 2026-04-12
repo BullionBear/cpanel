@@ -157,6 +157,28 @@ class BinanceExchangeClient(ExchangeClient):
             except Exception as e:
                 logger.warning("Failed to get Binance FUTURES balance: %s", e)
 
+            try:
+                coin_margin_balance = self.client.futures_coin_account_balance()
+                if coin_margin_balance:
+                    coin_margin_balances = []
+                    for account_balance in coin_margin_balance:
+                        balance_amt = float(account_balance.get("balance", 0))
+                        available_balance = float(account_balance.get("availableBalance", 0))
+                        frozen = balance_amt - available_balance
+                        if balance_amt > 0:
+                            coin_margin_balances.append(
+                                {
+                                    "token": account_balance.get("asset", "BTC"),
+                                    "total": str(balance_amt),
+                                    "frozen": str(frozen),
+                                    "available": str(available_balance),
+                                }
+                            )
+                    if coin_margin_balances:
+                        result.append({"wallet": "COIN_MARGIN", "balance": coin_margin_balances})
+            except Exception as e:
+                logger.warning("Failed to get Binance COIN_MARGIN balance: %s", e)
+
             return result
         except bn.exceptions.BinanceAPIException as e:
             raise ExchangeError(str(e), exchange="BINANCE", error_code=e.code, original_error=e)
@@ -173,6 +195,8 @@ class BinanceExchangeClient(ExchangeClient):
         try:
             if product == "UMARGIN":
                 return self._get_futures_symbol_info(symbol)
+            if self._is_coin_margin(product):
+                return self._get_coin_margin_symbol_info(symbol)
             return self._get_spot_symbol_info(symbol)
         except ExchangeError:
             raise
@@ -247,6 +271,36 @@ class BinanceExchangeClient(ExchangeClient):
             "exists": True,
         }
 
+    def _get_coin_margin_symbol_info(self, symbol: str) -> Dict[str, Any]:
+        exchange_info = exchange_info_cache.get("binance_coin_margin_exchange_info")
+        if exchange_info is None:
+            exchange_info = bn.Client().futures_coin_exchange_info()
+            exchange_info_cache.set("binance_coin_margin_exchange_info", exchange_info)
+
+        if not exchange_info or "symbols" not in exchange_info:
+            raise ExchangeError("Invalid response from Binance coin-margin exchange info", exchange="BINANCE", error_code=None)
+
+        symbol_info = None
+        for item in exchange_info["symbols"]:
+            if item["symbol"] == symbol and item.get("status") == "TRADING":
+                symbol_info = item
+                break
+
+        if not symbol_info:
+            raise ExchangeError(
+                f"Symbol {symbol} not found or not trading on Binance Coin-Margin", exchange="BINANCE"
+            )
+
+        price_precision, size_precision = self._parse_filters(symbol_info.get("filters", []))
+        return {
+            "symbol": symbol,
+            "base_asset": symbol_info.get("baseAsset", ""),
+            "quote_asset": symbol_info.get("quoteAsset", ""),
+            "price_precision": price_precision,
+            "size_precision": size_precision,
+            "exists": True,
+        }
+
     @staticmethod
     def _parse_filters(filters: list) -> tuple:
         """Extract price_precision and size_precision from Binance filter array."""
@@ -264,6 +318,9 @@ class BinanceExchangeClient(ExchangeClient):
     def _is_futures(self, product: str) -> bool:
         return product.upper() in ("UMARGIN", "LINEAR", "FUTURES")
 
+    def _is_coin_margin(self, product: str) -> bool:
+        return product.upper() in ("CMARGIN", "COIN_MARGIN", "INVERSE")
+
     def get_order_status(
         self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None,
         product: str = "SPOT",
@@ -277,7 +334,9 @@ class BinanceExchangeClient(ExchangeClient):
             else:
                 raise ExchangeError("Either order_id or client_order_id must be provided", exchange="BINANCE")
 
-            if self._is_futures(product):
+            if self._is_coin_margin(product):
+                order = self.client.futures_coin_get_order(**params)
+            elif self._is_futures(product):
                 order = self.client.futures_get_order(**params)
             else:
                 order = self.client.get_order(**params)
@@ -334,6 +393,16 @@ class BinanceExchangeClient(ExchangeClient):
             except Exception as e:
                 logger.warning("Failed to get Binance futures open orders: %s", e)
 
+            try:
+                coin_margin_orders = (
+                    self.client.futures_coin_get_open_orders(symbol=symbol)
+                    if symbol
+                    else self.client.futures_coin_get_open_orders()
+                )
+                all_orders.extend(self._normalize_binance_orders(coin_margin_orders))
+            except Exception as e:
+                logger.warning("Failed to get Binance coin-margin open orders: %s", e)
+
             return all_orders
         except bn.exceptions.BinanceAPIException as e:
             raise ExchangeError(
@@ -358,7 +427,9 @@ class BinanceExchangeClient(ExchangeClient):
             else:
                 raise ExchangeError("Either order_id or client_order_id must be provided", exchange="BINANCE")
 
-            if self._is_futures(product):
+            if self._is_coin_margin(product):
+                cancel_result = self.client.futures_coin_cancel_order(**cancel_params)
+            elif self._is_futures(product):
                 cancel_result = self.client.futures_cancel_order(**cancel_params)
             else:
                 cancel_result = self.client.cancel_order(**cancel_params)
@@ -408,7 +479,11 @@ class BinanceExchangeClient(ExchangeClient):
                 params["price"] = price
                 params["timeInForce"] = "GTC"
 
-            if self._is_futures(product):
+            if self._is_coin_margin(product):
+                if reduce_only:
+                    params["reduceOnly"] = "true"
+                order_result = self.client.futures_coin_create_order(**params)
+            elif self._is_futures(product):
                 if reduce_only:
                     params["reduceOnly"] = "true"
                 order_result = self.client.futures_create_order(**params)
@@ -486,7 +561,11 @@ class BinanceExchangeClient(ExchangeClient):
 
             if not symbol:
                 raise ExchangeError("symbol is required for Binance futures trade history", exchange="BINANCE")
-            raw = self.client.futures_account_trades(symbol=symbol, startTime=start_ms, endTime=end_ms, limit=cap)
+
+            if category.upper() in ("CMARGIN", "COIN_MARGIN"):
+                raw = self.client.futures_coin_account_trades(symbol=symbol, startTime=start_ms, endTime=end_ms, limit=cap)
+            else:
+                raw = self.client.futures_account_trades(symbol=symbol, startTime=start_ms, endTime=end_ms, limit=cap)
             result = [
                 {
                     "exch_tid": int(t.get("id", 0)),
@@ -516,30 +595,72 @@ class BinanceExchangeClient(ExchangeClient):
         except (ConnectionError, TimeoutError, OSError) as e:
             raise NetworkError(f"Network error connecting to Binance: {e}", exchange="BINANCE", original_error=e)
 
+    def _parse_usdtm_positions(self, raw: list) -> List[Dict[str, Any]]:
+        positions = []
+        for p in raw:
+            amt = float(p.get("positionAmt", 0))
+            if amt == 0:
+                continue
+            side = "LONG" if amt > 0 else "SHORT"
+            positions.append(
+                {
+                    "symbol": p.get("symbol", ""),
+                    "side": side,
+                    "size": str(abs(amt)),
+                    "entry_price": str(p.get("entryPrice", "0")),
+                    "mark_price": str(p.get("markPrice", "0")),
+                    "liq_price": str(p.get("liquidationPrice", "0")),
+                    "unrealized_pnl": str(p.get("unRealizedProfit", "0")),
+                    "pnl_currency": "USDT",
+                    "leverage": str(p.get("leverage", "1")),
+                    "margin_type": (p.get("marginType", "cross") or "cross").lower(),
+                    "notional": str(abs(float(p.get("notional", 0)))),
+                    "update_time_ms": int(p.get("updateTime", 0)),
+                }
+            )
+        return positions
+
+    def _parse_coin_margin_positions(self, raw: list) -> List[Dict[str, Any]]:
+        positions = []
+        for p in raw:
+            amt = float(p.get("positionAmt", 0))
+            if amt == 0:
+                continue
+            side = "LONG" if amt > 0 else "SHORT"
+            notional_value = abs(float(p.get("notionalValue", 0)))
+            symbol = p.get("symbol", "")
+            base_asset = p.get("baseAsset", symbol.split("USD")[0] if "USD" in symbol else "")
+            positions.append(
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "size": str(abs(amt)),
+                    "entry_price": str(p.get("entryPrice", "0")),
+                    "mark_price": str(p.get("markPrice", "0")),
+                    "liq_price": str(p.get("liquidationPrice", "0")),
+                    "unrealized_pnl": str(p.get("unRealizedProfit", "0")),
+                    "pnl_currency": base_asset,
+                    "leverage": str(p.get("leverage", "1")),
+                    "margin_type": (p.get("marginType", "cross") or "cross").lower(),
+                    "notional": str(notional_value),
+                    "update_time_ms": int(p.get("updateTime", 0)),
+                }
+            )
+        return positions
+
     def get_positions(self) -> List[Dict[str, Any]]:
         try:
-            raw = self.client.futures_position_information()
             positions = []
-            for p in raw:
-                amt = float(p.get("positionAmt", 0))
-                if amt == 0:
-                    continue
-                side = "LONG" if amt > 0 else "SHORT"
-                positions.append(
-                    {
-                        "symbol": p.get("symbol", ""),
-                        "side": side,
-                        "size": str(abs(amt)),
-                        "entry_price": str(p.get("entryPrice", "0")),
-                        "mark_price": str(p.get("markPrice", "0")),
-                        "liq_price": str(p.get("liquidationPrice", "0")),
-                        "unrealized_pnl": str(p.get("unRealizedProfit", "0")),
-                        "leverage": str(p.get("leverage", "1")),
-                        "margin_type": (p.get("marginType", "cross") or "cross").lower(),
-                        "notional": str(abs(float(p.get("notional", 0)))),
-                        "update_time_ms": int(p.get("updateTime", 0)),
-                    }
-                )
+
+            raw = self.client.futures_position_information()
+            positions.extend(self._parse_usdtm_positions(raw))
+
+            try:
+                coin_margin_raw = self.client.futures_coin_position_information()
+                positions.extend(self._parse_coin_margin_positions(coin_margin_raw))
+            except Exception as e:
+                logger.warning("Failed to get Binance coin-margin positions: %s", e)
+
             return positions
         except bn.exceptions.BinanceAPIException as e:
             raise ExchangeError(
@@ -1030,6 +1151,7 @@ class BybitExchangeClient(ExchangeClient):
                         "mark_price": str(p.get("markPrice", "0")),
                         "liq_price": str(p.get("liqPrice", "0")),
                         "unrealized_pnl": str(p.get("unrealisedPnl", "0")),
+                        "pnl_currency": "USDT",
                         "leverage": str(p.get("leverage", "1")),
                         "margin_type": margin_type,
                         "notional": str(abs(float(p.get("positionValue", 0)))),
