@@ -18,7 +18,6 @@ services:
       - "traefik.http.routers.backend-session.tls.certresolver=myresolver"
       - "traefik.http.routers.backend-session.service=backend"
       - "traefik.http.routers.backend-session.middlewares=authelia@docker"
-      - "traefik.http.routers.backend-session.priority=10"
     pull_policy: always
     networks:
       - web_proxy
