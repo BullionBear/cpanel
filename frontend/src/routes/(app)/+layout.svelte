@@ -1,7 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { page } from '$app/stores';
-	import { goto } from '$app/navigation';
 	import Header from '../../components/Header.svelte';
 	import Sidebar from '../../components/Sidebar.svelte';
 	import Footer from '../../components/Footer.svelte';
@@ -11,10 +9,10 @@
 	let sidebarMobileOpen = false;
 
 	onMount(async () => {
-		// Check if user is authenticated
 		const user = await getCurrentUser();
 		if (!user) {
-			goto('/');
+			// Full navigation so Traefik+Authelia can gate the request if the session expired
+			window.location.href = '/';
 		}
 		// Auto-collapse sidebar on mobile
 		if (typeof window !== 'undefined') {
