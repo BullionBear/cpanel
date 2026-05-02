@@ -76,9 +76,7 @@
 		justify-content: center;
 		min-height: 100vh;
 		padding: 24px;
-		background: #f4f5f7;
-		color: #1f2328;
-		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+		box-sizing: border-box;
 	}
 
 	.card {
@@ -168,7 +166,7 @@
 	@keyframes spin { to { transform: rotate(360deg); } }
 
 	@media (prefers-color-scheme: dark) {
-		.splash { background: #0d1117; color: #e6edf3; }
+		:global(body) { background: #0d1117; color: #e6edf3; }
 		.card {
 			background: #161b22;
 			border-color: #30363d;
