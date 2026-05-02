@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: cpanel
+      POSTGRES_USER: cpanel
+      POSTGRES_PASSWORD: cpanel
+    ports:
+      - "5432:5432"
+    volumes:
+      - cpanel_dev_data:/var/lib/postgresql/data
+
+volumes:
+  cpanel_dev_data:

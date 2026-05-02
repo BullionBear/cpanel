@@ -73,12 +73,22 @@ async def get_session(
     """
     remote_user = request.headers.get("Remote-User")
     if not remote_user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+        if not settings.DEV_MODE:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+        remote_user = settings.DEV_USER  # dev bypass: Authelia not running locally
 
     user_repo = UserRepository(db)
     user = user_repo.get_by_username(remote_user)
     if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        if not settings.DEV_MODE:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        # First-time dev setup: create the user so migrations alone are enough to start
+        user = user_repo.create(
+            username=remote_user,
+            email=f"{remote_user}@dev.local",
+            hashed_password="dev-mode-no-password",
+            is_active=True,
+        )
 
     user_repo.update_last_login(user.id)
     access_repo = AccessRepository(db)

@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     MAX_UI_TOKEN: int = 5  # Maximum number of UI prefix tokens per user
 
+    # Local development
+    DEV_MODE: bool = False
+    DEV_USER: str = "eddy"  # username used as Remote-User when DEV_MODE=true
+
     # CORS
     CORS_ORIGINS: list[str] = [
         "http://localhost:3000",
