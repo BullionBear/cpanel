@@ -40,34 +40,31 @@
 <div class="splash">
 	{#if accessDenied}
 		<div class="card" role="alert" aria-live="polite">
-			<div class="icon" aria-hidden="true">
-				<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-					<circle cx="12" cy="12" r="10" />
-					<line x1="12" y1="8" x2="12" y2="12" />
-					<line x1="12" y1="16" x2="12.01" y2="16" />
-				</svg>
-			</div>
-
 			<h1 class="title">Access denied</h1>
-			<p class="subtitle">Your account does not have access to CPanel.</p>
+			<p class="body">Your account does not have access to CPanel.</p>
 
 			{#if isDev}
-				<div class="hint">
-					<p class="hint-label">Dev mode checklist</p>
+				<div class="note">
+					<p class="note-title">Local dev checklist</p>
 					<ul>
 						<li>Backend env has <code>DEV_MODE=true</code></li>
 						<li>Backend env has <code>DEV_USER</code> set</li>
 						<li>That user exists in the local database</li>
 					</ul>
 				</div>
-			{:else}
-				<a href="https://auth.lynxlinkage.com/logout" class="action">Sign out</a>
 			{/if}
+
+			<a
+				class="action"
+				href={isDev ? '/' : 'https://auth.lynxlinkage.com/logout'}
+			>
+				Sign out
+			</a>
 		</div>
 	{:else}
 		<div class="loader" role="status" aria-live="polite">
 			<span class="spinner" aria-hidden="true"></span>
-			<p class="msg">Authenticating…</p>
+			<p class="body muted">Authenticating…</p>
 		</div>
 	{/if}
 </div>
@@ -79,167 +76,126 @@
 		justify-content: center;
 		min-height: 100vh;
 		padding: 24px;
-		background:
-			radial-gradient(1200px 600px at 10% -10%, rgba(99, 102, 241, 0.12), transparent 60%),
-			radial-gradient(900px 500px at 110% 110%, rgba(14, 165, 233, 0.10), transparent 60%),
-			linear-gradient(180deg, #fafbff 0%, #f3f4f6 100%);
+		background: #f4f5f7;
+		color: #1f2328;
 		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-		color: #111827;
 	}
 
-	/* Loading state */
-	.loader {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		gap: 14px;
-	}
-	.spinner {
-		width: 28px;
-		height: 28px;
-		border-radius: 50%;
-		border: 2.5px solid rgba(17, 24, 39, 0.12);
-		border-top-color: #4f46e5;
-		animation: spin 0.8s linear infinite;
-	}
-	@keyframes spin {
-		to { transform: rotate(360deg); }
-	}
-	.msg {
-		color: #6b7280;
-		font-size: 14px;
-		margin: 0;
-	}
-
-	/* Access-denied card */
 	.card {
 		width: 100%;
-		max-width: 420px;
+		max-width: 400px;
 		background: #ffffff;
-		border: 1px solid rgba(17, 24, 39, 0.06);
-		border-radius: 16px;
-		padding: 32px 28px;
-		box-shadow:
-			0 1px 2px rgba(17, 24, 39, 0.04),
-			0 12px 32px -8px rgba(17, 24, 39, 0.12);
-		text-align: center;
-	}
-	.icon {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 52px;
-		height: 52px;
-		border-radius: 50%;
-		background: #fef2f2;
-		color: #dc2626;
-		margin-bottom: 16px;
+		border: 1px solid #e3e5e8;
+		border-radius: 12px;
+		padding: 28px;
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 	}
 	.title {
-		font-size: 20px;
+		font-size: 18px;
 		font-weight: 600;
-		margin: 0 0 6px;
-		color: #111827;
-		letter-spacing: -0.01em;
+		margin: 0 0 8px;
+		color: #1f2328;
 	}
-	.subtitle {
+	.body {
 		font-size: 14px;
-		color: #6b7280;
-		margin: 0 0 20px;
-		line-height: 1.5;
+		line-height: 1.55;
+		color: #57606a;
+		margin: 0;
 	}
+	.body.muted { color: #6e7781; }
 
-	/* Dev hint */
-	.hint {
-		text-align: left;
-		background: #f9fafb;
-		border: 1px solid #e5e7eb;
-		border-radius: 10px;
+	.note {
+		margin: 20px 0 0;
 		padding: 14px 16px;
+		background: #f6f8fa;
+		border: 1px solid #e3e5e8;
+		border-radius: 8px;
 	}
-	.hint-label {
-		font-size: 11px;
+	.note-title {
+		font-size: 12px;
 		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-		color: #6366f1;
+		color: #1f2328;
 		margin: 0 0 8px;
 	}
-	.hint ul {
+	.note ul {
 		margin: 0;
 		padding-left: 18px;
-		color: #374151;
+		color: #57606a;
 		font-size: 13px;
 		line-height: 1.7;
 	}
-	.hint code {
-		font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+	.note code {
+		font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
 		font-size: 12px;
-		background: #eef2ff;
-		color: #4338ca;
+		background: #eaecef;
+		color: #1f2328;
 		padding: 1px 6px;
 		border-radius: 4px;
 	}
 
-	/* Sign-out action (production) */
 	.action {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		height: 40px;
-		padding: 0 18px;
-		background: #111827;
+		height: 36px;
+		padding: 0 16px;
+		margin-top: 20px;
+		background: #1f2328;
 		color: #ffffff;
 		font-size: 14px;
 		font-weight: 500;
 		text-decoration: none;
-		border-radius: 8px;
-		transition: background-color 0.15s ease, transform 0.05s ease;
+		border-radius: 6px;
+		transition: background-color 0.15s ease;
 	}
-	.action:hover {
-		background: #1f2937;
+	.action:hover { background: #2f363d; }
+	.action:active { background: #14171a; }
+
+	.loader {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 12px;
 	}
-	.action:active {
-		transform: translateY(1px);
+	.spinner {
+		width: 24px;
+		height: 24px;
+		border-radius: 50%;
+		border: 2.5px solid #e3e5e8;
+		border-top-color: #57606a;
+		animation: spin 0.8s linear infinite;
 	}
+	@keyframes spin { to { transform: rotate(360deg); } }
 
 	@media (prefers-color-scheme: dark) {
-		.splash {
-			background:
-				radial-gradient(1200px 600px at 10% -10%, rgba(99, 102, 241, 0.18), transparent 60%),
-				radial-gradient(900px 500px at 110% 110%, rgba(14, 165, 233, 0.12), transparent 60%),
-				linear-gradient(180deg, #0b1020 0%, #0a0f1c 100%);
-			color: #e5e7eb;
-		}
+		.splash { background: #0d1117; color: #e6edf3; }
 		.card {
-			background: #111827;
-			border-color: rgba(255, 255, 255, 0.06);
-			box-shadow:
-				0 1px 2px rgba(0, 0, 0, 0.3),
-				0 12px 32px -8px rgba(0, 0, 0, 0.5);
+			background: #161b22;
+			border-color: #30363d;
+			box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 		}
-		.title { color: #f9fafb; }
-		.subtitle, .msg { color: #9ca3af; }
-		.icon { background: rgba(220, 38, 38, 0.15); color: #fca5a5; }
-		.hint {
-			background: #0f172a;
-			border-color: rgba(255, 255, 255, 0.06);
+		.title { color: #e6edf3; }
+		.body { color: #8b949e; }
+		.body.muted { color: #6e7681; }
+		.note {
+			background: #0d1117;
+			border-color: #30363d;
 		}
-		.hint ul { color: #d1d5db; }
-		.hint-label { color: #a5b4fc; }
-		.hint code {
-			background: rgba(99, 102, 241, 0.15);
-			color: #c7d2fe;
+		.note-title { color: #e6edf3; }
+		.note ul { color: #8b949e; }
+		.note code {
+			background: #21262d;
+			color: #e6edf3;
 		}
 		.action {
-			background: #6366f1;
+			background: #e6edf3;
+			color: #0d1117;
 		}
-		.action:hover {
-			background: #4f46e5;
-		}
+		.action:hover { background: #ffffff; }
+		.action:active { background: #c9d1d9; }
 		.spinner {
-			border-color: rgba(255, 255, 255, 0.12);
-			border-top-color: #a5b4fc;
+			border-color: #30363d;
+			border-top-color: #8b949e;
 		}
 	}
 </style>
