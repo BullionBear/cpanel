@@ -2,7 +2,8 @@
 	import { onMount } from 'svelte';
 	import { API_V2 } from '$lib/config';
 
-	let accessDenied = $state(false);
+	let accessDenied = false;
+	const isDev = import.meta.env.DEV;
 
 	onMount(async () => {
 		try {
@@ -39,7 +40,11 @@
 {#if accessDenied}
 <div class="splash">
 	<p class="msg error">Your account does not have access to CPanel.</p>
-	<a href="https://auth.lynxlinkage.com/logout" class="logout">Sign out</a>
+	{#if isDev}
+		<p class="msg">Dev mode: check that the backend has <code>DEV_MODE=true</code> and <code>DEV_USER</code> set, and that the user exists in the local database.</p>
+	{:else}
+		<a href="https://auth.lynxlinkage.com/logout" class="logout">Sign out</a>
+	{/if}
 </div>
 {:else}
 <div class="splash">
