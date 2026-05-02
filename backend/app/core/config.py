@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     HOST_URL: str = "http://localhost:8000"  # Base URL for activation links
 
+    # Build metadata (injected at docker build time)
+    GIT_COMMIT: str = "unknown"
+    BUILD_TIME: str = "unknown"
+
     # Security
     SECRET_KEY: str = "your-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
