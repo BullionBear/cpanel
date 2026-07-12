@@ -1,9 +1,19 @@
 """Symbol repository for database operations."""
-from typing import Optional, List
-from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_, or_
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional
 
-from app.models import RefSymbol, RefExchange, RefProduct, RefToken
+from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy import and_
+
+from app.models import (
+    RefExchange,
+    RefProduct,
+    RefSymbol,
+    RefSymbolDerivative,
+    RefSymbolFilter,
+    RefToken,
+    RefUniversalSymbol,
+)
 
 
 class SymbolRepository:
@@ -12,6 +22,17 @@ class SymbolRepository:
     def __init__(self, db: Session):
         """Initialize repository with database session."""
         self.db = db
+
+    def _base_query(self):
+        return self.db.query(RefSymbol).options(
+            joinedload(RefSymbol.exchange),
+            joinedload(RefSymbol.product),
+            joinedload(RefSymbol.base_token),
+            joinedload(RefSymbol.quote_token),
+            joinedload(RefSymbol.universal),
+            joinedload(RefSymbol.derivative),
+            selectinload(RefSymbol.filters),
+        )
 
     def query(
         self,
@@ -32,14 +53,10 @@ class SymbolRepository:
         Query symbols with optional filters and eager load relationships.
 
         Returns:
-            List of RefSymbol objects with loaded relationships (exchange, product, base_token, quote_token)
+            List of RefSymbol objects with loaded relationships
+            (exchange, product, base_token, quote_token, universal, derivative, filters)
         """
-        query = self.db.query(RefSymbol).options(
-            joinedload(RefSymbol.exchange),
-            joinedload(RefSymbol.product),
-            joinedload(RefSymbol.base_token),
-            joinedload(RefSymbol.quote_token)
-        )
+        query = self._base_query()
 
         if exchange_id is not None:
             query = query.filter(RefSymbol.exchange_id == exchange_id)
@@ -58,29 +75,26 @@ class SymbolRepository:
         if quote_slug is not None:
             query = query.join(RefToken, RefSymbol.quote_id == RefToken.id).filter(RefToken.slug == quote_slug)
         if universal_ticker is not None:
-            query = query.filter(RefSymbol.universal_ticker == universal_ticker)
+            query = query.join(RefUniversalSymbol, RefSymbol.universal_id == RefUniversalSymbol.id).filter(
+                RefUniversalSymbol.universal_ticker == universal_ticker
+            )
         if name is not None:
             query = query.filter(RefSymbol.name.ilike(f"%{name}%"))
-        
+
         return query.offset(skip).limit(limit).all()
 
     def get(self, symbol_id: int) -> Optional[RefSymbol]:
         """Get symbol by ID with all relationships loaded."""
-        return self.db.query(RefSymbol).options(
-            joinedload(RefSymbol.exchange),
-            joinedload(RefSymbol.product),
-            joinedload(RefSymbol.base_token),
-            joinedload(RefSymbol.quote_token)
-        ).filter(RefSymbol.id == symbol_id).first()
+        return self._base_query().filter(RefSymbol.id == symbol_id).first()
 
-    def get_by_universal_ticker(self, universal_ticker: str) -> Optional[RefSymbol]:
-        """Get symbol by universal ticker with all relationships loaded."""
-        return self.db.query(RefSymbol).options(
-            joinedload(RefSymbol.exchange),
-            joinedload(RefSymbol.product),
-            joinedload(RefSymbol.base_token),
-            joinedload(RefSymbol.quote_token)
-        ).filter(RefSymbol.universal_ticker == universal_ticker).first()
+    def list_by_universal_ticker(self, universal_ticker: str) -> List[RefSymbol]:
+        """List all exchange symbols mapped to the given universal ticker."""
+        return (
+            self._base_query()
+            .join(RefUniversalSymbol, RefSymbol.universal_id == RefUniversalSymbol.id)
+            .filter(RefUniversalSymbol.universal_ticker == universal_ticker)
+            .all()
+        )
 
     def get_by_exchange_and_name(
         self,
@@ -92,12 +106,37 @@ class SymbolRepository:
         filters = [RefSymbol.exchange_id == exchange_id, RefSymbol.name == name]
         if product_id is not None:
             filters.append(RefSymbol.product_id == product_id)
-        return self.db.query(RefSymbol).options(
-            joinedload(RefSymbol.exchange),
-            joinedload(RefSymbol.product),
-            joinedload(RefSymbol.base_token),
-            joinedload(RefSymbol.quote_token)
-        ).filter(and_(*filters)).first()
+        return self._base_query().filter(and_(*filters)).first()
+
+    def get_or_create_universal(
+        self,
+        universal_ticker: str,
+        base_id: int,
+        quote_id: int,
+        instrument_type: str,
+        expiry_date: Optional[date] = None,
+    ) -> RefUniversalSymbol:
+        """Get the canonical instrument row by ticker, creating it if missing.
+
+        Does not commit; the row is flushed so its id is available to the caller.
+        """
+        universal = (
+            self.db.query(RefUniversalSymbol)
+            .filter(RefUniversalSymbol.universal_ticker == universal_ticker)
+            .first()
+        )
+        if universal:
+            return universal
+        universal = RefUniversalSymbol(
+            universal_ticker=universal_ticker,
+            base_id=base_id,
+            quote_id=quote_id,
+            instrument_type=instrument_type,
+            expiry_date=expiry_date,
+        )
+        self.db.add(universal)
+        self.db.flush()
+        return universal
 
     def create(
         self,
@@ -106,24 +145,57 @@ class SymbolRepository:
         product_id: int,
         base_id: int,
         quote_id: int,
-        price_precision: int,
-        size_precision: int,
-        universal_ticker: str,
+        price_tick_size: str,
+        status: str,
+        universal_id: int,
+        listing_timestamp: Optional[datetime] = None,
+        raw_meta: Optional[Dict[str, Any]] = None,
+        filters: Optional[List[Dict[str, Any]]] = None,
+        derivative: Optional[Dict[str, Any]] = None,
     ) -> RefSymbol:
-        """Create a new symbol. Returns created RefSymbol."""
+        """Create a symbol with its filter and derivative rows in one transaction.
+
+        Args:
+            filters: list of dicts with filter_type/unit_type/step_size/min_value/max_value
+            derivative: dict with margin_id/expiry_timestamp/settlement_type (non-spot only)
+
+        Returns:
+            Created RefSymbol with relationships loaded.
+        """
         symbol = RefSymbol(
             name=name,
             exchange_id=exchange_id,
             product_id=product_id,
             base_id=base_id,
             quote_id=quote_id,
-            price_precision=price_precision,
-            size_precision=size_precision,
-            universal_ticker=universal_ticker,
+            price_tick_size=price_tick_size,
+            status=status,
+            listing_timestamp=listing_timestamp,
+            universal_id=universal_id,
+            raw_meta=raw_meta,
         )
         self.db.add(symbol)
+        self.db.flush()
+
+        for f in filters or []:
+            self.db.add(RefSymbolFilter(
+                symbol_id=symbol.id,
+                filter_type=f["filter_type"],
+                unit_type=f["unit_type"],
+                step_size=f.get("step_size"),
+                min_value=f.get("min_value"),
+                max_value=f.get("max_value"),
+            ))
+
+        if derivative is not None:
+            self.db.add(RefSymbolDerivative(
+                symbol_id=symbol.id,
+                margin_id=derivative["margin_id"],
+                expiry_timestamp=derivative.get("expiry_timestamp"),
+                settlement_type=derivative.get("settlement_type"),
+            ))
+
         self.db.commit()
-        self.db.refresh(symbol)
         # Reload with relationships
         return self.get(symbol.id) or symbol
 
@@ -136,11 +208,11 @@ class SymbolRepository:
 
     def delete(self, symbol_id: int) -> bool:
         """
-        Delete symbol by ID.
-        
+        Delete symbol by ID (filter/derivative rows cascade via FK).
+
         Args:
             symbol_id: Symbol ID
-            
+
         Returns:
             True if deleted, False if not found
         """

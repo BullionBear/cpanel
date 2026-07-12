@@ -292,9 +292,22 @@ export interface SymbolInfo {
 		name: string;
 		slug: string;
 	};
+	price_tick_size: string;
+	qty_step: string | null;
+	status: string;
+	universal_ticker: string;
+	filters: SymbolFilter[];
+	// Derived from tick/step sizes, for display formatting
 	price_precision: number;
 	size_precision: number;
-	universal_ticker: string;
+}
+
+export interface SymbolFilter {
+	filter_type: string;
+	unit_type: string;
+	step_size: string | null;
+	min_value: string | null;
+	max_value: string | null;
 }
 
 export async function getSymbols(limit: number = 100): Promise<SymbolInfo[]> {

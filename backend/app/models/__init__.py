@@ -13,7 +13,10 @@ try:
     from ref_exchange import RefExchange  # noqa: E402
     from ref_product import RefProduct  # noqa: E402
     from ref_token import RefToken  # noqa: E402
+    from ref_universal_symbol import RefUniversalSymbol  # noqa: E402
     from ref_symbol import RefSymbol  # noqa: E402
+    from ref_symbol_derivative import RefSymbolDerivative  # noqa: E402
+    from ref_symbol_filter import RefSymbolFilter  # noqa: E402
     from user_preference import UserPreference  # noqa: E402
     from ref_wallet import RefWallet  # noqa: E402
     from wallet import Wallet, WalletArchived  # noqa: E402
@@ -100,8 +103,30 @@ except ImportError:
         name = Column(String, nullable=False)
         slug = Column(String, unique=True, nullable=False, index=True)
 
+    class RefUniversalSymbol(Base):  # type: ignore
+        __tablename__ = "ref_universal_symbol"
+
+        from sqlalchemy import Date
+
+        id = Column(Integer, primary_key=True, autoincrement=True)
+        universal_ticker = Column(String, nullable=False, unique=True, index=True)
+        base_id = Column(Integer, ForeignKey("ref_token.id"), nullable=False, index=True)
+        quote_id = Column(Integer, ForeignKey("ref_token.id"), nullable=False, index=True)
+        instrument_type = Column(String, nullable=False)
+        expiry_date = Column(Date, nullable=True)
+
+        from sqlalchemy.orm import relationship
+        base_token = relationship("RefToken", foreign_keys=[base_id], backref="universal_base_symbols")
+        quote_token = relationship("RefToken", foreign_keys=[quote_id], backref="universal_quote_symbols")
+
     class RefSymbol(Base):  # type: ignore
         __tablename__ = "ref_symbol"
+        from sqlalchemy import UniqueConstraint
+        __table_args__ = (
+            UniqueConstraint("exchange_id", "product_id", "name", name="uq_ref_symbol_exchange_product_name"),
+        )
+
+        from sqlalchemy.dialects.postgresql import JSONB
 
         id = Column(Integer, primary_key=True, autoincrement=True)
         name = Column(String, nullable=False)
@@ -109,9 +134,11 @@ except ImportError:
         product_id = Column(Integer, ForeignKey("ref_product.id"), nullable=False, index=True)
         base_id = Column(Integer, ForeignKey("ref_token.id"), nullable=False, index=True)
         quote_id = Column(Integer, ForeignKey("ref_token.id"), nullable=False, index=True)
-        price_precision = Column(Integer, nullable=False)
-        size_precision = Column(Integer, nullable=False)
-        universal_ticker = Column(String, nullable=False, unique=True, index=True)
+        price_tick_size = Column(Numeric(36, 18), nullable=False)
+        status = Column(String, nullable=False)
+        listing_timestamp = Column(DateTime(timezone=True), nullable=True)
+        universal_id = Column(Integer, ForeignKey("ref_universal_symbol.id"), nullable=False, index=True)
+        raw_meta = Column(JSONB, nullable=True)
 
         # Relationships
         from sqlalchemy.orm import relationship
@@ -119,6 +146,36 @@ except ImportError:
         product = relationship("RefProduct", backref="symbols")
         base_token = relationship("RefToken", foreign_keys=[base_id], backref="base_symbols")
         quote_token = relationship("RefToken", foreign_keys=[quote_id], backref="quote_symbols")
+        universal = relationship("RefUniversalSymbol", backref="symbols")
+        derivative = relationship(
+            "RefSymbolDerivative", uselist=False, cascade="all, delete-orphan",
+            passive_deletes=True, backref="symbol",
+        )
+        filters = relationship(
+            "RefSymbolFilter", cascade="all, delete-orphan",
+            passive_deletes=True, backref="symbol",
+        )
+
+    class RefSymbolDerivative(Base):  # type: ignore
+        __tablename__ = "ref_symbol_derivative"
+
+        symbol_id = Column(Integer, ForeignKey("ref_symbol.id", ondelete="CASCADE"), primary_key=True)
+        margin_id = Column(Integer, ForeignKey("ref_token.id"), nullable=False, index=True)
+        expiry_timestamp = Column(DateTime(timezone=True), nullable=True)
+        settlement_type = Column(String, nullable=True)
+
+        from sqlalchemy.orm import relationship
+        margin_token = relationship("RefToken", foreign_keys=[margin_id], backref="margin_symbols")
+
+    class RefSymbolFilter(Base):  # type: ignore
+        __tablename__ = "ref_symbol_filter"
+
+        symbol_id = Column(Integer, ForeignKey("ref_symbol.id", ondelete="CASCADE"), primary_key=True)
+        filter_type = Column(String, primary_key=True)
+        unit_type = Column(String, primary_key=True)
+        step_size = Column(Numeric(36, 18), nullable=True)
+        min_value = Column(Numeric(36, 18), nullable=True)
+        max_value = Column(Numeric(36, 18), nullable=True)
 
     class UserPreference(Base):  # type: ignore
         __tablename__ = "user_preference"
@@ -206,5 +263,5 @@ except ImportError:
         created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
         updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
-__all__ = ["User", "Access", "API", "APIArchived", "RefExchange", "RefProduct", "RefToken", "RefSymbol", "UserPreference", "RefWallet", "Wallet", "WalletArchived", "Account", "BalanceSnapshot", "TradingHistory", "TradingHistoryCursor"]
+__all__ = ["User", "Access", "API", "APIArchived", "RefExchange", "RefProduct", "RefToken", "RefUniversalSymbol", "RefSymbol", "RefSymbolDerivative", "RefSymbolFilter", "UserPreference", "RefWallet", "Wallet", "WalletArchived", "Account", "BalanceSnapshot", "TradingHistory", "TradingHistoryCursor"]
 

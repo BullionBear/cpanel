@@ -392,6 +392,81 @@ def test_balance_format():
         return False
 
 
+def test_symbol_info_format():
+    """Test that get_symbol_info returns the enriched metadata payload."""
+    print("\n" + "="*60)
+    print("Testing Symbol Info Format (enriched metadata)")
+    print("="*60)
+
+    service = APIService()
+
+    # (exchange, symbol, product, expected qty unit)
+    cases = [
+        ("BINANCE", "BTCUSDT", "SPOT", "base"),
+        ("BINANCE", "BTCUSDT", "UMARGIN", "base"),
+        ("BYBIT", "BTCUSDT", "SPOT", "base"),
+        ("BITGET", "BTCUSDT", "SPOT", "base"),
+    ]
+
+    required_keys = [
+        "symbol", "base_asset", "quote_asset", "price_tick_size", "status",
+        "listing_timestamp", "margin_asset", "expiry_timestamp",
+        "settlement_type", "filters", "raw_meta", "exists",
+    ]
+    all_ok = True
+
+    for exchange, symbol, product, qty_unit in cases:
+        label = f"{exchange} {product} {symbol}"
+        try:
+            client = service.get_exchange_client(exchange=exchange, api_key="", api_secret="")  # type: ignore
+            info = client.get_symbol_info(symbol, product=product)
+
+            missing = [k for k in required_keys if k not in info]
+            if missing:
+                print(f"✗ {label}: missing keys {missing}")
+                all_ok = False
+                continue
+
+            if not isinstance(info["filters"], list) or not info["filters"]:
+                print(f"✗ {label}: filters missing or empty")
+                all_ok = False
+                continue
+
+            qty_steps = [
+                f for f in info["filters"]
+                if f["filter_type"] == "QTY_STEP" and f["unit_type"] == qty_unit
+            ]
+            if not qty_steps or not qty_steps[0].get("step_size"):
+                print(f"✗ {label}: no QTY_STEP ({qty_unit}) filter with step_size")
+                all_ok = False
+                continue
+
+            if product != "SPOT":
+                if not info.get("margin_asset"):
+                    print(f"✗ {label}: derivative missing margin_asset")
+                    all_ok = False
+                    continue
+                if not any(f["filter_type"] == "CONTRACT_SIZE" for f in info["filters"]):
+                    print(f"✗ {label}: derivative missing CONTRACT_SIZE filter")
+                    all_ok = False
+                    continue
+
+            print(f"✓ {label}: tick={info['price_tick_size']}, "
+                  f"qty_step={qty_steps[0]['step_size']}, status={info['status']}, "
+                  f"{len(info['filters'])} filter(s)")
+        except NetworkError as e:
+            print(f"✗ {label}: Network Error - {e.message}")
+            all_ok = False
+        except ExchangeError as e:
+            print(f"✗ {label}: Exchange Error - {e.message}")
+            all_ok = False
+        except Exception as e:
+            print(f"✗ {label}: UNEXPECTED {type(e).__name__}: {e}")
+            all_ok = False
+
+    return all_ok
+
+
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("API Service Test Suite")
@@ -418,6 +493,7 @@ if __name__ == "__main__":
     results.append(("Binance Balance", test_binance_balance()))
     results.append(("Bybit Balance", test_bybit_balance()))
     results.append(("Balance Format", test_balance_format()))
+    results.append(("Symbol Info Format", test_symbol_info_format()))
     
     # Summary
     print("\n" + "="*60)

@@ -108,7 +108,7 @@
 	}
 
 	async function handleDelete(sym: SymbolInfo) {
-		if (!confirm(`Delete symbol "${sym.universal_ticker}"? This cannot be undone.`)) return;
+		if (!confirm(`Delete symbol "${sym.exchange.slug}:${sym.name}"? This cannot be undone.`)) return;
 		deletingId = sym.id;
 		try {
 			await deleteSymbol(sym.id);
@@ -202,8 +202,9 @@
 						<th>Product</th>
 						<th>Base</th>
 						<th>Quote</th>
-						<th class="num-col">Price Precision</th>
-						<th class="num-col">Size Precision</th>
+						<th class="num-col">Price Tick</th>
+						<th class="num-col">Qty Step</th>
+						<th>Status</th>
 						<th>Universal Ticker</th>
 						<th class="action-col"></th>
 					</tr>
@@ -220,8 +221,11 @@
 							</td>
 							<td>{sym.base_token.name}</td>
 							<td>{sym.quote_token.name}</td>
-							<td class="num-col">{sym.price_precision}</td>
-							<td class="num-col">{sym.size_precision}</td>
+							<td class="num-col">{sym.price_tick_size}</td>
+							<td class="num-col">{sym.qty_step ?? '-'}</td>
+							<td>
+								<span class="badge {sym.status === 'trading' ? 'badge-spot' : 'badge-default'}">{sym.status}</span>
+							</td>
 							<td class="ticker-cell">
 								<code>{sym.universal_ticker}</code>
 							</td>

@@ -40,6 +40,30 @@ def generate_client_order_id() -> str:
     return f"cpanel-{date_str}-{time_str}-{random_str}"
 
 
+def step_from_precision(precision: int) -> str:
+    """Convert a decimal-place precision into an exact step string (2 -> '0.01')."""
+    if precision <= 0:
+        return "1"
+    return "0." + "0" * (precision - 1) + "1"
+
+
+def make_filter(
+    filter_type: str,
+    unit_type: str,
+    step_size: Optional[str] = None,
+    min_value: Optional[str] = None,
+    max_value: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build a normalized filter row for ref_symbol_filter (long format)."""
+    return {
+        "filter_type": filter_type,
+        "unit_type": unit_type,
+        "step_size": step_size,
+        "min_value": min_value,
+        "max_value": max_value,
+    }
+
+
 class BinanceExchangeClient(ExchangeClient):
     def __init__(self, context: APIContext):
         self.context = context
@@ -227,13 +251,19 @@ class BinanceExchangeClient(ExchangeClient):
         if not symbol_info:
             raise ExchangeError(f"Symbol {symbol} not found or not trading on Binance", exchange="BINANCE")
 
-        price_precision, size_precision = self._parse_filters(symbol_info.get("filters", []))
+        price_tick_size, filters = self._parse_filters(symbol_info.get("filters", []), qty_unit="base")
         return {
             "symbol": symbol,
             "base_asset": symbol_info.get("baseAsset", ""),
             "quote_asset": symbol_info.get("quoteAsset", ""),
-            "price_precision": price_precision,
-            "size_precision": size_precision,
+            "price_tick_size": price_tick_size,
+            "status": self._normalize_status(symbol_info.get("status", "")),
+            "listing_timestamp": None,
+            "margin_asset": None,
+            "expiry_timestamp": None,
+            "settlement_type": None,
+            "filters": filters,
+            "raw_meta": symbol_info,
             "exists": True,
         }
 
@@ -261,13 +291,22 @@ class BinanceExchangeClient(ExchangeClient):
                 f"Symbol {symbol} not found or not trading as PERPETUAL on Binance Futures", exchange="BINANCE"
             )
 
-        price_precision, size_precision = self._parse_filters(symbol_info.get("filters", []))
+        price_tick_size, filters = self._parse_filters(symbol_info.get("filters", []), qty_unit="base")
+        # Linear contracts: 1 contract == 1 base unit, so notional = qty * contract_size
+        # holds without branching downstream.
+        filters.append(make_filter("CONTRACT_SIZE", "base", min_value="1", max_value="1"))
         return {
             "symbol": symbol,
             "base_asset": symbol_info.get("baseAsset", ""),
             "quote_asset": symbol_info.get("quoteAsset", ""),
-            "price_precision": price_precision,
-            "size_precision": size_precision,
+            "price_tick_size": price_tick_size,
+            "status": self._normalize_status(symbol_info.get("status", "")),
+            "listing_timestamp": symbol_info.get("onboardDate"),
+            "margin_asset": symbol_info.get("marginAsset", ""),
+            "expiry_timestamp": None,
+            "settlement_type": "cash",
+            "filters": filters,
+            "raw_meta": symbol_info,
             "exists": True,
         }
 
@@ -291,29 +330,65 @@ class BinanceExchangeClient(ExchangeClient):
                 f"Symbol {symbol} not found or not trading on Binance Coin-Margin", exchange="BINANCE"
             )
 
-        price_precision, size_precision = self._parse_filters(symbol_info.get("filters", []))
+        # Inverse contracts are quantified in contracts; each contract is worth
+        # contractSize units of quote (e.g. 100 USD).
+        price_tick_size, filters = self._parse_filters(symbol_info.get("filters", []), qty_unit="contract")
+        contract_size = str(symbol_info.get("contractSize", 1))
+        filters.append(make_filter("CONTRACT_SIZE", "quote", min_value=contract_size, max_value=contract_size))
         return {
             "symbol": symbol,
             "base_asset": symbol_info.get("baseAsset", ""),
             "quote_asset": symbol_info.get("quoteAsset", ""),
-            "price_precision": price_precision,
-            "size_precision": size_precision,
+            "price_tick_size": price_tick_size,
+            "status": self._normalize_status(symbol_info.get("contractStatus", symbol_info.get("status", ""))),
+            "listing_timestamp": symbol_info.get("onboardDate"),
+            "margin_asset": symbol_info.get("marginAsset", ""),
+            "expiry_timestamp": None,
+            "settlement_type": "cash",
+            "filters": filters,
+            "raw_meta": symbol_info,
             "exists": True,
         }
 
     @staticmethod
-    def _parse_filters(filters: list) -> tuple:
-        """Extract price_precision and size_precision from Binance filter array."""
-        price_precision = 8
-        size_precision = 8
+    def _normalize_status(status: str) -> str:
+        return "trading" if status.upper() == "TRADING" else "halted"
+
+    @staticmethod
+    def _parse_filters(filters: list, qty_unit: str) -> tuple:
+        """Parse a Binance filter array into (price_tick_size, normalized filter rows)."""
+        price_tick_size = "0.00000001"
+        normalized: List[Dict[str, Any]] = []
         for f in filters:
-            if f.get("filterType") == "PRICE_FILTER":
-                tick_size = f.get("tickSize", "1")
-                price_precision = len(tick_size.split(".")[-1].rstrip("0")) if "." in tick_size else 0
-            elif f.get("filterType") == "LOT_SIZE":
-                step = f.get("stepSize", "1")
-                size_precision = len(step.split(".")[-1].rstrip("0")) if "." in step else 0
-        return price_precision, size_precision
+            filter_type = f.get("filterType")
+            if filter_type == "PRICE_FILTER":
+                price_tick_size = f.get("tickSize", price_tick_size)
+            elif filter_type == "LOT_SIZE":
+                normalized.append(make_filter(
+                    "QTY_STEP", qty_unit,
+                    step_size=f.get("stepSize"),
+                    min_value=f.get("minQty"),
+                    max_value=f.get("maxQty"),
+                ))
+            elif filter_type == "MARKET_LOT_SIZE":
+                normalized.append(make_filter(
+                    "MARKET_QTY_STEP", qty_unit,
+                    step_size=f.get("stepSize"),
+                    min_value=f.get("minQty"),
+                    max_value=f.get("maxQty"),
+                ))
+            elif filter_type == "NOTIONAL":  # spot
+                normalized.append(make_filter(
+                    "MIN_NOTIONAL", "quote",
+                    min_value=f.get("minNotional"),
+                    max_value=f.get("maxNotional"),
+                ))
+            elif filter_type == "MIN_NOTIONAL":  # futures
+                normalized.append(make_filter(
+                    "MIN_NOTIONAL", "quote",
+                    min_value=f.get("notional", f.get("minNotional")),
+                ))
+        return price_tick_size, normalized
 
     def _is_futures(self, product: str) -> bool:
         return product.upper() in ("UMARGIN", "LINEAR", "FUTURES")
@@ -817,14 +892,44 @@ class BybitExchangeClient(ExchangeClient):
 
     def _normalize_symbol(self, symbol: str, symbol_info: Dict[str, Any]) -> Dict[str, Any]:
         lot_size_filter = symbol_info.get("lotSizeFilter", {})
-        qty_step = lot_size_filter.get("qtyStep", "1")
-        size_precision = len(qty_step.split(".")[-1].rstrip("0")) if "." in qty_step else 0
+        price_filter = symbol_info.get("priceFilter", {})
+
+        price_tick_size = price_filter.get("tickSize")
+        if not price_tick_size:
+            price_tick_size = step_from_precision(int(symbol_info.get("priceScale", 2)))
+
+        # Spot instruments carry basePrecision/quotePrecision; linear carries qtyStep.
+        base_step = lot_size_filter.get("qtyStep") or lot_size_filter.get("basePrecision") or "1"
+        filters = [
+            make_filter(
+                "QTY_STEP", "base",
+                step_size=base_step,
+                min_value=lot_size_filter.get("minOrderQty"),
+                max_value=lot_size_filter.get("maxOrderQty"),
+            ),
+        ]
+        if lot_size_filter.get("quotePrecision"):
+            filters.append(make_filter("QTY_STEP", "quote", step_size=lot_size_filter.get("quotePrecision")))
+        if lot_size_filter.get("minOrderAmt") or lot_size_filter.get("maxOrderAmt"):
+            filters.append(make_filter(
+                "MIN_NOTIONAL", "quote",
+                min_value=lot_size_filter.get("minOrderAmt"),
+                max_value=lot_size_filter.get("maxOrderAmt"),
+            ))
+
+        status = symbol_info.get("status", "")
         return {
             "symbol": symbol,
             "base_asset": symbol_info.get("baseCoin", ""),
             "quote_asset": symbol_info.get("quoteCoin", ""),
-            "price_precision": symbol_info.get("priceScale", 2),
-            "size_precision": size_precision,
+            "price_tick_size": price_tick_size,
+            "status": "trading" if status.lower() == "trading" else "halted",
+            "listing_timestamp": symbol_info.get("launchTime"),
+            "margin_asset": None,
+            "expiry_timestamp": None,
+            "settlement_type": None,
+            "filters": filters,
+            "raw_meta": symbol_info,
             "exists": True,
         }
 
@@ -1348,15 +1453,47 @@ class BitgetExchangeClient(ExchangeClient):
             )
 
     def _normalize_symbol(self, symbol: str, symbol_info: Dict[str, Any]) -> Dict[str, Any]:
-        price_precision = int(symbol_info.get("pricePrecision", "2"))
-        quantity_precision = int(symbol_info.get("quantityPrecision", "4"))
+        # Bitget only exposes decimal-place precisions; convert to exact steps.
+        price_tick_size = step_from_precision(int(symbol_info.get("pricePrecision", "2")))
+        base_step = step_from_precision(int(symbol_info.get("quantityPrecision", "4")))
+
+        filters = [
+            make_filter(
+                "QTY_STEP", "base",
+                step_size=base_step,
+                min_value=symbol_info.get("minTradeAmount"),
+                max_value=symbol_info.get("maxTradeAmount"),
+            ),
+        ]
+        if symbol_info.get("quotePrecision") is not None:
+            filters.append(make_filter(
+                "QTY_STEP", "quote",
+                step_size=step_from_precision(int(symbol_info.get("quotePrecision", "2"))),
+            ))
+        if symbol_info.get("minTradeUSDT"):
+            filters.append(make_filter("MIN_NOTIONAL", "quote", min_value=symbol_info.get("minTradeUSDT")))
+
+        status_raw = symbol_info.get("status", "")
+        if status_raw == "online":
+            status = "trading"
+        elif status_raw == "offline":
+            status = "delisted"
+        else:
+            status = "halted"
+
         return {
             "symbol": symbol_info.get("symbol", symbol).upper(),
             "base_asset": symbol_info.get("baseCoin", ""),
             "quote_asset": symbol_info.get("quoteCoin", ""),
-            "price_precision": price_precision,
-            "size_precision": quantity_precision,
-            "exists": symbol_info.get("status", "") == "online",
+            "price_tick_size": price_tick_size,
+            "status": status,
+            "listing_timestamp": None,
+            "margin_asset": None,
+            "expiry_timestamp": None,
+            "settlement_type": None,
+            "filters": filters,
+            "raw_meta": symbol_info,
+            "exists": status_raw == "online",
         }
 
     def get_order_status(
