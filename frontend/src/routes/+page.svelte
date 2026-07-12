@@ -1,36 +1,34 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { page } from '$app/stores';
 	import { API_V2 } from '$lib/config';
+	import { logout } from '$lib/api';
 
-	let accessDenied = false;
 	const isDev = import.meta.env.DEV;
+	let errorMessage = '';
 
-	onMount(async () => {
+	$: errorMessage = $page.url.searchParams.get('error') ?? '';
+
+	onMount(() => {
+		if (localStorage.getItem('access_token')) {
+			window.location.href = '/home';
+		}
+	});
+
+	async function devSignIn() {
 		try {
-			// redirect: 'manual' lets us distinguish an Authelia 302 (session
-			// expired → reload to re-authenticate) from a backend 4xx (user is
-			// authenticated but has no cpanel account → show error, don't loop).
-			const res = await fetch(`${API_V2}/auth/session`, {
-				credentials: 'include',
-				redirect: 'manual'
-			});
-
+			const res = await fetch(`${API_V2}/auth/session`, { credentials: 'include' });
 			if (res.ok) {
 				const data = await res.json();
 				localStorage.setItem('access_token', data.access_token);
 				window.location.href = '/home';
-			} else if (res.type === 'opaqueredirect' || res.status === 0) {
-				// Authelia redirected to login portal — full reload to follow it
-				window.location.reload();
 			} else {
-				// Authenticated by Authelia but denied by the backend.
-				// Show an error rather than reloading into an infinite loop.
-				accessDenied = true;
+				errorMessage = 'Dev sign-in failed. Ensure DEV_MODE=true on the backend.';
 			}
 		} catch {
-			window.location.reload();
+			errorMessage = 'Dev sign-in failed. Is the backend running?';
 		}
-	});
+	}
 </script>
 
 <svelte:head>
@@ -38,35 +36,28 @@
 </svelte:head>
 
 <div class="splash">
-	{#if accessDenied}
-		<div class="card" role="alert" aria-live="polite">
-			<h1 class="title">Access denied</h1>
-			<p class="body">Your account does not have access to CPanel.</p>
+	<div class="card">
+		<h1 class="title">CPanel</h1>
+		<p class="body">Sign in with your Discord account to continue.</p>
 
-			{#if isDev}
-				<div class="note">
-					<p class="note-title">Local dev checklist</p>
-					<ul>
-						<li>Backend env has <code>DEV_MODE=true</code></li>
-						<li>Backend env has <code>DEV_USER</code> set</li>
-						<li>That user exists in the local database</li>
-					</ul>
-				</div>
-			{/if}
+		{#if errorMessage}
+			<p class="error" role="alert">{errorMessage}</p>
+		{/if}
 
-			<a
-				class="action"
-				href={isDev ? '/' : 'https://auth.lynxlinkage.com/logout'}
-			>
-				Sign out
-			</a>
-		</div>
-	{:else}
-		<div class="loader" role="status" aria-live="polite">
-			<span class="spinner" aria-hidden="true"></span>
-			<p class="body muted">Authenticating…</p>
-		</div>
-	{/if}
+		<a class="action discord" href="{API_V2}/auth/discord/login">
+			Continue with Discord
+		</a>
+
+		{#if isDev}
+			<button class="action secondary" type="button" on:click={devSignIn}>
+				Dev sign-in
+			</button>
+		{/if}
+
+		<button class="link" type="button" on:click={() => logout('/')}>
+			Clear session
+		</button>
+	</div>
 </div>
 
 <style>
@@ -98,72 +89,58 @@
 		font-size: 14px;
 		line-height: 1.55;
 		color: #57606a;
-		margin: 0;
+		margin: 0 0 20px;
 	}
-	.body.muted { color: #6e7781; }
-
-	.note {
-		margin: 20px 0 0;
-		padding: 14px 16px;
-		background: #f6f8fa;
-		border: 1px solid #e3e5e8;
-		border-radius: 8px;
-	}
-	.note-title {
-		font-size: 12px;
-		font-weight: 600;
-		color: #1f2328;
-		margin: 0 0 8px;
-	}
-	.note ul {
-		margin: 0;
-		padding-left: 18px;
-		color: #57606a;
+	.error {
 		font-size: 13px;
-		line-height: 1.7;
-	}
-	.note code {
-		font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
-		font-size: 12px;
-		background: #eaecef;
-		color: #1f2328;
-		padding: 1px 6px;
-		border-radius: 4px;
+		line-height: 1.5;
+		color: #cf222e;
+		background: #ffebe9;
+		border: 1px solid #ff818266;
+		border-radius: 8px;
+		padding: 10px 12px;
+		margin: 0 0 16px;
 	}
 
 	.action {
-		display: inline-flex;
+		display: flex;
 		align-items: center;
 		justify-content: center;
-		height: 36px;
+		width: 100%;
+		height: 40px;
 		padding: 0 16px;
-		margin-top: 20px;
-		background: #1f2328;
+		background: #5865f2;
 		color: #ffffff;
 		font-size: 14px;
 		font-weight: 500;
 		text-decoration: none;
+		border: none;
 		border-radius: 6px;
+		cursor: pointer;
 		transition: background-color 0.15s ease;
+		box-sizing: border-box;
 	}
-	.action:hover { background: #2f363d; }
-	.action:active { background: #14171a; }
+	.action:hover { background: #4752c4; }
+	.action:active { background: #3c45a5; }
+	.action.secondary {
+		margin-top: 10px;
+		background: #1f2328;
+	}
+	.action.secondary:hover { background: #2f363d; }
 
-	.loader {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		gap: 12px;
+	.link {
+		display: block;
+		width: 100%;
+		margin-top: 16px;
+		padding: 0;
+		background: none;
+		border: none;
+		color: #57606a;
+		font-size: 13px;
+		text-decoration: underline;
+		cursor: pointer;
 	}
-	.spinner {
-		width: 24px;
-		height: 24px;
-		border-radius: 50%;
-		border: 2.5px solid #e3e5e8;
-		border-top-color: #57606a;
-		animation: spin 0.8s linear infinite;
-	}
-	@keyframes spin { to { transform: rotate(360deg); } }
+	.link:hover { color: #1f2328; }
 
 	@media (prefers-color-scheme: dark) {
 		:global(body) { background: #0d1117; color: #e6edf3; }
@@ -174,26 +151,17 @@
 		}
 		.title { color: #e6edf3; }
 		.body { color: #8b949e; }
-		.body.muted { color: #6e7681; }
-		.note {
-			background: #0d1117;
-			border-color: #30363d;
+		.error {
+			color: #ff7b72;
+			background: #490202;
+			border-color: #f8514966;
 		}
-		.note-title { color: #e6edf3; }
-		.note ul { color: #8b949e; }
-		.note code {
-			background: #21262d;
-			color: #e6edf3;
-		}
-		.action {
+		.action.secondary {
 			background: #e6edf3;
 			color: #0d1117;
 		}
-		.action:hover { background: #ffffff; }
-		.action:active { background: #c9d1d9; }
-		.spinner {
-			border-color: #30363d;
-			border-top-color: #8b949e;
-		}
+		.action.secondary:hover { background: #ffffff; }
+		.link { color: #8b949e; }
+		.link:hover { color: #e6edf3; }
 	}
 </style>

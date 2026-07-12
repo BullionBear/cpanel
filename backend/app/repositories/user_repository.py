@@ -24,15 +24,34 @@ class UserRepository:
         """Get user by email."""
         return self.db.query(User).filter(User.email == email).first()
 
-    def create(self, username: str, email: str, hashed_password: str, is_active: bool = False) -> User:
+    def get_by_discord_id(self, discord_id: str) -> Optional[User]:
+        """Get user by Discord ID."""
+        return self.db.query(User).filter(User.discord_id == discord_id).first()
+
+    def create(
+        self,
+        username: str,
+        email: str,
+        hashed_password: str,
+        is_active: bool = False,
+        discord_id: Optional[str] = None,
+    ) -> User:
         """Create a new user."""
         user = User(
             username=username,
             email=email,
             hash_password=hashed_password,
             is_active=is_active,
+            discord_id=discord_id,
         )
         self.db.add(user)
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
+    def link_discord_id(self, user: User, discord_id: str) -> User:
+        """Attach a Discord ID to an existing user."""
+        user.discord_id = discord_id
         self.db.commit()
         self.db.refresh(user)
         return user

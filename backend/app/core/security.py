@@ -59,6 +59,50 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None, p
     return f"{prefix}{encoded_jwt}" if prefix else encoded_jwt
 
 
+def create_oauth_state_token() -> str:
+    """Signed CSRF token for Discord OAuth state parameter."""
+    return create_access_token(
+        data={"type": "oauth_state", "nonce": secrets.token_urlsafe(16)},
+        expires_delta=timedelta(minutes=10),
+    )
+
+
+def verify_oauth_state_token(state: str) -> bool:
+    payload = decode_access_token(state)
+    return payload is not None and payload.get("type") == "oauth_state"
+
+
+def create_discord_exchange_token(user_id: int) -> str:
+    """Short-lived one-time exchange code for the frontend callback."""
+    return create_access_token(
+        data={"sub": str(user_id), "type": "discord_exchange"},
+        expires_delta=timedelta(seconds=60),
+    )
+
+
+def decode_discord_exchange_token(code: str) -> Optional[dict]:
+    payload = decode_access_token(code)
+    if payload is None or payload.get("type") != "discord_exchange":
+        return None
+    return payload
+
+
+# Track consumed exchange codes (single-use within process lifetime).
+_used_discord_exchange_jtis: set[str] = set()
+
+
+def consume_discord_exchange_token(code: str) -> Optional[int]:
+    payload = decode_discord_exchange_token(code)
+    if payload is None:
+        return None
+    jti = payload.get("jti")
+    sub = payload.get("sub")
+    if not jti or not sub or jti in _used_discord_exchange_jtis:
+        return None
+    _used_discord_exchange_jtis.add(jti)
+    return int(sub)
+
+
 def decode_access_token(token: str) -> Optional[dict]:
     """Decode and verify a JWT access token.
     

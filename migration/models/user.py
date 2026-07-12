@@ -12,6 +12,7 @@ class User(Base):
     username = Column(String, unique=True, nullable=False, index=True)
     hash_password = Column(String, nullable=False)
     email = Column(String, unique=True, nullable=False, index=True)
+    discord_id = Column(String, unique=True, nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     last_login = Column(DateTime(timezone=True), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
