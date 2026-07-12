@@ -1,5 +1,6 @@
 """Symbol repository for database operations."""
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -14,6 +15,24 @@ from app.models import (
     RefToken,
     RefUniversalSymbol,
 )
+
+
+# NUMERIC(36, 18) holds absolute values below 10^18. Exchanges use huge
+# numbers (e.g. Bitget maxTradeAmount=9e20) as "no limit" sentinels.
+_NUMERIC_LIMIT = Decimal(10) ** 18
+
+
+def _sanitize_numeric(value) -> Optional[Decimal]:
+    """Coerce an exchange-provided numeric; treat out-of-range sentinels as NULL."""
+    if value is None:
+        return None
+    try:
+        d = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    if abs(d) >= _NUMERIC_LIMIT:
+        return None
+    return d
 
 
 class SymbolRepository:
@@ -182,9 +201,9 @@ class SymbolRepository:
                 symbol_id=symbol.id,
                 filter_type=f["filter_type"],
                 unit_type=f["unit_type"],
-                step_size=f.get("step_size"),
-                min_value=f.get("min_value"),
-                max_value=f.get("max_value"),
+                step_size=_sanitize_numeric(f.get("step_size")),
+                min_value=_sanitize_numeric(f.get("min_value")),
+                max_value=_sanitize_numeric(f.get("max_value")),
             ))
 
         if derivative is not None:
