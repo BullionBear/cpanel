@@ -160,7 +160,8 @@ def _to_response(symbol) -> SymbolResponse:
     )
 
 
-@router.get("/universal_ticker/{ticker_name}", response_model=List[SymbolResponse])
+# :path converter because canonical tickers contain '/' (e.g. BTC/USDT.SPOT)
+@router.get("/universal_ticker/{ticker_name:path}", response_model=List[SymbolResponse])
 async def get_symbols_by_universal_ticker(
     ticker_name: str,
     db: Session = Depends(get_db),
