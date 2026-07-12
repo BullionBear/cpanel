@@ -31,7 +31,16 @@ class Settings(BaseSettings):
 
     # Local development
     DEV_MODE: bool = False
-    DEV_USER: str = "eddy"  # username used as Remote-User when DEV_MODE=true
+    DEV_USER: str = "eddy"  # username used when DEV_MODE=true (session bypass)
+
+    # Discord OAuth
+    DISCORD_CLIENT_ID: str = ""
+    DISCORD_CLIENT_SECRET: str = ""
+    DISCORD_BOT_TOKEN: str = ""
+    DISCORD_GUILD_ID: str = ""
+    DISCORD_REQUIRED_ROLE_ID: str = ""
+    DISCORD_REDIRECT_URI: str = "https://capi.lynxlinkage.com/api/v2/auth/discord/callback"
+    FRONTEND_URL: str = "https://cpanel.lynxlinkage.com"
 
     # CORS
     CORS_ORIGINS: list[str] = [

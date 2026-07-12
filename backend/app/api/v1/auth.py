@@ -1,19 +1,38 @@
 """Authentication router."""
 import asyncio
 from datetime import datetime, timedelta, timezone
+from typing import Optional
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.core.config import settings
-from app.core.security import create_access_token
+from app.core.security import (
+    consume_discord_exchange_token,
+    create_access_token,
+    create_discord_exchange_token,
+    create_oauth_state_token,
+    verify_oauth_state_token,
+)
 from app.db.session import get_db
 from app.models import User
 from app.middleware.auth import get_current_user, oauth2_scheme
 from app.repositories.user_repository import UserRepository
 from app.repositories.access_repository import AccessRepository
+from app.services.discord_oauth import (
+    DiscordOAuthError,
+    DiscordUser,
+    build_authorize_url,
+    exchange_code,
+    fetch_current_user,
+    unique_username,
+    verify_guild_membership,
+)
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -21,6 +40,10 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class ExchangeRequest(BaseModel):
+    code: str
 
 
 class UserResponse(BaseModel):
@@ -59,38 +82,122 @@ async def _issue_ui_token(user_id: int, access_repo: AccessRepository) -> str:
     raise HTTPException(status_code=500, detail="Failed to create access token after retries.")
 
 
+def _redirect_with_error(error: str) -> RedirectResponse:
+    return RedirectResponse(
+        url=f"{settings.FRONTEND_URL}/?error={quote(error)}",
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+def _resolve_or_create_user(db: Session, discord_user: DiscordUser) -> User:
+    user_repo = UserRepository(db)
+    user = user_repo.get_by_discord_id(discord_user.id)
+    if user:
+        return user
+
+    if discord_user.email:
+        user = user_repo.get_by_email(discord_user.email)
+        if user:
+            return user_repo.link_discord_id(user, discord_user.id)
+
+    base_username = discord_user.global_name or discord_user.username
+    username = unique_username(base_username, discord_user.id)
+    if user_repo.get_by_username(username):
+        username = unique_username(f"{username}_{discord_user.id[-4:]}", discord_user.id)
+
+    email = discord_user.email or f"{discord_user.id}@discord.local"
+    if user_repo.get_by_email(email):
+        email = f"{discord_user.id}@discord.local"
+
+    return user_repo.create(
+        username=username,
+        email=email,
+        hashed_password="discord-oauth-no-password",
+        is_active=True,
+        discord_id=discord_user.id,
+    )
+
+
 @router.get("/session", response_model=Token)
 async def get_session(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """
-    Exchange an Authelia session for a JWT token.
-
-    Traefik's Authelia middleware injects Remote-User after validating the
-    session cookie. The browser calls this endpoint (credentials: include)
-    on app boot to obtain a ui_ JWT without a custom login form.
-    """
-    remote_user = request.headers.get("Remote-User")
-    if not remote_user:
-        if not settings.DEV_MODE:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-        remote_user = settings.DEV_USER  # dev bypass: Authelia not running locally
+    """Dev-only session bypass. Production uses Discord OAuth."""
+    if not settings.DEV_MODE:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Use Discord OAuth to sign in")
 
     user_repo = UserRepository(db)
-    user = user_repo.get_by_username(remote_user)
+    user = user_repo.get_by_username(settings.DEV_USER)
     if not user:
-        if not settings.DEV_MODE:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-        # First-time dev setup: create the user so migrations alone are enough to start
         user = user_repo.create(
-            username=remote_user,
-            email=f"{remote_user}@dev.local",
+            username=settings.DEV_USER,
+            email=f"{settings.DEV_USER}@dev.local",
             hashed_password="dev-mode-no-password",
             is_active=True,
         )
 
     user_repo.update_last_login(user.id)
+    access_repo = AccessRepository(db)
+    token = await _issue_ui_token(user.id, access_repo)
+    return Token(access_token=token, token_type="bearer")
+
+
+@router.get("/discord/login")
+async def discord_login():
+    """Redirect the browser to Discord OAuth."""
+    if not settings.DISCORD_CLIENT_ID or not settings.DISCORD_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="Discord OAuth is not configured")
+    state = create_oauth_state_token()
+    return RedirectResponse(url=build_authorize_url(state), status_code=status.HTTP_302_FOUND)
+
+
+@router.get("/discord/callback")
+async def discord_callback(
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Handle Discord OAuth callback and redirect to the frontend with a one-time code."""
+    if error:
+        return _redirect_with_error("Discord sign-in was cancelled")
+    if not code or not state or not verify_oauth_state_token(state):
+        return _redirect_with_error("Invalid Discord OAuth state")
+
+    try:
+        token_data = await exchange_code(code)
+        discord_user = await fetch_current_user(token_data["access_token"])
+        await verify_guild_membership(discord_user.id)
+        user = _resolve_or_create_user(db, discord_user)
+        user_repo = UserRepository(db)
+        user_repo.update_last_login(user.id)
+        exchange_code_token = create_discord_exchange_token(user.id)
+        return RedirectResponse(
+            url=f"{settings.FRONTEND_URL}/auth/callback?code={quote(exchange_code_token)}",
+            status_code=status.HTTP_302_FOUND,
+        )
+    except DiscordOAuthError as exc:
+        return _redirect_with_error(exc.message)
+    except IntegrityError:
+        return _redirect_with_error("Failed to create or link your account")
+
+
+@router.post("/discord/exchange", response_model=Token)
+async def discord_exchange(
+    body: ExchangeRequest,
+    db: Session = Depends(get_db),
+):
+    """Exchange a one-time Discord callback code for a ui_ JWT."""
+    user_id = consume_discord_exchange_token(body.code)
+    if user_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired sign-in code")
+
+    user_repo = UserRepository(db)
+    user = user_repo.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+
     access_repo = AccessRepository(db)
     token = await _issue_ui_token(user.id, access_repo)
     return Token(access_token=token, token_type="bearer")

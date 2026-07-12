@@ -67,10 +67,9 @@ export async function getCurrentUser(): Promise<User | null> {
 	}
 }
 
-export function logout() {
+export function logout(redirectTo: string = '/') {
 	localStorage.removeItem('access_token');
-	// Redirect to Authelia logout so the session cookie is also cleared
-	window.location.href = 'https://auth.lynxlinkage.com/logout';
+	window.location.href = redirectTo;
 }
 
 

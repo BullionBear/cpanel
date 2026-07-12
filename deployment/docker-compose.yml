@@ -5,19 +5,20 @@ services:
     restart: unless-stopped
     environment:
       - DATABASE_URL=${DATABASE_URL}
+      - SECRET_KEY=${SECRET_KEY}
+      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
+      - DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
+      - DISCORD_REQUIRED_ROLE_ID=${DISCORD_REQUIRED_ROLE_ID:-}
+      - DISCORD_REDIRECT_URI=${DISCORD_REDIRECT_URI}
+      - FRONTEND_URL=${FRONTEND_URL}
     labels:
       - "traefik.enable=true"
-      # Main router: no Authelia — API tokens must reach the backend unimpeded
       - "traefik.http.routers.backend.rule=Host(`capi.${DOMAIN}`)"
       - "traefik.http.routers.backend.entrypoints=websecure"
       - "traefik.http.routers.backend.tls.certresolver=myresolver"
       - "traefik.http.services.backend.loadbalancer.server.port=8186"
-      # Session router: Authelia-gated — browser exchanges cookie for JWT here
-      - "traefik.http.routers.backend-session.rule=Host(`capi.${DOMAIN}`) && Path(`/api/v2/auth/session`)"
-      - "traefik.http.routers.backend-session.entrypoints=websecure"
-      - "traefik.http.routers.backend-session.tls.certresolver=myresolver"
-      - "traefik.http.routers.backend-session.service=backend"
-      - "traefik.http.routers.backend-session.middlewares=authelia@docker"
     pull_policy: always
     networks:
       - web_proxy
@@ -32,7 +33,6 @@ services:
       - "traefik.http.routers.frontend.entrypoints=websecure"
       - "traefik.http.routers.frontend.tls.certresolver=myresolver"
       - "traefik.http.services.frontend.loadbalancer.server.port=80"
-      - "traefik.http.routers.frontend.middlewares=authelia@docker"
     pull_policy: always
     networks:
       - web_proxy
