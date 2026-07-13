@@ -20,8 +20,8 @@
 		single control panel to manage accounts, positions, and trading history across exchanges.
 	</p>
 	<p class="muted">
-		The platform is being rebuilt from the ground up — more panels will appear in the sidebar
-		as they come back online.
+		The platform is being rebuilt from the ground up — more panels will appear in the top
+		navigation as they come back online.
 	</p>
 </section>
 

@@ -8,10 +8,16 @@
 
 <div class="shell">
 	<header class="header">
-		<a class="brand" href="/">
-			<span class="logo">C</span>
-			<span class="brand-name">CPanel</span>
-		</a>
+		<div class="header-left">
+			<a class="brand" href="/">
+				<span class="logo">C</span>
+				<span class="brand-name">CPanel</span>
+			</a>
+
+			<nav class="nav">
+				<a class="nav-item" class:active={$page.url.pathname === '/'} href="/">Home</a>
+			</nav>
+		</div>
 
 		<div class="header-right">
 			<span class="greeting">Hi, {$user?.username ?? 'guest'}</span>
@@ -23,15 +29,9 @@
 		</div>
 	</header>
 
-	<div class="body">
-		<nav class="sidebar">
-			<a class="nav-item" class:active={$page.url.pathname === '/'} href="/">Home</a>
-		</nav>
-
-		<main class="content">
-			<slot />
-		</main>
-	</div>
+	<main class="content">
+		<slot />
+	</main>
 </div>
 
 <style>
@@ -62,6 +62,12 @@
 		box-sizing: border-box;
 	}
 
+	.header-left {
+		display: flex;
+		align-items: center;
+		gap: 24px;
+	}
+
 	.brand {
 		display: flex;
 		align-items: center;
@@ -83,6 +89,31 @@
 	}
 	.brand-name {
 		font-size: 16px;
+		font-weight: 600;
+	}
+
+	.nav {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+	.nav-item {
+		display: inline-flex;
+		align-items: center;
+		height: 34px;
+		padding: 0 12px;
+		border-radius: 6px;
+		font-size: 14px;
+		color: #57606a;
+		text-decoration: none;
+	}
+	.nav-item:hover {
+		background: #f6f8fa;
+		color: #1f2328;
+	}
+	.nav-item.active {
+		background: #eef1f4;
+		color: #1f2328;
 		font-weight: 600;
 	}
 
@@ -115,37 +146,6 @@
 	.action.secondary { background: #1f2328; }
 	.action.secondary:hover { background: #2f363d; }
 
-	.body {
-		display: flex;
-		flex: 1;
-	}
-
-	.sidebar {
-		width: 200px;
-		flex-shrink: 0;
-		padding: 16px 12px;
-		background: #ffffff;
-		border-right: 1px solid #e3e5e8;
-		box-sizing: border-box;
-	}
-	.nav-item {
-		display: block;
-		padding: 8px 12px;
-		border-radius: 6px;
-		font-size: 14px;
-		color: #57606a;
-		text-decoration: none;
-	}
-	.nav-item:hover {
-		background: #f6f8fa;
-		color: #1f2328;
-	}
-	.nav-item.active {
-		background: #eef1f4;
-		color: #1f2328;
-		font-weight: 600;
-	}
-
 	.content {
 		flex: 1;
 		padding: 32px;
@@ -157,8 +157,7 @@
 			background: #0d1117;
 			color: #e6edf3;
 		}
-		.header,
-		.sidebar {
+		.header {
 			background: #161b22;
 			border-color: #30363d;
 		}
