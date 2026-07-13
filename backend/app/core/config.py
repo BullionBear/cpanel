@@ -13,6 +13,13 @@ class Settings(BaseSettings):
     DATABASE_URL: str = ""
     FRONTEND_URL: str = "http://localhost:5173"
 
+    # Background scheduler (disable for one-off scripts / certain tests)
+    SCHEDULER_ENABLED: bool = True
+
+    # Envelope-encryption master key for stored credentials.
+    # Generate with: python -c "from app.core.crypto import generate_master_key; print(generate_master_key())"
+    CREDENTIAL_ENCRYPTION_KEY: str = ""
+
     # Security
     SECRET_KEY: str = "your-secret-key-change-in-production"
     ALGORITHM: str = "HS256"

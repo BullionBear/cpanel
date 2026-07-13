@@ -48,14 +48,17 @@ alembic current
 
 ## Models
 
-Models are defined in the `models/` directory. The User model includes:
-- `id`: Integer primary key (auto-increment)
-- `username`: String, unique, indexed
-- `hash_password`: String (hashed password)
-- `email`: String, unique, indexed
-- `created_at`: DateTime with timezone, defaults to now()
-- `last_login`: DateTime with timezone, nullable
-- `is_active`: Boolean, defaults to True
+The schema's source of truth is `backend/app/models`. This component's
+`models/__init__.py` puts the backend on `sys.path` and re-exports its
+`Base`, so `alembic revision --autogenerate` compares against the exact
+metadata the application uses. Define new models in `backend/app/models`
+(and register them in its `__init__.py`), then autogenerate a revision here.
+
+Backend model modules must stay import-safe without app configuration
+(SQLAlchemy-only imports — no settings, no network clients).
+
+The legacy model files in `models/` belong to the archived pre-2026-07-13
+schema and are no longer imported.
 
 ## Project Structure
 
@@ -65,9 +68,7 @@ migration/
 │   ├── versions/         # Migration scripts
 │   ├── env.py           # Alembic environment configuration
 │   └── script.py.mako   # Migration template
-├── models/              # SQLAlchemy models
-│   ├── __init__.py
-│   └── user.py          # User model
+├── models/              # Re-exports Base from backend/app/models (+ legacy files)
 ├── alembic.ini          # Alembic configuration file
 ├── requirements.txt     # Python dependencies
 └── README.md           # This file

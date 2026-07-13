@@ -102,7 +102,8 @@ docker compose up -d
 
 All tables of the previous schema were renamed to `<name>_archived_20260713`
 by revision `a0b1c2d3e4f5`. The Alembic pipeline stays in place for the
-rebuild; new models go in `migration/models/` (metadata currently starts empty).
+rebuild; new models go in `backend/app/models/` (the single source of truth —
+`migration/models/` re-exports its metadata for autogenerate).
 
 ```bash
 cd migration
