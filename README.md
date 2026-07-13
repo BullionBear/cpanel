@@ -1,16 +1,29 @@
 # CPanel
 
-Trading dashboard with a FastAPI backend and SvelteKit frontend.
+Trading control panel with a FastAPI backend and SvelteKit frontend, being
+rebuilt from scratch (started 2026-07-13). The previous application is
+archived under `archive/`; the rebuilt apps keep the same structure and
+frameworks. The frontend root route currently serves the public landing page.
 
 ## Repository layout
 
 ```
 cpanel/
-├── backend/          FastAPI application
-├── frontend/         SvelteKit application
-├── migration/        Alembic database migrations
+├── backend/          FastAPI application (fresh scaffold)
+├── frontend/         SvelteKit application (fresh scaffold, landing page)
+├── migration/        Alembic database migrations (all old tables archived 2026-07-13)
 ├── docker/           Dockerfiles (Dockerfile.backend, Dockerfile.frontend)
-└── deployment/       Production compose file for this service only
+├── deployment/       Production compose file for this service only
+└── archive/          Archived previous backend and frontend
+```
+
+## Local development
+
+```bash
+docker compose -f docker-compose.dev.yml up -d   # local Postgres 16
+
+cd backend && ./run.sh                            # API on :8186
+cd frontend && npm install && npm run dev        # UI on :5173
 ```
 
 ## CI/CD pipeline
@@ -38,11 +51,12 @@ Triggered automatically once the Docker build succeeds. SSHes into the productio
 cd /root/cpanel/deployment
 source env.sh
 docker compose pull backend frontend
-docker compose up -d backend frontend
+docker compose up -d --remove-orphans backend frontend
 docker image prune -f
 ```
 
-Sends a Discord notification on success or failure.
+Sends a Discord notification on success or failure. Notifications include the
+repository, branch, commit link, and the commit message.
 
 ### Workflow sequence
 
@@ -81,9 +95,14 @@ source env.sh
 docker compose up -d
 ```
 
-`env.sh` exports `DOMAIN` and `DATABASE_URL`. It is git-ignored and must be created on the server.
+`env.sh` exports `DOMAIN`, `DATABASE_URL`, `FRONTEND_URL`, and
+`COMPOSE_PROJECT_NAME=cpanel`. It is git-ignored and must be created on the server.
 
 ## Database migrations
+
+All tables of the previous schema were renamed to `<name>_archived_20260713`
+by revision `a0b1c2d3e4f5`. The Alembic pipeline stays in place for the
+rebuild; new models go in `migration/models/` (metadata currently starts empty).
 
 ```bash
 cd migration
@@ -93,3 +112,8 @@ DATABASE_URL=<dsn> alembic downgrade -1   # roll back one
 ```
 
 See `migration/README.md` for details.
+
+## Archive
+
+`archive/` holds the previous application as-is (FastAPI backend and SvelteKit
+frontend). Nothing in it is built or deployed — see `archive/README.md`.

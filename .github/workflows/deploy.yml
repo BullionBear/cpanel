@@ -48,84 +48,76 @@ jobs:
             echo "Pulling latest images..."
             docker compose -p "$COMPOSE_PROJECT_NAME" pull backend frontend || echo "WARN: registry pull failed; continuing with local images"
             echo "Restarting services..."
-            COMPOSE_PULL_POLICY=never docker compose -p "$COMPOSE_PROJECT_NAME" up -d --pull never backend frontend
+            COMPOSE_PULL_POLICY=never docker compose -p "$COMPOSE_PROJECT_NAME" up -d --pull never --remove-orphans backend frontend
             echo "Cleaning up old images..."
             docker image prune -f
             echo "Deployment completed successfully!"
 
       - name: Send Discord notification (Success)
         if: success()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+          COMMIT_MESSAGE: ${{ github.event.workflow_run.head_commit.message }}
+          ACTOR: ${{ github.event.workflow_run.actor.login }}
+          SERVER_URL: ${{ github.server_url }}
         run: |
-          curl -H "Content-Type: application/json" \
-            -X POST \
-            -d '{
-              "embeds": [{
-                "title": "✅ Deployment Successful",
-                "description": "CPanel has been deployed to production.",
-                "color": 3066993,
-                "fields": [
-                  {
-                    "name": "Repository",
-                    "value": "${{ github.repository }}",
-                    "inline": true
-                  },
-                  {
-                    "name": "Branch",
-                    "value": "${{ github.event.workflow_run.head_branch }}",
-                    "inline": true
-                  },
-                  {
-                    "name": "Commit",
-                    "value": "[`${{ github.event.workflow_run.head_sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.event.workflow_run.head_sha }})",
-                    "inline": false
-                  },
-                  {
-                    "name": "Triggered by",
-                    "value": "${{ github.event.workflow_run.actor.login }}",
-                    "inline": true
-                  }
-                ],
-                "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
-              }]
-            }' \
-            ${{ secrets.DISCORD_WEBHOOK }}
+          jq -n \
+            --arg repo "$REPO" \
+            --arg branch "$BRANCH" \
+            --arg commit "[\`${COMMIT_SHA}\`](${SERVER_URL}/${REPO}/commit/${COMMIT_SHA})" \
+            --arg message "${COMMIT_MESSAGE:0:1000}" \
+            --arg actor "$ACTOR" \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{embeds: [{
+              title: "✅ Deployment Successful",
+              description: "CPanel has been deployed to production.",
+              color: 3066993,
+              fields: [
+                {name: "Repository", value: $repo, inline: true},
+                {name: "Branch", value: $branch, inline: true},
+                {name: "Commit", value: $commit, inline: false},
+                {name: "Message", value: $message, inline: false},
+                {name: "Triggered by", value: $actor, inline: true}
+              ],
+              timestamp: $ts
+            }]}' \
+          | curl -sf -H "Content-Type: application/json" -X POST -d @- "$DISCORD_WEBHOOK"
 
       - name: Send Discord notification (Failure)
         if: failure()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+          COMMIT_MESSAGE: ${{ github.event.workflow_run.head_commit.message }}
+          SERVER_URL: ${{ github.server_url }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          curl -H "Content-Type: application/json" \
-            -X POST \
-            -d '{
-              "embeds": [{
-                "title": "❌ Deployment Failed",
-                "description": "CPanel deployment to production has failed.",
-                "color": 15158332,
-                "fields": [
-                  {
-                    "name": "Repository",
-                    "value": "${{ github.repository }}",
-                    "inline": true
-                  },
-                  {
-                    "name": "Branch",
-                    "value": "${{ github.event.workflow_run.head_branch }}",
-                    "inline": true
-                  },
-                  {
-                    "name": "Commit",
-                    "value": "[`${{ github.event.workflow_run.head_sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.event.workflow_run.head_sha }})",
-                    "inline": false
-                  },
-                  {
-                    "name": "Workflow Run",
-                    "value": "[View Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})",
-                    "inline": true
-                  }
-                ],
-                "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
-              }]
-            }' \
-            ${{ secrets.DISCORD_WEBHOOK }}
+          jq -n \
+            --arg repo "$REPO" \
+            --arg branch "$BRANCH" \
+            --arg commit "[\`${COMMIT_SHA}\`](${SERVER_URL}/${REPO}/commit/${COMMIT_SHA})" \
+            --arg message "${COMMIT_MESSAGE:0:1000}" \
+            --arg run "[View Logs](${SERVER_URL}/${REPO}/actions/runs/${RUN_ID})" \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{embeds: [{
+              title: "❌ Deployment Failed",
+              description: "CPanel deployment to production has failed.",
+              color: 15158332,
+              fields: [
+                {name: "Repository", value: $repo, inline: true},
+                {name: "Branch", value: $branch, inline: true},
+                {name: "Commit", value: $commit, inline: false},
+                {name: "Message", value: $message, inline: false},
+                {name: "Workflow Run", value: $run, inline: true}
+              ],
+              timestamp: $ts
+            }]}' \
+          | curl -sf -H "Content-Type: application/json" -X POST -d @- "$DISCORD_WEBHOOK"
 
   notify-build-failure:
     runs-on: ubuntu-latest
@@ -133,32 +125,33 @@ jobs:
 
     steps:
       - name: Send Discord notification (Build Failed)
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+          COMMIT_MESSAGE: ${{ github.event.workflow_run.head_commit.message }}
+          SERVER_URL: ${{ github.server_url }}
+          BUILD_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
-          curl -H "Content-Type: application/json" \
-            -X POST \
-            -d '{
-              "embeds": [{
-                "title": "🔴 Docker Build Failed",
-                "description": "Docker image build has failed. Deployment skipped.",
-                "color": 15158332,
-                "fields": [
-                  {
-                    "name": "Repository",
-                    "value": "${{ github.repository }}",
-                    "inline": true
-                  },
-                  {
-                    "name": "Branch",
-                    "value": "${{ github.event.workflow_run.head_branch }}",
-                    "inline": true
-                  },
-                  {
-                    "name": "Workflow Run",
-                    "value": "[View Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }})",
-                    "inline": false
-                  }
-                ],
-                "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
-              }]
-            }' \
-            ${{ secrets.DISCORD_WEBHOOK }}
+          jq -n \
+            --arg repo "$REPO" \
+            --arg branch "$BRANCH" \
+            --arg commit "[\`${COMMIT_SHA}\`](${SERVER_URL}/${REPO}/commit/${COMMIT_SHA})" \
+            --arg message "${COMMIT_MESSAGE:0:1000}" \
+            --arg run "[View Logs](${SERVER_URL}/${REPO}/actions/runs/${BUILD_RUN_ID})" \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{embeds: [{
+              title: "🔴 Docker Build Failed",
+              description: "Docker image build has failed. Deployment skipped.",
+              color: 15158332,
+              fields: [
+                {name: "Repository", value: $repo, inline: true},
+                {name: "Branch", value: $branch, inline: true},
+                {name: "Commit", value: $commit, inline: false},
+                {name: "Message", value: $message, inline: false},
+                {name: "Workflow Run", value: $run, inline: false}
+              ],
+              timestamp: $ts
+            }]}' \
+          | curl -sf -H "Content-Type: application/json" -X POST -d @- "$DISCORD_WEBHOOK"

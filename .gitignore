@@ -1,5 +1,6 @@
 venv/
 env.sh
+credentials/
 *.env
 .env
 __pycache__/

@@ -1,74 +1,20 @@
-"""Application configuration settings."""
-from pathlib import Path
-from typing import Optional
-
-from dotenv import load_dotenv
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment variables."""
-
-    # Database
-    DATABASE_URL: str
-
-    # API Settings
-    API_PREFIX: str = "/api"
     PROJECT_NAME: str = "CPanel API"
-    VERSION: str = "1.0.0"
+    API_PREFIX: str = "/api"
     DEBUG: bool = False
-    HOST_URL: str = "http://localhost:8000"  # Base URL for activation links
 
-    # Build metadata (injected at docker build time)
+    # Injected at docker build time (see docker/Dockerfile.backend)
+    VERSION: str = "0.1.0"
     GIT_COMMIT: str = "unknown"
     BUILD_TIME: str = "unknown"
 
-    # Security
-    SECRET_KEY: str = "your-secret-key-change-in-production"
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    MAX_UI_TOKEN: int = 5  # Maximum number of UI prefix tokens per user
+    DATABASE_URL: str = ""
+    FRONTEND_URL: str = "http://localhost:5173"
 
-    # Local development
-    DEV_MODE: bool = False
-    DEV_USER: str = "eddy"  # username used when DEV_MODE=true (session bypass)
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Discord OAuth
-    DISCORD_CLIENT_ID: str = ""
-    DISCORD_CLIENT_SECRET: str = ""
-    DISCORD_BOT_TOKEN: str = ""
-    DISCORD_GUILD_ID: str = ""
-    DISCORD_REQUIRED_ROLE_ID: str = ""
-    DISCORD_REDIRECT_URI: str = "https://capi.lynxlinkage.com/api/v2/auth/discord/callback"
-    FRONTEND_URL: str = "https://cpanel.lynxlinkage.com"
-
-    # CORS
-    CORS_ORIGINS: list[str] = [
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "https://cpanel.lynxlinkage.com",
-    ]
-
-    # Email Settings
-    SMTP_URL: str = "smtp.hostinger.com:465"
-    SMTP_USERNAME: str = ""
-    SMTP_PASSWORD: str = ""
-    SMTP_FROM_EMAIL: str = ""
-    SMTP_FROM_NAME: str = "CPanel"
-
-    class Config:
-        env_file_encoding = "utf-8"
-        case_sensitive = True
-
-
-# Load .env file from backend directory or migration directory
-backend_env = Path(__file__).resolve().parent.parent.parent / ".env"
-migration_env = Path(__file__).resolve().parent.parent.parent.parent / "migration" / ".env"
-
-if backend_env.exists():
-    load_dotenv(backend_env)
-elif migration_env.exists():
-    load_dotenv(migration_env)
 
 settings = Settings()
-
