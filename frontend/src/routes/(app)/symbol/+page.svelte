@@ -34,6 +34,23 @@
 	// Delete state
 	let deletingId: number | null = null;
 
+	// Expanded filter detail row (one at a time)
+	let expandedId: number | null = null;
+
+	function toggleExpand(id: number) {
+		expandedId = expandedId === id ? null : id;
+	}
+
+	function filterEntries(sym: SymbolInfo): Array<{ type: string; unit: string; step: string | null; min: string | null; max: string | null }> {
+		const rows = [];
+		for (const [type, units] of Object.entries(sym.filter ?? {})) {
+			for (const [unit, vals] of Object.entries(units)) {
+				rows.push({ type, unit, step: vals.step_size, min: vals.min_value, max: vals.max_value });
+			}
+		}
+		return rows;
+	}
+
 	$: filteredSymbols = symbols.filter((s) => {
 		if (filterExchange && s.exchange.id !== filterExchange) return false;
 		if (filterProduct && s.product.id !== filterProduct) return false;
@@ -197,6 +214,7 @@
 			<table class="symbol-table">
 				<thead>
 					<tr>
+						<th class="expand-col"></th>
 						<th>Symbol</th>
 						<th>Exchange</th>
 						<th>Product</th>
@@ -212,6 +230,18 @@
 				<tbody>
 					{#each filteredSymbols as sym (sym.id)}
 						<tr>
+							<td class="expand-col">
+								<button
+									class="expand-btn"
+									class:expanded={expandedId === sym.id}
+									on:click={() => toggleExpand(sym.id)}
+									title="Show filters"
+								>
+									<svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+										<path d="M9 18L15 12L9 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+									</svg>
+								</button>
+							</td>
 							<td class="symbol-name">{sym.name}</td>
 							<td>
 								<span class="badge {exchangeBadgeClass(sym.exchange.slug)}">{sym.exchange.name}</span>
@@ -243,6 +273,38 @@
 								</button>
 							</td>
 						</tr>
+						{#if expandedId === sym.id}
+							<tr class="detail-row">
+								<td colspan="11">
+									{#if filterEntries(sym).length === 0}
+										<div class="no-filters">No filters recorded for this symbol.</div>
+									{:else}
+										<table class="filter-table">
+											<thead>
+												<tr>
+													<th>Filter</th>
+													<th>Unit</th>
+													<th class="num-col">Step</th>
+													<th class="num-col">Min</th>
+													<th class="num-col">Max</th>
+												</tr>
+											</thead>
+											<tbody>
+												{#each filterEntries(sym) as f (f.type + f.unit)}
+													<tr>
+														<td><code>{f.type}</code></td>
+														<td>{f.unit}</td>
+														<td class="num-col">{f.step ?? '-'}</td>
+														<td class="num-col">{f.min ?? '-'}</td>
+														<td class="num-col">{f.max ?? '-'}</td>
+													</tr>
+												{/each}
+											</tbody>
+										</table>
+									{/if}
+								</td>
+							</tr>
+						{/if}
 					{/each}
 				</tbody>
 			</table>
@@ -510,6 +572,92 @@
 
 	.symbol-name {
 		font-weight: 600;
+	}
+
+	/* Expandable filter detail */
+	.expand-col {
+		width: 36px;
+		padding-right: 0 !important;
+	}
+
+	.expand-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 24px;
+		height: 24px;
+		border: none;
+		background: transparent;
+		border-radius: 6px;
+		cursor: pointer;
+		color: #9ca3af;
+		transition: all 0.15s;
+	}
+
+	.expand-btn:hover {
+		background: #f3f4f6;
+		color: #374151;
+	}
+
+	.expand-btn svg {
+		stroke: currentColor;
+		transition: transform 0.15s;
+	}
+
+	.expand-btn.expanded svg {
+		transform: rotate(90deg);
+	}
+
+	.detail-row td {
+		background: #f9fafb;
+		padding: 12px 16px 16px 52px;
+	}
+
+	.filter-table {
+		width: auto;
+		min-width: 480px;
+		border-collapse: collapse;
+		background: white;
+		border: 1px solid #e5e7eb;
+		border-radius: 8px;
+	}
+
+	.filter-table th {
+		padding: 8px 14px;
+		text-align: left;
+		font-size: 11px;
+		font-weight: 600;
+		color: #6b7280;
+		text-transform: uppercase;
+		letter-spacing: 0.3px;
+		border-bottom: 1px solid #e5e7eb;
+		background: #f9fafb;
+	}
+
+	.filter-table td {
+		padding: 8px 14px;
+		font-size: 13px;
+		color: #1f2937;
+		border-bottom: 1px solid #f3f4f6;
+		background: white;
+	}
+
+	.filter-table tbody tr:last-child td {
+		border-bottom: none;
+	}
+
+	.filter-table code {
+		font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+		font-size: 12px;
+		background: #f3f4f6;
+		padding: 2px 6px;
+		border-radius: 4px;
+		color: #4b5563;
+	}
+
+	.no-filters {
+		font-size: 13px;
+		color: #9ca3af;
 	}
 
 	.num-col {

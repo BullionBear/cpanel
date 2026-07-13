@@ -60,10 +60,8 @@ class TokenInfo(BaseModel):
         from_attributes = True
 
 
-class SymbolFilterInfo(BaseModel):
-    """Symbol filter row (long format)."""
-    filter_type: str
-    unit_type: str
+class FilterValues(BaseModel):
+    """Numeric values of one (filter_type, unit_type) filter entry."""
     step_size: Optional[str] = None
     min_value: Optional[str] = None
     max_value: Optional[str] = None
@@ -81,7 +79,8 @@ class SymbolResponse(BaseModel):
     qty_step: Optional[str] = None
     status: str
     universal_ticker: str
-    filters: List[SymbolFilterInfo] = []
+    # Nested map: filter_type -> unit_type -> values
+    filter: Dict[str, Dict[str, FilterValues]] = {}
     # Derived from tick/step sizes, for display formatting
     price_precision: int
     size_precision: int
@@ -107,15 +106,14 @@ def _precision_from_step(step) -> int:
 def _to_response(symbol) -> SymbolResponse:
     """Serialize a RefSymbol (with loaded relationships) into a SymbolResponse."""
     qty_step = None
-    filter_rows: List[SymbolFilterInfo] = []
+    # PK on (symbol_id, filter_type, unit_type) guarantees one entry per leaf.
+    filter_map: Dict[str, Dict[str, FilterValues]] = {}
     for f in symbol.filters:
-        filter_rows.append(SymbolFilterInfo(
-            filter_type=f.filter_type,
-            unit_type=f.unit_type,
+        filter_map.setdefault(f.filter_type, {})[f.unit_type] = FilterValues(
             step_size=_decimal_str(f.step_size) if f.step_size is not None else None,
             min_value=_decimal_str(f.min_value) if f.min_value is not None else None,
             max_value=_decimal_str(f.max_value) if f.max_value is not None else None,
-        ))
+        )
     # Prefer the base-unit qty step for display; fall back to contract unit (inverse).
     for unit in ("base", "contract"):
         step = next(
@@ -154,7 +152,7 @@ def _to_response(symbol) -> SymbolResponse:
         qty_step=qty_step,
         status=symbol.status,
         universal_ticker=symbol.universal.universal_ticker,
-        filters=filter_rows,
+        filter=filter_map,
         price_precision=_precision_from_step(symbol.price_tick_size),
         size_precision=_precision_from_step(qty_step) if qty_step is not None else 0,
     )

@@ -296,15 +296,14 @@ export interface SymbolInfo {
 	qty_step: string | null;
 	status: string;
 	universal_ticker: string;
-	filters: SymbolFilter[];
+	// Nested map: filter_type -> unit_type -> values
+	filter: Record<string, Record<string, FilterValues>>;
 	// Derived from tick/step sizes, for display formatting
 	price_precision: number;
 	size_precision: number;
 }
 
-export interface SymbolFilter {
-	filter_type: string;
-	unit_type: string;
+export interface FilterValues {
 	step_size: string | null;
 	min_value: string | null;
 	max_value: string | null;
