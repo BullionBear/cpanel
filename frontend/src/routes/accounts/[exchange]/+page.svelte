@@ -223,12 +223,51 @@
 					<p class="muted">No subaccounts known.</p>
 				{/if}
 				{#each main.children as sub (sub.id)}
-					<div class="cred-row">
-						<span class="sub-label">{sub.label}</span>
-						{#if sub.native_uid}<span class="uid">uid {sub.native_uid}</span>{/if}
-						<span class="muted small-text">
-							{sub.credentials.filter((c) => c.status === 'active').length} active key(s)
-						</span>
+					<div class="sub-block">
+						<div class="cred-row">
+							<span class="sub-label">{sub.label}</span>
+							{#if sub.native_uid}<span class="uid">uid {sub.native_uid}</span>{/if}
+						</div>
+
+						{#each sub.credentials as cred (cred.id)}
+							<div class="cred-row indent" class:revoked={cred.status !== 'active'}>
+								<code>{cred.api_key.slice(0, 10)}…</code>
+								<span class="tag">{cred.scheme}</span>
+								{#if cred.read_only}<span class="tag">read-only</span>{/if}
+								{#if cred.can_withdraw}<span class="tag warn">withdraw</span>{/if}
+								<span class="tag" class:ok={cred.status === 'active'}>{cred.status}</span>
+								{#if cred.status === 'active'}
+									<button
+										class="btn danger small"
+										disabled={busy}
+										on:click={() => revoke(sub, cred.id)}>Revoke</button
+									>
+								{/if}
+							</div>
+						{/each}
+
+						{#if keyForms[sub.id]}
+							<form class="key-form indent" on:submit|preventDefault={() => submitKey(sub)}>
+								<select bind:value={keyForms[sub.id].scheme}>
+									<option value="HMAC">HMAC</option>
+									<option value="ED25519">ED25519</option>
+								</select>
+								<input placeholder="API key" bind:value={keyForms[sub.id].api_key} required />
+								<input
+									type="password"
+									placeholder="Secret / private key"
+									bind:value={keyForms[sub.id].secret}
+									required
+								/>
+								<button class="btn" disabled={busy}>Verify & save</button>
+							</form>
+						{:else}
+							<div class="indent">
+								<button class="btn secondary small" on:click={() => startKeyForm(sub.id)}>
+									Register API key
+								</button>
+							</div>
+						{/if}
 					</div>
 				{/each}
 
@@ -312,9 +351,6 @@
 	.muted {
 		color: #8b949e;
 		font-size: 0.875rem;
-	}
-	.small-text {
-		font-size: 0.75rem;
 	}
 	.error {
 		color: #cf222e;
@@ -443,6 +479,16 @@
 	.cred-row.revoked {
 		opacity: 0.55;
 	}
+	.sub-block {
+		padding: 0.375rem 0 0.625rem;
+		border-bottom: 1px solid #f0f2f4;
+	}
+	.sub-block:last-of-type {
+		border-bottom: none;
+	}
+	.indent {
+		margin-left: 1.25rem;
+	}
 	.cred-row code {
 		font-size: 0.8125rem;
 	}
@@ -505,6 +551,9 @@
 		.tag.warn {
 			background: #2b1a12;
 			color: #d29922;
+		}
+		.sub-block {
+			border-color: #21262d;
 		}
 		.secret-banner {
 			background: #2b2611;
