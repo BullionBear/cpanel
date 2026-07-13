@@ -17,12 +17,14 @@ from typing import Any
 from app.connectors.types import (
     ApiKeyResult,
     Balance,
+    CredentialInfo,
     Instrument,
     KeyScheme,
     Order,
     OrderRequest,
     Page,
     Position,
+    SubaccountInfo,
     TransferResult,
     WalletType,
 )
@@ -33,13 +35,16 @@ Credential = dict[str, Any]
 class Capability(StrEnum):
     INSTRUMENTS = "instruments"
     REFERENCE_PRICES = "reference_prices"
+    CREDENTIAL_VERIFY = "credential_verify"
     BALANCES = "balances"
     POSITIONS = "positions"
     ORDERS = "orders"
     TRADE_HISTORY = "trade_history"
     ORDER_HISTORY = "order_history"
-    SUBACCOUNTS = "subaccounts"
-    API_KEYS = "api_keys"
+    SUBACCOUNT_LIST = "subaccount_list"
+    SUBACCOUNT_CREATE = "subaccount_create"
+    API_KEY_CREATE = "api_key_create"
+    API_KEY_REVOKE = "api_key_revoke"
     TRANSFERS = "transfers"
     WITHDRAWALS = "withdrawals"
 
@@ -128,22 +133,29 @@ class ExchangeConnector:
         """
         return ["account"]
 
-    # -- provisioning ---------------------------------------------------
+    # -- accounts and provisioning ----------------------------------------
 
-    async def create_subaccount(self, credential: Credential, label: str) -> str:
-        """Create a subaccount, returning its native identifier."""
-        raise NotSupported(self.exchange, Capability.SUBACCOUNTS)
+    async def verify_credential(self, credential: Credential) -> CredentialInfo:
+        """Check a credential against the venue and report its permissions."""
+        raise NotSupported(self.exchange, Capability.CREDENTIAL_VERIFY)
+
+    async def list_subaccounts(self, credential: Credential) -> list[SubaccountInfo]:
+        """Subaccounts as the venue reports them (master credential required)."""
+        raise NotSupported(self.exchange, Capability.SUBACCOUNT_LIST)
+
+    async def create_subaccount(self, credential: Credential, label: str) -> SubaccountInfo:
+        raise NotSupported(self.exchange, Capability.SUBACCOUNT_CREATE)
 
     async def create_api_key(
         self, credential: Credential, subaccount: str | None, scheme: KeyScheme,
         permissions: list[str],
     ) -> ApiKeyResult:
-        raise NotSupported(self.exchange, Capability.API_KEYS)
+        raise NotSupported(self.exchange, Capability.API_KEY_CREATE)
 
     async def revoke_api_key(
         self, credential: Credential, subaccount: str | None, api_key: str
     ) -> None:
-        raise NotSupported(self.exchange, Capability.API_KEYS)
+        raise NotSupported(self.exchange, Capability.API_KEY_REVOKE)
 
     # -- transfers ------------------------------------------------------
 

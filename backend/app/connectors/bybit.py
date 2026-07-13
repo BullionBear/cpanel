@@ -19,10 +19,29 @@ from decimal import Decimal
 
 from pybit.unified_trading import HTTP
 
-from app.connectors.base import Capability, ExchangeConnector
+from app.connectors.base import Capability, Credential, ExchangeConnector
 from app.connectors.symbols import build_universal_symbol
-from app.connectors.types import Instrument, InstrumentFilters, MarketType
+from app.connectors.types import (
+    ApiKeyResult,
+    CredentialInfo,
+    Instrument,
+    InstrumentFilters,
+    KeyScheme,
+    MarketType,
+    SubaccountInfo,
+)
 from app.core.ratelimit import Priority, TokenBucket
+
+# Permission sets granted to panel-created sub API keys
+_TRADE_PERMISSIONS = {
+    "ContractTrade": ["Order", "Position"],
+    "Spot": ["SpotTrade"],
+    "Wallet": ["AccountTransfer", "SubMemberTransferList"],
+}
+_READ_PERMISSIONS = {
+    "ContractTrade": ["Position"],
+    "Wallet": ["AccountTransfer"],
+}
 
 _CATEGORIES: list[tuple[str, MarketType]] = [
     ("spot", MarketType.SPOT),
@@ -87,7 +106,20 @@ def normalize_instrument(info: dict, market_type: MarketType) -> Instrument | No
 
 class BybitConnector(ExchangeConnector):
     exchange = "BYBIT"
-    capabilities = frozenset({Capability.INSTRUMENTS, Capability.REFERENCE_PRICES})
+    # Bybit exposes full self-service account management over API, so the
+    # whole provisioning surface is available (HMAC keys only — Bybit does
+    # not issue Ed25519 keys via API).
+    capabilities = frozenset(
+        {
+            Capability.INSTRUMENTS,
+            Capability.REFERENCE_PRICES,
+            Capability.CREDENTIAL_VERIFY,
+            Capability.SUBACCOUNT_LIST,
+            Capability.SUBACCOUNT_CREATE,
+            Capability.API_KEY_CREATE,
+            Capability.API_KEY_REVOKE,
+        }
+    )
 
     def __init__(self, bucket: TokenBucket | None = None):
         self._bucket = bucket
@@ -119,6 +151,93 @@ class BybitConnector(ExchangeConnector):
     async def _fetch_category_tickers(self, category: str) -> list[dict]:
         response = await self._call(self._session.get_tickers, category=category)
         return response.get("result", {}).get("list", [])
+
+    # -- accounts -----------------------------------------------------------
+
+    @staticmethod
+    def _auth_session(credential: Credential) -> HTTP:
+        return HTTP(
+            api_key=credential["api_key"],
+            api_secret=credential["secret"],
+            timeout=30,
+        )
+
+    async def verify_credential(self, credential: Credential) -> CredentialInfo:
+        session = self._auth_session(credential)
+        try:
+            response = await self._call(session.get_api_key_information)
+        except Exception:
+            return CredentialInfo(valid=False)
+        info = response.get("result", {})
+        permissions = info.get("permissions") or {}
+        can_trade = bool(permissions.get("ContractTrade") or permissions.get("Spot"))
+        can_withdraw = "Withdraw" in (permissions.get("Wallet") or [])
+        return CredentialInfo(
+            valid=True,
+            native_uid=str(info.get("userID", "")) or None,
+            is_master=bool(info.get("isMaster")),
+            read_only=info.get("readOnly") == 1,
+            can_trade=can_trade,
+            can_withdraw=can_withdraw,
+            permissions=permissions,
+        )
+
+    async def list_subaccounts(self, credential: Credential) -> list[SubaccountInfo]:
+        session = self._auth_session(credential)
+        response = await self._call(session.get_sub_uid_list)
+        members = response.get("result", {}).get("subMembers", [])
+        return [
+            SubaccountInfo(
+                native_uid=str(m["uid"]),
+                label=m.get("username") or str(m["uid"]),
+                status="normal" if m.get("status") == 1 else "frozen",
+                raw=m,
+            )
+            for m in members
+        ]
+
+    async def create_subaccount(self, credential: Credential, label: str) -> SubaccountInfo:
+        session = self._auth_session(credential)
+        response = await self._call(
+            session.create_sub_uid, username=label, memberType=1, note="created by cpanel"
+        )
+        result = response.get("result", {})
+        return SubaccountInfo(
+            native_uid=str(result.get("uid", "")),
+            label=result.get("username") or label,
+            status="normal",
+        )
+
+    async def create_api_key(
+        self, credential: Credential, subaccount: str | None, scheme: KeyScheme,
+        permissions: list[str],
+    ) -> ApiKeyResult:
+        if scheme != KeyScheme.HMAC:
+            raise ValueError("Bybit issues only HMAC keys via API")
+        if not subaccount:
+            raise ValueError("Bybit API key creation targets a subaccount uid")
+        read_only = "trade" not in permissions
+        session = self._auth_session(credential)
+        response = await self._call(
+            session.create_sub_api_key,
+            subuid=int(subaccount),
+            readOnly=1 if read_only else 0,
+            permissions=_READ_PERMISSIONS if read_only else _TRADE_PERMISSIONS,
+            note="created by cpanel",
+        )
+        result = response.get("result", {})
+        return ApiKeyResult(
+            api_key=result["apiKey"],
+            secret=result["secret"],
+            scheme=KeyScheme.HMAC,
+            permissions=permissions,
+        )
+
+    async def revoke_api_key(
+        self, credential: Credential, subaccount: str | None, api_key: str
+    ) -> None:
+        session = self._auth_session(credential)
+        await self._call(session.delete_sub_api_key, apiKey=api_key)
 
     # -- connector interface --------------------------------------------------
 

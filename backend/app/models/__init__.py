@@ -5,8 +5,9 @@ modules here must depend on nothing outside SQLAlchemy: no app.core.config,
 no pydantic, no network clients.
 """
 from app.models.base import Base
+from app.models.account import Account, ApiCredential
 from app.models.audit_log import AuditLog
 from app.models.job_run import JobRun
 from app.models.universal_ticker import UniversalTicker
 
-__all__ = ["Base", "AuditLog", "JobRun", "UniversalTicker"]
+__all__ = ["Base", "Account", "ApiCredential", "AuditLog", "JobRun", "UniversalTicker"]

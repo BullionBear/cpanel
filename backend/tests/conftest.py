@@ -5,6 +5,10 @@ import os
 # SECRET_KEY is generated instead of refusing to start).
 os.environ.setdefault("DEBUG", "true")
 
+from cryptography.fernet import Fernet
+
+os.environ.setdefault("CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 

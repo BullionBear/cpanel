@@ -12,6 +12,7 @@ from app.connectors.base import Capability, Credential, ExchangeConnector
 from app.connectors.types import (
     ApiKeyResult,
     Balance,
+    CredentialInfo,
     Instrument,
     InstrumentFilters,
     KeyScheme,
@@ -22,6 +23,7 @@ from app.connectors.types import (
     OrderStatus,
     Page,
     Position,
+    SubaccountInfo,
     Trade,
     TransferResult,
     WalletType,
@@ -191,12 +193,30 @@ class FakeConnector(ExchangeConnector):
         end = start + len(items)
         return Page(items=items, next_cursor=str(end) if end < len(orders) else None)
 
-    # -- provisioning ------------------------------------------------------
+    # -- accounts and provisioning -----------------------------------------
 
-    async def create_subaccount(self, credential: Credential, label: str) -> str:
+    async def verify_credential(self, credential: Credential) -> CredentialInfo:
+        valid = not str(credential.get("secret", "")).startswith("wrong")
+        return CredentialInfo(
+            valid=valid,
+            native_uid="uid-1" if valid else None,
+            is_master=True,
+            read_only=False,
+            can_trade=True,
+            can_withdraw=False,
+            permissions={"note": "fake"} if valid else None,
+        )
+
+    async def list_subaccounts(self, credential: Credential) -> list[SubaccountInfo]:
+        return [
+            SubaccountInfo(native_uid=uid, label=uid.split("-", 2)[-1], status="normal")
+            for uid in self.subaccounts
+        ]
+
+    async def create_subaccount(self, credential: Credential, label: str) -> SubaccountInfo:
         native_id = f"sub-{next(self._ids)}-{label}"
         self.subaccounts.append(native_id)
-        return native_id
+        return SubaccountInfo(native_uid=native_id, label=label, status="normal")
 
     async def create_api_key(
         self, credential: Credential, subaccount: str | None, scheme: KeyScheme,

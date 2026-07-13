@@ -13,5 +13,7 @@ cryptography>=42.0.0
 # Official exchange SDKs (used only inside app/connectors/)
 binance-sdk-spot>=9.0.0
 binance-sdk-derivatives-trading-usds-futures>=7.0.0
-binance-sdk-derivatives-trading-coin-futures>=7.0.0
+binance-sdk-derivatives-trading-coin-futures
+binance-sdk-wallet>=12.0.0
+binance-sdk-sub-account>=5.0.0
 pybit>=5.16.0

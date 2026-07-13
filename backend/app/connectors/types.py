@@ -147,6 +147,27 @@ class Page:
 
 
 @dataclass(frozen=True)
+class CredentialInfo:
+    """Normalized result of verifying an API credential against its venue."""
+    valid: bool
+    native_uid: str | None = None      # venue account id (Bybit uid, …)
+    is_master: bool | None = None
+    read_only: bool | None = None
+    can_trade: bool | None = None
+    can_withdraw: bool | None = None
+    permissions: dict | None = None    # venue-specific detail, for display
+
+
+@dataclass(frozen=True)
+class SubaccountInfo:
+    """One subaccount as reported by the venue."""
+    native_uid: str                    # Bybit uid / Binance email
+    label: str
+    status: str | None = None
+    raw: dict | None = None
+
+
+@dataclass(frozen=True)
 class ApiKeyResult:
     api_key: str
     secret: str                    # plaintext only at creation time

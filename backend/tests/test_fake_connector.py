@@ -128,13 +128,19 @@ async def test_trade_pagination_cursor(connector):
 
 async def test_provisioning(connector):
     sub = await connector.create_subaccount(CRED, "mm-01")
-    assert sub in connector.subaccounts
+    assert sub.native_uid in connector.subaccounts
+    assert sub.label == "mm-01"
 
-    key = await connector.create_api_key(CRED, sub, KeyScheme.ED25519, ["read", "trade"])
+    listed = await connector.list_subaccounts(CRED)
+    assert [s.native_uid for s in listed] == [sub.native_uid]
+
+    key = await connector.create_api_key(
+        CRED, sub.native_uid, KeyScheme.ED25519, ["read", "trade"]
+    )
     assert key.scheme == KeyScheme.ED25519
     assert key.secret  # plaintext available exactly once, at creation
 
-    await connector.revoke_api_key(CRED, sub, key.api_key)
+    await connector.revoke_api_key(CRED, sub.native_uid, key.api_key)
     assert key.api_key in connector.revoked_keys
 
 

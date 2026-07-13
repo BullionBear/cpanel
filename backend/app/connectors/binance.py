@@ -26,14 +26,41 @@ from binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futur
     DerivativesTradingUsdsFutures,
 )
 from binance_sdk_spot.spot import Spot
+from binance_sdk_sub_account.sub_account import SubAccount
+from binance_sdk_wallet.wallet import Wallet
 
-from app.connectors.base import Capability, ExchangeConnector
+from app.connectors.base import Capability, Credential, ExchangeConnector
 from app.connectors.sdk_util import dump_sdk_model
 from app.connectors.symbols import build_universal_symbol
-from app.connectors.types import Instrument, InstrumentFilters, MarketType
+from app.connectors.types import (
+    CredentialInfo,
+    Instrument,
+    InstrumentFilters,
+    MarketType,
+    SubaccountInfo,
+)
 from app.core.ratelimit import Priority, TokenBucket
 
 _TIMEOUT_MS = 30_000
+
+
+def _auth_config(credential: Credential) -> ConfigurationRestAPI:
+    """Build SDK auth config from a decrypted credential mapping.
+
+    HMAC keys pass the secret as api_secret; Ed25519 keys pass the PEM
+    private key instead (the SDK signs requests with it).
+    """
+    if credential.get("scheme") == "ED25519":
+        return ConfigurationRestAPI(
+            api_key=credential["api_key"],
+            private_key=credential["secret"].encode(),
+            timeout=_TIMEOUT_MS,
+        )
+    return ConfigurationRestAPI(
+        api_key=credential["api_key"],
+        api_secret=credential["secret"],
+        timeout=_TIMEOUT_MS,
+    )
 
 
 def _dec(value) -> Decimal:
@@ -142,7 +169,18 @@ def normalize_cm_instrument(info: dict) -> Instrument | None:
 
 class BinanceConnector(ExchangeConnector):
     exchange = "BINANCE"
-    capabilities = frozenset({Capability.INSTRUMENTS, Capability.REFERENCE_PRICES})
+    # API key create/revoke is deliberately absent: Binance only offers it to
+    # broker accounts, so keys are created in the Binance console and
+    # registered in the panel.
+    capabilities = frozenset(
+        {
+            Capability.INSTRUMENTS,
+            Capability.REFERENCE_PRICES,
+            Capability.CREDENTIAL_VERIFY,
+            Capability.SUBACCOUNT_LIST,
+            Capability.SUBACCOUNT_CREATE,
+        }
+    )
 
     def __init__(self, bucket: TokenBucket | None = None):
         self._bucket = bucket
@@ -209,6 +247,63 @@ class BinanceConnector(ExchangeConnector):
             (i.market_type, i.native_symbol): i.universal_symbol for i in instruments
         }
         return instruments
+
+    # -- accounts -----------------------------------------------------------
+
+    async def _fetch_api_restrictions(self, credential: Credential) -> dict:
+        wallet = Wallet(config_rest_api=_auth_config(credential))
+        resp = await self._call(wallet.rest_api.get_api_key_permission)
+        return dump_sdk_model(resp.data())
+
+    async def _fetch_account_uid(self, credential: Credential) -> str | None:
+        try:
+            spot = Spot(config_rest_api=_auth_config(credential))
+            resp = await self._call(spot.rest_api.get_account, omit_zero_balances=True)
+            return str(dump_sdk_model(resp.data()).get("uid", "")) or None
+        except Exception:
+            return None  # e.g. futures-only key without spot permission
+
+    async def verify_credential(self, credential: Credential) -> CredentialInfo:
+        try:
+            restrictions = await self._fetch_api_restrictions(credential)
+        except Exception:
+            return CredentialInfo(valid=False)
+        can_trade = bool(
+            restrictions.get("enableSpotAndMarginTrading") or restrictions.get("enableFutures")
+        )
+        can_withdraw = bool(restrictions.get("enableWithdrawals"))
+        return CredentialInfo(
+            valid=True,
+            native_uid=await self._fetch_account_uid(credential),
+            read_only=not can_trade and not can_withdraw,
+            can_trade=can_trade,
+            can_withdraw=can_withdraw,
+            permissions=restrictions,
+        )
+
+    async def list_subaccounts(self, credential: Credential) -> list[SubaccountInfo]:
+        sub = SubAccount(config_rest_api=_auth_config(credential))
+        resp = await self._call(sub.rest_api.query_sub_account_list, limit=200)
+        data = dump_sdk_model(resp.data())
+        return [
+            SubaccountInfo(
+                native_uid=row["email"],
+                label=row["email"],
+                status="frozen" if row.get("isFreeze") else "normal",
+                raw=row,
+            )
+            for row in data.get("sub_accounts") or data.get("subAccounts") or []
+        ]
+
+    async def create_subaccount(self, credential: Credential, label: str) -> SubaccountInfo:
+        sub = SubAccount(config_rest_api=_auth_config(credential))
+        resp = await self._call(
+            sub.rest_api.create_a_virtual_sub_account, sub_account_string=label
+        )
+        email = dump_sdk_model(resp.data()).get("email", "")
+        return SubaccountInfo(native_uid=email, label=label, status="normal")
+
+    # -- reference prices -----------------------------------------------------
 
     async def fetch_reference_prices(self) -> dict[str, Decimal]:
         if not self._native_map:
