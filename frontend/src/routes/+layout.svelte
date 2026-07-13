@@ -55,8 +55,8 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		height: 56px;
-		padding: 0 20px;
+		height: 3.5rem;
+		padding: 0 2%;
 		background: #ffffff;
 		border-bottom: 1px solid #e3e5e8;
 		box-sizing: border-box;
@@ -65,13 +65,13 @@
 	.header-left {
 		display: flex;
 		align-items: center;
-		gap: 24px;
+		gap: 1.5rem;
 	}
 
 	.brand {
 		display: flex;
 		align-items: center;
-		gap: 10px;
+		gap: 0.625rem;
 		text-decoration: none;
 		color: inherit;
 	}
@@ -79,31 +79,31 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		width: 32px;
-		height: 32px;
-		border-radius: 8px;
+		width: 2rem;
+		height: 2rem;
+		border-radius: 0.5rem;
 		background: #5865f2;
 		color: #ffffff;
-		font-size: 16px;
+		font-size: 1rem;
 		font-weight: 700;
 	}
 	.brand-name {
-		font-size: 16px;
+		font-size: 1rem;
 		font-weight: 600;
 	}
 
 	.nav {
 		display: flex;
 		align-items: center;
-		gap: 4px;
+		gap: 0.25rem;
 	}
 	.nav-item {
 		display: inline-flex;
 		align-items: center;
-		height: 34px;
-		padding: 0 12px;
-		border-radius: 6px;
-		font-size: 14px;
+		height: 2.125rem;
+		padding: 0 0.75rem;
+		border-radius: 0.375rem;
+		font-size: 0.875rem;
 		color: #57606a;
 		text-decoration: none;
 	}
@@ -120,10 +120,10 @@
 	.header-right {
 		display: flex;
 		align-items: center;
-		gap: 14px;
+		gap: 0.875rem;
 	}
 	.greeting {
-		font-size: 14px;
+		font-size: 0.875rem;
 		color: #57606a;
 	}
 
@@ -131,14 +131,14 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		height: 34px;
-		padding: 0 16px;
+		height: 2.125rem;
+		padding: 0 1rem;
 		background: #5865f2;
 		color: #ffffff;
-		font-size: 14px;
+		font-size: 0.875rem;
 		font-weight: 500;
 		border: none;
-		border-radius: 6px;
+		border-radius: 0.375rem;
 		cursor: pointer;
 		transition: background-color 0.15s ease;
 	}
@@ -148,7 +148,8 @@
 
 	.content {
 		flex: 1;
-		padding: 32px;
+		width: 100%;
+		padding: 2.5% 3%;
 		box-sizing: border-box;
 	}
 

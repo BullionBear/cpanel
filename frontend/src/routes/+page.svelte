@@ -27,33 +27,44 @@
 
 <style>
 	.intro {
-		max-width: 640px;
+		width: 100%;
+		max-width: 60%;
+		margin: 0 auto;
 	}
 	h1 {
-		font-size: 22px;
+		font-size: 1.375rem;
 		font-weight: 600;
-		margin: 0 0 12px;
+		margin: 0 0 0.75rem;
 	}
 	p {
-		font-size: 15px;
+		font-size: 0.9375rem;
 		line-height: 1.65;
-		margin: 0 0 12px;
+		margin: 0 0 0.75rem;
 	}
 	.muted {
 		color: #57606a;
-		font-size: 14px;
+		font-size: 0.875rem;
 	}
 
 	.error {
-		max-width: 640px;
-		font-size: 13px;
+		width: 100%;
+		max-width: 60%;
+		box-sizing: border-box;
+		font-size: 0.8125rem;
 		line-height: 1.5;
 		color: #cf222e;
 		background: #ffebe9;
 		border: 1px solid #ff818266;
-		border-radius: 8px;
-		padding: 10px 12px;
-		margin: 0 0 20px;
+		border-radius: 0.5rem;
+		padding: 0.625rem 0.75rem;
+		margin: 0 auto 1.25rem;
+	}
+
+	@media (max-width: 48rem) {
+		.intro,
+		.error {
+			max-width: 100%;
+		}
 	}
 
 	@media (prefers-color-scheme: dark) {

@@ -66,21 +66,22 @@
 	}
 
 	.card {
-		width: 100%;
-		max-width: 400px;
+		width: 90%;
+		max-width: 25rem;
 		background: #ffffff;
 		border: 1px solid #e3e5e8;
-		border-radius: 12px;
-		padding: 28px;
+		border-radius: 0.75rem;
+		padding: 1.75rem;
+		box-sizing: border-box;
 		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 	}
 	h1 {
-		font-size: 18px;
+		font-size: 1.125rem;
 		font-weight: 600;
-		margin: 0 0 8px;
+		margin: 0 0 0.5rem;
 	}
 	p {
-		font-size: 14px;
+		font-size: 0.875rem;
 		line-height: 1.55;
 		color: #57606a;
 		margin: 0;
@@ -91,15 +92,15 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		height: 36px;
-		padding: 0 16px;
-		margin-top: 20px;
+		height: 2.25rem;
+		padding: 0 1rem;
+		margin-top: 1.25rem;
 		background: #1f2328;
 		color: #ffffff;
-		font-size: 14px;
+		font-size: 0.875rem;
 		font-weight: 500;
 		text-decoration: none;
-		border-radius: 6px;
+		border-radius: 0.375rem;
 	}
 	.action:hover { background: #2f363d; }
 
@@ -107,13 +108,13 @@
 		display: flex;
 		flex-direction: column;
 		align-items: center;
-		gap: 12px;
+		gap: 0.75rem;
 	}
 	.spinner {
-		width: 24px;
-		height: 24px;
+		width: 1.5rem;
+		height: 1.5rem;
 		border-radius: 50%;
-		border: 2.5px solid #e3e5e8;
+		border: 0.1875rem solid #e3e5e8;
 		border-top-color: #57606a;
 		animation: spin 0.8s linear infinite;
 	}
