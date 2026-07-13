@@ -8,7 +8,7 @@ FastAPI application, rebuilt from scratch on 2026-07-13 (previous version in
 ```
 backend/
 ├── app/
-│   ├── api/v1/        API routers
+│   ├── api/           API routers (flat, unversioned)
 │   ├── core/          Settings
 │   └── main.py        App entrypoint (/, /health, /status)
 ├── requirements.txt

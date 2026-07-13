@@ -1,87 +1,67 @@
+<script lang="ts">
+	import { page } from '$app/stores';
+
+	$: errorMessage = $page.url.searchParams.get('error') ?? '';
+</script>
+
 <svelte:head>
-	<title>CPanel</title>
-	<meta name="description" content="CPanel — trading control panel" />
+	<title>CPanel — Home</title>
+	<meta name="description" content="CPanel — auxiliary web app for universal trading operations" />
 </svelte:head>
 
-<div class="splash">
-	<main class="card">
-		<div class="logo">C</div>
-		<h1>CPanel</h1>
-		<p>The trading control panel is being rebuilt from the ground up.</p>
-		<span class="badge">Coming back soon</span>
-	</main>
-</div>
+{#if errorMessage}
+	<p class="error" role="alert">{errorMessage}</p>
+{/if}
+
+<section class="intro">
+	<h1>Welcome to CPanel</h1>
+	<p>
+		CPanel is an auxiliary web app for handling universal trading operations. It provides a
+		single control panel to manage accounts, positions, and trading history across exchanges.
+	</p>
+	<p class="muted">
+		The platform is being rebuilt from the ground up — more panels will appear in the sidebar
+		as they come back online.
+	</p>
+</section>
 
 <style>
-	.splash {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		min-height: 100vh;
-		padding: 24px;
-		box-sizing: border-box;
+	.intro {
+		max-width: 640px;
 	}
-
-	.card {
-		width: 100%;
-		max-width: 420px;
-		background: #ffffff;
-		border: 1px solid #e3e5e8;
-		border-radius: 12px;
-		padding: 32px;
-		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-		text-align: center;
-	}
-
-	.logo {
-		width: 48px;
-		height: 48px;
-		margin: 0 auto 16px;
-		border-radius: 12px;
-		background: #5865f2;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		color: #ffffff;
-		font-size: 22px;
-		font-weight: 700;
-	}
-
 	h1 {
-		font-size: 20px;
+		font-size: 22px;
 		font-weight: 600;
-		margin: 0 0 8px;
+		margin: 0 0 12px;
 	}
-
 	p {
-		font-size: 14px;
-		line-height: 1.6;
+		font-size: 15px;
+		line-height: 1.65;
+		margin: 0 0 12px;
+	}
+	.muted {
 		color: #57606a;
-		margin: 0;
+		font-size: 14px;
 	}
 
-	.badge {
-		display: inline-block;
-		margin-top: 20px;
-		padding: 4px 12px;
-		border: 1px solid #e3e5e8;
-		border-radius: 999px;
-		font-size: 12px;
-		color: #57606a;
+	.error {
+		max-width: 640px;
+		font-size: 13px;
+		line-height: 1.5;
+		color: #cf222e;
+		background: #ffebe9;
+		border: 1px solid #ff818266;
+		border-radius: 8px;
+		padding: 10px 12px;
+		margin: 0 0 20px;
 	}
 
 	@media (prefers-color-scheme: dark) {
-		.card {
-			background: #161b22;
-			border-color: #30363d;
-			box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-		}
-		p,
-		.badge {
-			color: #8b949e;
-		}
-		.badge {
-			border-color: #30363d;
+		.muted { color: #8b949e; }
+		.error {
+			color: #ff7b72;
+			background: #490202;
+			border-color: #f8514966;
 		}
 	}
 </style>

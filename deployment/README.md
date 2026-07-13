@@ -5,12 +5,20 @@
 - Host: system host (`172.237.19.123`)
 - Path: `/root/cpanel/deployment`
 - Compose project name: **`cpanel`** (required — many stacks live under `*/deployment` and would otherwise share the default project name `deployment`)
-- Secrets: `env.sh` (never commit). Exports `DOMAIN`, `DATABASE_URL`, `FRONTEND_URL`, `COMPOSE_PROJECT_NAME=cpanel`.
+- Secrets: `env.sh` (never commit). Exports `DOMAIN`, `DATABASE_URL`, `FRONTEND_URL`,
+  `SECRET_KEY`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`,
+  `DISCORD_GUILD_ID`, `DISCORD_REQUIRED_ROLE_ID` (optional), `DISCORD_REDIRECT_URI`,
+  `COMPOSE_PROJECT_NAME=cpanel`.
 
 The stack runs the rebuilt backend and frontend (fresh scaffolds as of
-2026-07-13). The previous application lives under `archive/` in the repo; its
-Discord OAuth env vars are no longer consumed by compose — keep them in
-`env.sh` if you plan to reintroduce auth.
+2026-07-13). The previous application lives under `archive/` in the repo.
+
+The rebuilt API is **unversioned and has no `/api` prefix**: routes live at the
+root (`/auth/...`, `/ping`, `/health`, `/status`). This means:
+
+- `DISCORD_REDIRECT_URI` must be `https://capi.lynxlinkage.com/auth/discord/callback`
+  — update it in `env.sh` **and** in the Discord Developer Portal (the old value
+  ended with `/api/v2/auth/discord/callback`).
 
 ## Bring-up
 
@@ -35,5 +43,5 @@ Prefer `docker compose -p cpanel` (or `COMPOSE_PROJECT_NAME=cpanel`) so sibling 
   pipeline (`migrate.yml`) still runs `alembic upgrade head` on every push to
   `main`, and the rebuilt schema will grow from new models in
   `migration/models/`.
-- Auth (Discord OAuth) and the old API surface are not part of the fresh
-  scaffold yet; see `archive/backend/` for the previous implementation.
+- Auth is Discord OAuth (guild membership required, optional role check). No
+  users table yet — the JWT carries the Discord identity directly.
