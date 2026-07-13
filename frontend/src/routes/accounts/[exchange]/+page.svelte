@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
 	import { ApiError } from '$lib/api';
 	import {
@@ -36,6 +36,18 @@
 	let busy = false;
 
 	$: mains = tree.filter((a) => a.exchange === exchange);
+
+	// SvelteKit reuses this component when navigating between exchange pages,
+	// so reload (and re-resolve capabilities) whenever the exchange changes.
+	let loadedFor = '';
+	$: if (browser && exchange && exchange !== loadedFor) {
+		loadedFor = exchange;
+		caps = null;
+		notice = '';
+		newKey = null;
+		keyForms = {};
+		load();
+	}
 
 	async function load() {
 		loading = true;
@@ -128,7 +140,6 @@
 		keyForms = keyForms;
 	}
 
-	onMount(load);
 </script>
 
 <svelte:head>
