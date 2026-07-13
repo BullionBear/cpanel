@@ -1,0 +1,226 @@
+"""Binance connector (Phase 1: public market data).
+
+Binance splits its markets across three separate API surfaces, each with its
+own base URL and official SDK package:
+
+    SPOT     api.binance.com    binance-sdk-spot
+    PERP     fapi.binance.com   binance-sdk-derivatives-trading-usds-futures
+    CMARGIN  dapi.binance.com   binance-sdk-derivatives-trading-coin-futures
+
+So one instrument refresh means three exchange-info calls. The futures
+surfaces also list delivery contracts; only perpetuals are kept for the
+first release (DELIVERY/OPTION come later).
+
+The official SDKs are synchronous, so calls run in a worker thread. All
+normalization works on plain API-shaped dicts (see sdk_util) to keep it
+testable with fixtures from the API docs.
+"""
+import asyncio
+from decimal import Decimal
+
+from binance_common.configuration import ConfigurationRestAPI
+from binance_sdk_derivatives_trading_coin_futures.derivatives_trading_coin_futures import (
+    DerivativesTradingCoinFutures,
+)
+from binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futures import (
+    DerivativesTradingUsdsFutures,
+)
+from binance_sdk_spot.spot import Spot
+
+from app.connectors.base import Capability, ExchangeConnector
+from app.connectors.sdk_util import dump_sdk_model
+from app.connectors.symbols import build_universal_symbol
+from app.connectors.types import Instrument, InstrumentFilters, MarketType
+from app.core.ratelimit import Priority, TokenBucket
+
+_TIMEOUT_MS = 30_000
+
+
+def _dec(value) -> Decimal:
+    return Decimal(str(value))
+
+
+def _filters_by_type(symbol_info: dict) -> dict[str, dict]:
+    return {f["filterType"]: f for f in symbol_info.get("filters", [])}
+
+
+def _spot_status(status: str) -> str:
+    return "active" if status == "TRADING" else "halted"
+
+
+def normalize_spot_instrument(info: dict) -> Instrument | None:
+    filters = _filters_by_type(info)
+    price_filter = filters.get("PRICE_FILTER")
+    lot = filters.get("LOT_SIZE")
+    if not price_filter or not lot:
+        return None
+    # Newer symbols use NOTIONAL, older ones MIN_NOTIONAL
+    notional = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
+    min_notional = notional.get("minNotional")
+    base, quote = info["baseAsset"], info["quoteAsset"]
+    return Instrument(
+        universal_symbol=build_universal_symbol("BINANCE", MarketType.SPOT, base, quote),
+        exchange="BINANCE",
+        market_type=MarketType.SPOT,
+        native_symbol=info["symbol"],
+        base_asset=base,
+        quote_asset=quote,
+        filters=InstrumentFilters(
+            price_tick=_dec(price_filter["tickSize"]),
+            qty_step=_dec(lot["stepSize"]),
+            min_qty=_dec(lot["minQty"]),
+            max_qty=_dec(lot["maxQty"]),
+            min_notional=_dec(min_notional) if min_notional is not None else None,
+        ),
+        status=_spot_status(info.get("status", "")),
+    )
+
+
+def normalize_um_instrument(info: dict) -> Instrument | None:
+    """USD-margined futures (fapi) -> PERP. Delivery contracts are skipped."""
+    if info.get("contractType") != "PERPETUAL":
+        return None
+    filters = _filters_by_type(info)
+    price_filter = filters.get("PRICE_FILTER")
+    lot = filters.get("LOT_SIZE")
+    if not price_filter or not lot:
+        return None
+    # fapi's MIN_NOTIONAL filter uses the key "notional"
+    notional_filter = filters.get("MIN_NOTIONAL") or {}
+    min_notional = notional_filter.get("notional") or notional_filter.get("minNotional")
+    base, quote = info["baseAsset"], info["quoteAsset"]
+    return Instrument(
+        universal_symbol=build_universal_symbol("BINANCE", MarketType.PERP, base, quote),
+        exchange="BINANCE",
+        market_type=MarketType.PERP,
+        native_symbol=info["symbol"],
+        base_asset=base,
+        quote_asset=quote,
+        filters=InstrumentFilters(
+            price_tick=_dec(price_filter["tickSize"]),
+            qty_step=_dec(lot["stepSize"]),
+            min_qty=_dec(lot["minQty"]),
+            max_qty=_dec(lot["maxQty"]),
+            min_notional=_dec(min_notional) if min_notional is not None else None,
+        ),
+        status=_spot_status(info.get("status", "")),
+        settle_asset=info.get("marginAsset"),
+    )
+
+
+def normalize_cm_instrument(info: dict) -> Instrument | None:
+    """COIN-margined futures (dapi) -> CMARGIN. Delivery contracts are skipped."""
+    if info.get("contractType") != "PERPETUAL":
+        return None
+    filters = _filters_by_type(info)
+    price_filter = filters.get("PRICE_FILTER")
+    lot = filters.get("LOT_SIZE")
+    if not price_filter or not lot:
+        return None
+    base, quote = info["baseAsset"], info["quoteAsset"]
+    status = info.get("contractStatus") or info.get("status", "")
+    contract_size = info.get("contractSize")
+    return Instrument(
+        universal_symbol=build_universal_symbol("BINANCE", MarketType.CMARGIN, base, quote),
+        exchange="BINANCE",
+        market_type=MarketType.CMARGIN,
+        native_symbol=info["symbol"],  # e.g. BTCUSD_PERP
+        base_asset=base,
+        quote_asset=quote,
+        filters=InstrumentFilters(
+            price_tick=_dec(price_filter["tickSize"]),
+            qty_step=_dec(lot["stepSize"]),
+            min_qty=_dec(lot["minQty"]),
+            max_qty=_dec(lot["maxQty"]),
+            min_notional=None,  # qty is in contracts; no notional filter on dapi
+        ),
+        status=_spot_status(status),
+        contract_size=_dec(contract_size) if contract_size is not None else None,
+        settle_asset=info.get("marginAsset"),
+    )
+
+
+class BinanceConnector(ExchangeConnector):
+    exchange = "BINANCE"
+    capabilities = frozenset({Capability.INSTRUMENTS, Capability.REFERENCE_PRICES})
+
+    def __init__(self, bucket: TokenBucket | None = None):
+        self._bucket = bucket
+        config = lambda: ConfigurationRestAPI(timeout=_TIMEOUT_MS)  # noqa: E731
+        self._spot = Spot(config_rest_api=config())
+        self._um = DerivativesTradingUsdsFutures(config_rest_api=config())
+        self._cm = DerivativesTradingCoinFutures(config_rest_api=config())
+        # (market_type, native_symbol) -> universal_symbol, warmed by fetch_instruments
+        self._native_map: dict[tuple[MarketType, str], str] = {}
+
+    async def _call(self, func, *args, **kwargs):
+        if self._bucket is not None:
+            await self._bucket.acquire(priority=Priority.SYNC)
+        return await asyncio.to_thread(func, *args, **kwargs)
+
+    # -- raw fetches (overridden by tests with canned payloads) --------------
+
+    async def _fetch_spot_exchange_info(self) -> list[dict]:
+        resp = await self._call(self._spot.rest_api.exchange_info)
+        return dump_sdk_model(resp.data()).get("symbols", [])
+
+    async def _fetch_um_exchange_info(self) -> list[dict]:
+        resp = await self._call(self._um.rest_api.exchange_information)
+        return dump_sdk_model(resp.data()).get("symbols", [])
+
+    async def _fetch_cm_exchange_info(self) -> list[dict]:
+        resp = await self._call(self._cm.rest_api.exchange_information)
+        return dump_sdk_model(resp.data()).get("symbols", [])
+
+    async def _fetch_spot_prices(self) -> list[dict]:
+        resp = await self._call(self._spot.rest_api.ticker_price)
+        data = dump_sdk_model(resp.data())
+        return data if isinstance(data, list) else [data]
+
+    async def _fetch_um_prices(self) -> list[dict]:
+        resp = await self._call(self._um.rest_api.symbol_price_ticker)
+        data = dump_sdk_model(resp.data())
+        return data if isinstance(data, list) else [data]
+
+    async def _fetch_cm_prices(self) -> list[dict]:
+        resp = await self._call(self._cm.rest_api.symbol_price_ticker)
+        data = dump_sdk_model(resp.data())
+        return data if isinstance(data, list) else [data]
+
+    # -- connector interface --------------------------------------------------
+
+    async def fetch_instruments(self) -> list[Instrument]:
+        spot_raw, um_raw, cm_raw = (
+            await self._fetch_spot_exchange_info(),
+            await self._fetch_um_exchange_info(),
+            await self._fetch_cm_exchange_info(),
+        )
+        instruments: list[Instrument] = []
+        for raw, normalize in (
+            (spot_raw, normalize_spot_instrument),
+            (um_raw, normalize_um_instrument),
+            (cm_raw, normalize_cm_instrument),
+        ):
+            for info in raw:
+                instrument = normalize(info)
+                if instrument is not None:
+                    instruments.append(instrument)
+        self._native_map = {
+            (i.market_type, i.native_symbol): i.universal_symbol for i in instruments
+        }
+        return instruments
+
+    async def fetch_reference_prices(self) -> dict[str, Decimal]:
+        if not self._native_map:
+            await self.fetch_instruments()
+        prices: dict[str, Decimal] = {}
+        for market_type, rows in (
+            (MarketType.SPOT, await self._fetch_spot_prices()),
+            (MarketType.PERP, await self._fetch_um_prices()),
+            (MarketType.CMARGIN, await self._fetch_cm_prices()),
+        ):
+            for row in rows:
+                universal = self._native_map.get((market_type, row.get("symbol", "")))
+                if universal is not None and row.get("price") is not None:
+                    prices[universal] = _dec(row["price"])
+        return prices

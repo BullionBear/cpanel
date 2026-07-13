@@ -4,35 +4,45 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import api_router
-from app.connectors.fake import FakeConnector
+from app.connectors.binance import BinanceConnector
+from app.connectors.bybit import BybitConnector
 from app.connectors.registry import connectors
 from app.core.config import settings
 from app.core.db import dispose_engine, get_session_factory
 from app.core.ratelimit import rate_limiters
-from app.jobs.demo import heartbeat
 from app.jobs.scheduler import JobDefinition, scheduler
+from app.jobs.symbols import make_instrument_refresh, make_price_refresh
+
+EXCHANGES = ["BINANCE", "BYBIT"]
 
 
 def setup_connectors() -> None:
-    """Register connectors and their rate-limit budgets.
-
-    Real exchange connectors are added here as they are implemented
-    (Phase 1+). The FAKE connector backs tests and the Phase 0 demo job.
-    """
-    connectors.register(FakeConnector())
-    rate_limiters.configure("FAKE", rate=10, capacity=20)
+    """Register connectors and their rate-limit budgets."""
+    binance_bucket = rate_limiters.configure("BINANCE", rate=5, capacity=10)
+    bybit_bucket = rate_limiters.configure("BYBIT", rate=5, capacity=10)
+    connectors.register(BinanceConnector(bucket=binance_bucket))
+    connectors.register(BybitConnector(bucket=bybit_bucket))
 
 
 def setup_jobs() -> None:
-    scheduler.register(
-        JobDefinition(
-            name="demo.heartbeat",
-            interval_seconds=60,
-            func=heartbeat,
-            exchange="FAKE",
-            run_on_start=True,
+    for exchange in EXCHANGES:
+        scheduler.register(
+            JobDefinition(
+                name="symbols.refresh_instruments",
+                interval_seconds=3600,
+                func=make_instrument_refresh(exchange),
+                exchange=exchange,
+                run_on_start=True,
+            )
         )
-    )
+        scheduler.register(
+            JobDefinition(
+                name="symbols.refresh_prices",
+                interval_seconds=300,
+                func=make_price_refresh(exchange),
+                exchange=exchange,
+            )
+        )
 
 
 @asynccontextmanager

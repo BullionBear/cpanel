@@ -7,5 +7,6 @@ no pydantic, no network clients.
 from app.models.base import Base
 from app.models.audit_log import AuditLog
 from app.models.job_run import JobRun
+from app.models.universal_ticker import UniversalTicker
 
-__all__ = ["Base", "AuditLog", "JobRun"]
+__all__ = ["Base", "AuditLog", "JobRun", "UniversalTicker"]

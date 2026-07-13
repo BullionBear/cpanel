@@ -16,6 +16,11 @@
 
 			<nav class="nav">
 				<a class="nav-item" class:active={$page.url.pathname === '/'} href="/">Home</a>
+				<a
+					class="nav-item"
+					class:active={$page.url.pathname.startsWith('/symbols')}
+					href="/symbols">Symbols</a
+				>
 			</nav>
 		</div>
 
