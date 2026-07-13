@@ -1,7 +1,7 @@
 """Scheduler observability and manual job triggering."""
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,7 +58,7 @@ async def list_jobs():
 async def list_runs(
     job_name: str | None = None,
     status: str | None = None,
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
     stmt = select(JobRun).order_by(JobRun.started_at.desc(), JobRun.id.desc())
@@ -66,7 +66,7 @@ async def list_runs(
         stmt = stmt.where(JobRun.job_name == job_name)
     if status:
         stmt = stmt.where(JobRun.status == status)
-    result = await db.execute(stmt.limit(min(limit, 500)))
+    result = await db.execute(stmt.limit(limit))
     return [JobRunInfo.model_validate(row) for row in result.scalars()]
 
 

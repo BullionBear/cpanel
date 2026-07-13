@@ -1,3 +1,10 @@
+import os
+
+# Settings are instantiated at import time; tests run without a .env, so opt
+# into DEBUG before any app module pulls in app.core.config (an ephemeral
+# SECRET_KEY is generated instead of refusing to start).
+os.environ.setdefault("DEBUG", "true")
+
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 

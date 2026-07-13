@@ -1,4 +1,13 @@
+import logging
+import secrets
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+# Historic placeholder value; must never be accepted as a real signing key.
+_PLACEHOLDER_SECRET_KEYS = {"your-secret-key-change-in-production", "dev-secret-key"}
 
 
 class Settings(BaseSettings):
@@ -20,8 +29,9 @@ class Settings(BaseSettings):
     # Generate with: python -c "from app.core.crypto import generate_master_key; print(generate_master_key())"
     CREDENTIAL_ENCRYPTION_KEY: str = ""
 
-    # Security
-    SECRET_KEY: str = "your-secret-key-change-in-production"
+    # Security. JWT signing key — set a strong value in production:
+    # python -c "import secrets; print(secrets.token_urlsafe(64))"
+    SECRET_KEY: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
@@ -34,6 +44,26 @@ class Settings(BaseSettings):
     DISCORD_REDIRECT_URI: str = "https://capi.lynxlinkage.com/auth/discord/callback"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @model_validator(mode="after")
+    def _ensure_secret_key(self) -> "Settings":
+        """Never run with a guessable JWT signing key.
+
+        Missing/placeholder keys previously fell back to a public default,
+        letting anyone forge access tokens. Now: hard error in production,
+        ephemeral random key (tokens reset on restart) in DEBUG.
+        """
+        if not self.SECRET_KEY or self.SECRET_KEY in _PLACEHOLDER_SECRET_KEYS:
+            if not self.DEBUG:
+                raise ValueError(
+                    "SECRET_KEY must be set to a strong random value in production. "
+                    'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(64))"'
+                )
+            logger.warning(
+                "SECRET_KEY is not set; using an ephemeral key (all tokens invalidate on restart)"
+            )
+            self.SECRET_KEY = secrets.token_urlsafe(64)
+        return self
 
 
 settings = Settings()

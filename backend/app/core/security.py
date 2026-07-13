@@ -64,8 +64,16 @@ def create_discord_exchange_token(discord_id: str, username: str) -> str:
     )
 
 
-# Track consumed exchange codes (single-use within process lifetime).
-_used_discord_exchange_jtis: set[str] = set()
+# Track consumed exchange codes (single-use within process lifetime),
+# keyed by jti with the token's expiry so stale entries can be pruned.
+_used_discord_exchange_jtis: dict[str, float] = {}
+
+
+def _prune_used_jtis() -> None:
+    now = datetime.now(timezone.utc).timestamp()
+    for jti, exp in list(_used_discord_exchange_jtis.items()):
+        if exp < now:
+            del _used_discord_exchange_jtis[jti]
 
 
 def consume_discord_exchange_token(code: str) -> Optional[dict]:
@@ -76,5 +84,6 @@ def consume_discord_exchange_token(code: str) -> Optional[dict]:
     jti = payload.get("jti")
     if not jti or not payload.get("sub") or jti in _used_discord_exchange_jtis:
         return None
-    _used_discord_exchange_jtis.add(jti)
+    _prune_used_jtis()
+    _used_discord_exchange_jtis[jti] = float(payload.get("exp", 0))
     return payload
