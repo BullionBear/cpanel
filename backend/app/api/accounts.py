@@ -230,14 +230,15 @@ async def sync_subaccounts(
     async with audit(
         db, actor, "accounts.sync_subaccounts",
         target=f"{account.exchange}:{account.label}",
-    ):
+    ) as entry:
         try:
-            await svc.sync_subaccounts(db, connector, account)
+            created, removed = await svc.sync_subaccounts(db, connector, account)
         except svc.AccountError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        entry.params = {"created": created, "removed": removed}
     result = await db.execute(
         select(Account)
-        .where(Account.parent_id == account_id)
+        .where(Account.parent_id == account_id, Account.status == "active")
         .options(selectinload(Account.credentials))
         .order_by(Account.label)
     )

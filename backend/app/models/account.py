@@ -27,6 +27,11 @@ class Account(Base):
     # Venue-native identifier: Bybit uid, Binance subaccount email, …
     native_uid: Mapped[str | None] = mapped_column(String(128))
 
+    # active | removed (no longer reported by the venue; kept for history)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active", server_default="active"
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

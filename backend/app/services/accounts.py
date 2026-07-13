@@ -109,32 +109,54 @@ async def add_credential(
 
 async def sync_subaccounts(
     db: AsyncSession, connector: ExchangeConnector, account: Account
-) -> int:
-    """Import the venue's subaccount list under a main account. Returns new rows."""
+) -> tuple[int, int]:
+    """Reconcile local subaccounts with the venue's list.
+
+    New venue subaccounts are imported, previously removed ones that reappear
+    are revived, and local subaccounts the venue no longer reports are marked
+    removed (their credentials revoked locally — the venue destroyed them with
+    the account). Returns (created, removed).
+    """
     master = await get_active_credential(db, account)
     venue_subs = await connector.list_subaccounts(decrypt_credential(master))
+    venue_uids = {s.native_uid for s in venue_subs}
 
     result = await db.execute(
-        select(Account).where(Account.parent_id == account.id)
+        select(Account)
+        .where(Account.parent_id == account.id)
+        .options(selectinload(Account.credentials))
     )
-    known_uids = {a.native_uid for a in result.scalars() if a.native_uid}
+    known = {a.native_uid: a for a in result.scalars() if a.native_uid}
 
     created = 0
     for sub in venue_subs:
-        if sub.native_uid in known_uids:
-            continue
-        db.add(
-            Account(
-                exchange=account.exchange,
-                label=sub.label,
-                account_type="sub",
-                parent_id=account.id,
-                native_uid=sub.native_uid,
+        existing = known.get(sub.native_uid)
+        if existing is None:
+            db.add(
+                Account(
+                    exchange=account.exchange,
+                    label=sub.label,
+                    account_type="sub",
+                    parent_id=account.id,
+                    native_uid=sub.native_uid,
+                )
             )
-        )
-        created += 1
+            created += 1
+        elif existing.status != "active":
+            existing.status = "active"
+
+    removed = 0
+    for uid, local in known.items():
+        if uid in venue_uids or local.status == "removed":
+            continue
+        local.status = "removed"
+        for credential in local.credentials:
+            if credential.status == "active":
+                credential.status = "revoked"
+        removed += 1
+
     await db.commit()
-    return created
+    return created, removed
 
 
 async def create_subaccount(
@@ -225,13 +247,14 @@ async def revoke_credential(
 
 
 async def load_account_tree(db: AsyncSession) -> list[Account]:
-    """All main accounts with children and credential metadata loaded."""
+    """All active main accounts with active children and credential metadata."""
+    active_children = Account.children.and_(Account.status == "active")
     result = await db.execute(
         select(Account)
-        .where(Account.account_type == "main")
+        .where(Account.account_type == "main", Account.status == "active")
         .options(
             selectinload(Account.credentials),
-            selectinload(Account.children).selectinload(Account.credentials),
+            selectinload(active_children).selectinload(Account.credentials),
         )
         .order_by(Account.exchange, Account.label)
     )

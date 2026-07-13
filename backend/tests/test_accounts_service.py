@@ -63,15 +63,44 @@ async def test_sync_subaccounts_idempotent(db, connector):
     await connector.create_subaccount({}, "alpha")
     await connector.create_subaccount({}, "beta")
 
-    assert await svc.sync_subaccounts(db, connector, main) == 2
-    assert await svc.sync_subaccounts(db, connector, main) == 0
+    assert await svc.sync_subaccounts(db, connector, main) == (2, 0)
+    assert await svc.sync_subaccounts(db, connector, main) == (0, 0)
 
     subs = (
         (await db.execute(select(Account).where(Account.parent_id == main.id)))
         .scalars().all()
     )
     assert {s.label for s in subs} == {"alpha", "beta"}
-    assert all(s.account_type == "sub" for s in subs)
+    assert all(s.account_type == "sub" and s.status == "active" for s in subs)
+
+
+async def test_sync_marks_venue_deleted_subaccounts_removed(db, connector):
+    main = await make_main(db)
+    await svc.add_credential(db, connector, main, "HMAC", "k", "s" * 8)
+    sub = await svc.create_subaccount(db, connector, main, "doomed")
+    credential, _ = await svc.create_sub_api_key(db, connector, main, sub, ["read"])
+
+    # Deleted on the venue side (e.g. via the exchange web UI)
+    connector.subaccounts.remove(sub.native_uid)
+
+    assert await svc.sync_subaccounts(db, connector, main) == (0, 1)
+    await db.refresh(sub)
+    await db.refresh(credential)
+    assert sub.status == "removed"
+    assert credential.status == "revoked"
+
+    # Removed subaccounts drop out of the tree...
+    tree = await svc.load_account_tree(db)
+    assert tree[0].children == []
+
+    # ...and syncing again does not double-count them
+    assert await svc.sync_subaccounts(db, connector, main) == (0, 0)
+
+    # If the venue reports the uid again, the local row is revived
+    connector.subaccounts.append(sub.native_uid)
+    assert await svc.sync_subaccounts(db, connector, main) == (0, 0)
+    await db.refresh(sub)
+    assert sub.status == "active"
 
 
 async def test_create_subaccount_registers_locally(db, connector):
