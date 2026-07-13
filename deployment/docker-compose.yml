@@ -13,6 +13,7 @@ services:
       - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
       - DISCORD_REQUIRED_ROLE_ID=${DISCORD_REQUIRED_ROLE_ID:-}
       - DISCORD_REDIRECT_URI=${DISCORD_REDIRECT_URI}
+      - CREDENTIAL_ENCRYPTION_KEY=${CREDENTIAL_ENCRYPTION_KEY:-}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.backend.rule=Host(`capi.${DOMAIN}`)"
