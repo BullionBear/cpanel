@@ -147,11 +147,21 @@ disabled control.
 From the registered master, the operator can, all within the page:
 
 - **Create subaccount** — `POST /v5/user/create-sub-member`.
-- **Create sub API key** — `POST /v5/user/create-sub-api`. CPanel stores the
-  returned key **and secret** immediately (envelope-encrypted).
+- **Create sub API key** — `POST /v5/user/create-sub-api`, driven by a
+  **dialog** rather than a single checkbox. The operator picks permission
+  **scopes** (Derivatives, Spot, Wallet, Options, Copy trading, Exchange
+  history — each mapped to Bybit's permission modules), a **read-only** flag, an
+  optional **IP allowlist**, an optional **note**, and tags. CPanel stores the
+  returned key **and secret** immediately (envelope-encrypted) and shows the
+  secret once in a confirmation dialog.
 - **Modify sub API key** — permissions / read-only / IP binding, via
   `POST /v5/user/update-sub-api`. *(new connector capability)*
-- **Revoke sub API key** — `POST /v5/user/delete-sub-api`.
+- **Revoke sub API key** — `POST /v5/user/delete-sub-api`. Revoking destroys
+  the key on the venue **and removes the stored record** (a revoked key is dead;
+  it is not kept around).
+- **Delete API key (panel only)** — remove a stored key from CPanel without any
+  venue call, for keys that were registered manually or are already dead on the
+  venue. Available for every key on every exchange.
 - **Freeze / unfreeze subaccount** — `POST /v5/user/frozen-sub-member`.
   *(new connector capability)*
 - **Sync / list subaccounts** — `GET /v5/user/query-sub-members`.

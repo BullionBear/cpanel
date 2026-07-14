@@ -132,7 +132,7 @@ async def test_sub_api_key_returns_secret_once(client):
     assert len(child["credentials"]) == 1
 
 
-async def test_revoke_credential(client, fake):
+async def test_revoke_credential_removes_it(client, fake):
     main = await create_main(client)
     credential = await add_key(client, main["id"])
     response = await client.post(
@@ -141,7 +141,23 @@ async def test_revoke_credential(client, fake):
     assert response.status_code == 204
 
     tree = (await client.get("/accounts/tree")).json()
-    assert tree[0]["credentials"][0]["status"] == "revoked"
+    assert tree[0]["credentials"] == []
+
+
+async def test_delete_credential(client):
+    main = await create_main(client)
+    credential = await add_key(client, main["id"])
+    response = await client.delete(
+        f"/accounts/{main['id']}/credentials/{credential['id']}"
+    )
+    assert response.status_code == 204
+
+    tree = (await client.get("/accounts/tree")).json()
+    assert tree[0]["credentials"] == []
+
+    # Deleting a missing credential is a 404
+    missing = await client.delete(f"/accounts/{main['id']}/credentials/999999")
+    assert missing.status_code == 404
 
 
 async def test_register_combined(client):

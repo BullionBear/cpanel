@@ -157,7 +157,17 @@ class ExchangeConnector:
     async def create_api_key(
         self, credential: Credential, subaccount: str | None, scheme: KeyScheme,
         permissions: list[str],
+        read_only: bool = False,
+        ips: list[str] | None = None,
+        note: str | None = None,
     ) -> ApiKeyResult:
+        """Mint an API key on the venue.
+
+        ``permissions`` is a list of panel-level scope tokens (e.g. ``spot``,
+        ``derivatives``, ``wallet``); each connector maps them to its own model.
+        ``read_only`` marks the key as non-trading, ``ips`` restricts it to an
+        allowlist (empty = unrestricted), and ``note`` is a free-form label.
+        """
         raise NotSupported(self.exchange, Capability.API_KEY_CREATE)
 
     async def modify_api_key(

@@ -283,11 +283,16 @@ async def create_sub_api_key(
     permissions: list[str],
     scheme: str = "HMAC",
     tags: list[str] | None = None,
+    read_only: bool = False,
+    ips: list[str] | None = None,
+    note: str | None = None,
 ) -> tuple[ApiCredential, str]:
     """Create an API key for a subaccount via the venue.
 
-    Returns the stored credential and the plaintext secret — the only moment
-    it exists outside the encrypted envelope. Callers show it once and drop it.
+    ``permissions`` are panel-level scope tokens; ``read_only`` marks the key
+    non-trading, ``ips`` restricts it to an allowlist, and ``note`` is a
+    free-form venue label. Returns the stored credential and the plaintext
+    secret — the only moment it exists outside the encrypted envelope.
     """
     if not sub_account.native_uid:
         raise AccountError("Subaccount has no native uid; sync subaccounts first")
@@ -299,15 +304,18 @@ async def create_sub_api_key(
         subaccount=sub_account.native_uid,
         scheme=KeyScheme(scheme),
         permissions=permissions,
+        read_only=read_only,
+        ips=ips,
+        note=note,
     )
     credential = ApiCredential(
         account_id=sub_account.id,
         scheme=key.scheme.value,
         api_key=key.api_key,
         secret_enc=SecretBox().encrypt(key.secret),
-        label="created by cpanel",
+        label=note or "created by cpanel",
         permissions={"granted": key.permissions},
-        read_only="trade" not in permissions,
+        read_only=read_only,
         can_withdraw=False,
         tags=list(tags or []),
         status="active",
@@ -376,7 +384,12 @@ async def revoke_credential(
     credential: ApiCredential,
     main_account: Account | None = None,
 ) -> None:
-    """Revoke on the venue when supported (subaccount keys), always locally."""
+    """Revoke on the venue when supported (subaccount keys), then remove locally.
+
+    Revoking always deletes the stored credential — a revoked key is dead and is
+    not kept around in the panel. Use :func:`delete_credential` to drop a key
+    from the panel without touching the venue.
+    """
     from app.connectors.base import Capability
 
     account = await db.get(Account, credential.account_id)
@@ -392,7 +405,13 @@ async def revoke_credential(
             subaccount=account.native_uid,
             api_key=credential.api_key,
         )
-    credential.status = "revoked"
+    await db.delete(credential)
+    await db.commit()
+
+
+async def delete_credential(db: AsyncSession, credential: ApiCredential) -> None:
+    """Remove a stored credential from the panel without touching the venue."""
+    await db.delete(credential)
     await db.commit()
 
 

@@ -43,6 +43,32 @@ _READ_PERMISSIONS = {
     "Wallet": ["AccountTransfer"],
 }
 
+# Panel-level permission scope tokens → Bybit's per-module permission entries.
+# The dialog lets the operator pick any combination of these when creating a key.
+_PERMISSION_SCOPES: dict[str, dict[str, list[str]]] = {
+    "spot": {"Spot": ["SpotTrade"]},
+    "derivatives": {"ContractTrade": ["Order", "Position"]},
+    "wallet": {"Wallet": ["AccountTransfer", "SubMemberTransferList"]},
+    "options": {"Options": ["OptionsTrade"]},
+    "copytrading": {"CopyTrading": ["CopyTrading"]},
+    "exchange": {"Exchange": ["ExchangeHistory"]},
+}
+
+
+def _build_permissions(scopes: list[str]) -> dict[str, list[str]]:
+    """Merge the selected scope tokens into Bybit's permission object.
+
+    Falls back to a minimal read-only position permission when nothing usable is
+    selected (Bybit rejects an empty permission set)."""
+    merged: dict[str, list[str]] = {}
+    for scope in scopes:
+        for category, entries in _PERMISSION_SCOPES.get(scope, {}).items():
+            bucket = merged.setdefault(category, [])
+            for entry in entries:
+                if entry not in bucket:
+                    bucket.append(entry)
+    return merged or {"ContractTrade": ["Position"]}
+
 _CATEGORIES: list[tuple[str, MarketType]] = [
     ("spot", MarketType.SPOT),
     ("linear", MarketType.PERP),
@@ -213,20 +239,24 @@ class BybitConnector(ExchangeConnector):
     async def create_api_key(
         self, credential: Credential, subaccount: str | None, scheme: KeyScheme,
         permissions: list[str],
+        read_only: bool = False,
+        ips: list[str] | None = None,
+        note: str | None = None,
     ) -> ApiKeyResult:
         if scheme != KeyScheme.HMAC:
             raise ValueError("Bybit issues only HMAC keys via API")
         if not subaccount:
             raise ValueError("Bybit API key creation targets a subaccount uid")
-        read_only = "trade" not in permissions
         session = self._auth_session(credential)
-        response = await self._call(
-            session.create_sub_api_key,
-            subuid=int(subaccount),
-            readOnly=1 if read_only else 0,
-            permissions=_READ_PERMISSIONS if read_only else _TRADE_PERMISSIONS,
-            note="created by cpanel",
-        )
+        kwargs: dict = {
+            "subuid": int(subaccount),
+            "readOnly": 1 if read_only else 0,
+            "permissions": _build_permissions(permissions),
+            "note": note or "created by cpanel",
+        }
+        if ips:
+            kwargs["ips"] = ",".join(ips)
+        response = await self._call(session.create_sub_api_key, **kwargs)
         result = response.get("result", {})
         return ApiKeyResult(
             api_key=result["apiKey"],

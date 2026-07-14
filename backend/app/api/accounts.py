@@ -118,7 +118,11 @@ class SubaccountCreate(BaseModel):
 
 class SubKeyCreate(BaseModel):
     sub_account_id: int
-    permissions: list[str] = ["read"]
+    # Panel-level permission scope tokens (e.g. spot, derivatives, wallet).
+    permissions: list[str] = ["derivatives"]
+    read_only: bool = False
+    ips: list[str] | None = None
+    note: str | None = Field(default=None, max_length=200)
     tags: list[str] = []
 
 
@@ -410,6 +414,26 @@ async def revoke_credential(
         await svc.revoke_credential(db, connector, credential, main_account=main_account)
 
 
+@router.delete("/{account_id}/credentials/{credential_id}", status_code=204)
+async def delete_credential(
+    account_id: int,
+    credential_id: int,
+    actor: Actor = Depends(current_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove a stored credential from the panel (no venue call)."""
+    account = await _get_account(db, account_id)
+    credential = await db.get(ApiCredential, credential_id)
+    if credential is None or credential.account_id != account.id:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    async with audit(
+        db, actor, "accounts.delete_credential",
+        target=f"{account.exchange}:{account.label}",
+        params={"api_key": credential.api_key[:8] + "..."},
+    ):
+        await svc.delete_credential(db, credential)
+
+
 # -- venue-side operations (capability-gated) ---------------------------------
 
 @router.post("/{account_id}/subaccounts/sync", response_model=list[AccountOut])
@@ -505,11 +529,17 @@ async def create_sub_api_key(
     async with audit(
         db, actor, "accounts.create_api_key",
         target=f"{account.exchange}:{sub.label}",
-        params={"permissions": body.permissions, "tags": body.tags},
+        params={
+            "permissions": body.permissions,
+            "read_only": body.read_only,
+            "ips": body.ips,
+            "tags": body.tags,
+        },
     ):
         try:
             credential, secret = await svc.create_sub_api_key(
-                db, connector, account, sub, body.permissions, tags=body.tags
+                db, connector, account, sub, body.permissions,
+                tags=body.tags, read_only=body.read_only, ips=body.ips, note=body.note,
             )
         except svc.AccountError as exc:
             raise HTTPException(status_code=400, detail=str(exc))

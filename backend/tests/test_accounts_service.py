@@ -125,24 +125,56 @@ async def test_create_sub_api_key_stores_encrypted(db, connector):
     assert SecretBox().decrypt(credential.secret_enc) == secret
 
 
+async def test_create_sub_api_key_passes_options(db, connector):
+    main = await make_main(db)
+    await svc.add_credential(db, connector, main, "HMAC", "k", "s" * 8)
+    sub = await svc.create_subaccount(db, connector, main, "theta")
+
+    credential, _ = await svc.create_sub_api_key(
+        db, connector, main, sub, ["spot", "wallet"],
+        read_only=True, ips=["1.2.3.4"], note="ro key",
+    )
+    assert credential.read_only is True
+    assert credential.label == "ro key"
+    assert credential.permissions == {"granted": ["spot", "wallet"]}
+
+    created = connector.created_keys[-1]
+    assert created["read_only"] is True
+    assert created["ips"] == ["1.2.3.4"]
+    assert created["note"] == "ro key"
+
+
 async def test_revoke_sub_key_hits_venue(db, connector):
     main = await make_main(db)
     await svc.add_credential(db, connector, main, "HMAC", "k", "s" * 8)
     sub = await svc.create_subaccount(db, connector, main, "epsilon")
     credential, _ = await svc.create_sub_api_key(db, connector, main, sub, ["read"])
+    cred_id, api_key = credential.id, credential.api_key
 
     await svc.revoke_credential(db, connector, credential, main_account=main)
-    assert credential.status == "revoked"
-    assert credential.api_key in connector.revoked_keys
+    assert api_key in connector.revoked_keys
+    # Revoking removes the credential from the panel entirely.
+    assert await db.get(ApiCredential, cred_id) is None
 
 
 async def test_revoke_main_key_local_only(db, connector):
     main = await make_main(db)
     credential, _ = await svc.add_credential(db, connector, main, "HMAC", "k", "s" * 8)
+    cred_id = credential.id
 
     await svc.revoke_credential(db, connector, credential)
-    assert credential.status == "revoked"
     assert connector.revoked_keys == []
+    assert await db.get(ApiCredential, cred_id) is None
+
+
+async def test_delete_credential_local_only(db, connector):
+    main = await make_main(db)
+    credential, _ = await svc.add_credential(db, connector, main, "HMAC", "k", "s" * 8)
+    cred_id = credential.id
+
+    await svc.delete_credential(db, credential)
+    assert connector.revoked_keys == []
+    assert await db.get(ApiCredential, cred_id) is None
 
 
 async def test_account_tree(db, connector):

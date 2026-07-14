@@ -81,6 +81,7 @@ class FakeConnector(ExchangeConnector):
         self.trades: list[Trade] = []
         self.subaccounts: list[str] = []
         self.revoked_keys: list[str] = []
+        self.created_keys: list[dict] = []
         self.modified_keys: list[dict] = []
         self.frozen: dict[str, bool] = {}
         self.transfers: list[dict] = []
@@ -223,8 +224,20 @@ class FakeConnector(ExchangeConnector):
     async def create_api_key(
         self, credential: Credential, subaccount: str | None, scheme: KeyScheme,
         permissions: list[str],
+        read_only: bool = False,
+        ips: list[str] | None = None,
+        note: str | None = None,
     ) -> ApiKeyResult:
         n = next(self._ids)
+        self.created_keys.append(
+            {
+                "subaccount": subaccount,
+                "permissions": permissions,
+                "read_only": read_only,
+                "ips": ips,
+                "note": note,
+            }
+        )
         return ApiKeyResult(
             api_key=f"fake-key-{n}",
             secret=f"fake-secret-{n}",

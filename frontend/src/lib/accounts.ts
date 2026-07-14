@@ -1,4 +1,4 @@
-import { apiGet, apiPatch, apiPost, apiPut } from './api';
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from './api';
 
 export interface Credential {
 	id: number;
@@ -82,8 +82,13 @@ export const revealSecret = (accountId: number, credentialId: number) =>
 export const setTags = (accountId: number, credentialId: number, tags: string[]) =>
 	apiPut<Credential>(`/accounts/${accountId}/credentials/${credentialId}/tags`, { tags });
 
+/** Revoke a key on the venue (where supported) and remove it from the panel. */
 export const revokeCredential = (accountId: number, credentialId: number) =>
 	apiPost<void>(`/accounts/${accountId}/credentials/${credentialId}/revoke`);
+
+/** Remove a stored key from the panel without touching the venue. */
+export const deleteCredential = (accountId: number, credentialId: number) =>
+	apiDelete<void>(`/accounts/${accountId}/credentials/${credentialId}`);
 
 export const modifyCredential = (
 	accountId: number,
@@ -100,7 +105,14 @@ export const createSubaccount = (accountId: number, label: string) =>
 export const freezeSubaccount = (accountId: number, subId: number, frozen: boolean) =>
 	apiPost<AccountInfo>(`/accounts/${accountId}/subaccounts/${subId}/freeze`, { frozen });
 
-export const createSubApiKey = (
-	accountId: number,
-	body: { sub_account_id: number; permissions: string[]; tags?: string[] }
-) => apiPost<{ credential: Credential; secret: string }>(`/accounts/${accountId}/api-keys`, body);
+export interface SubKeyOptions {
+	sub_account_id: number;
+	permissions: string[];
+	read_only?: boolean;
+	ips?: string[];
+	note?: string;
+	tags?: string[];
+}
+
+export const createSubApiKey = (accountId: number, body: SubKeyOptions) =>
+	apiPost<{ credential: Credential; secret: string }>(`/accounts/${accountId}/api-keys`, body);

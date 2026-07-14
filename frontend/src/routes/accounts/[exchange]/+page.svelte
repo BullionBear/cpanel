@@ -11,6 +11,7 @@
 		revealSecret,
 		setTags,
 		revokeCredential,
+		deleteCredential,
 		modifyCredential,
 		syncSubaccounts,
 		createSubaccount,
@@ -41,8 +42,30 @@
 	let reg = { label: '', scheme: 'HMAC', api_key: '', secret: '', tags: '' };
 	// Per-main new-subaccount name (self-service venues)
 	let subName: Record<number, string> = {};
-	// Per-sub create-key form (self-service venues)
-	let keyForm: Record<number, { trade: boolean; tags: string }> = {};
+
+	// Permission scopes offered by the "Create key" dialog (self-service venues).
+	const PERMISSION_SCOPES: { id: string; label: string; hint: string }[] = [
+		{ id: 'derivatives', label: 'Derivatives', hint: 'Contract orders & positions' },
+		{ id: 'spot', label: 'Spot', hint: 'Spot trading' },
+		{ id: 'wallet', label: 'Wallet', hint: 'Account & sub transfers' },
+		{ id: 'options', label: 'Options', hint: 'Options trading' },
+		{ id: 'copytrading', label: 'Copy trading', hint: 'Copy trading' },
+		{ id: 'exchange', label: 'Exchange history', hint: 'Read exchange history' }
+	];
+	type KeyDialog = {
+		mainId: number;
+		subId: number;
+		subLabel: string;
+		scopes: Record<string, boolean>;
+		readOnly: boolean;
+		ips: string;
+		note: string;
+		tags: string;
+	};
+	// The open "Create key" dialog, or null when closed.
+	let keyDialog: KeyDialog | null = null;
+	// Secret shown once right after a key is created (from the create response).
+	let createdSecret: { api_key: string; secret: string } | null = null;
 
 	// Revealed secrets, keyed by credential id
 	let revealed: Record<number, { api_key: string; secret: string }> = {};
@@ -183,18 +206,40 @@
 			notice = `Synced ${subs.length} subaccount${subs.length === 1 ? '' : 's'} from ${exchange}.`;
 		});
 
-	const issueKey = (main: AccountNode, sub: AccountInfo) =>
+	const openKeyDialog = (main: AccountNode, sub: AccountInfo) => {
+		keyDialog = {
+			mainId: main.id,
+			subId: sub.id,
+			subLabel: sub.label,
+			scopes: { derivatives: true },
+			readOnly: false,
+			ips: '',
+			note: '',
+			tags: ''
+		};
+	};
+	const closeKeyDialog = () => {
+		keyDialog = null;
+	};
+
+	const submitKeyDialog = () => {
+		const d = keyDialog;
+		if (!d) return;
+		const permissions = PERMISSION_SCOPES.filter((s) => d.scopes[s.id]).map((s) => s.id);
 		run(async () => {
-			const form = keyForm[sub.id] ?? { trade: false, tags: '' };
-			await createSubApiKey(main.id, {
-				sub_account_id: sub.id,
-				permissions: form.trade ? ['read', 'trade'] : ['read'],
-				tags: parseTags(form.tags)
+			const result = await createSubApiKey(d.mainId, {
+				sub_account_id: d.subId,
+				permissions,
+				read_only: d.readOnly,
+				ips: parseTags(d.ips),
+				note: d.note.trim() || undefined,
+				tags: parseTags(d.tags)
 			});
-			notice = `Key created for "${sub.label}".`;
-			delete keyForm[sub.id];
-			keyForm = keyForm;
+			notice = `Key created for "${d.subLabel}".`;
+			createdSecret = { api_key: result.credential.api_key, secret: result.secret };
+			keyDialog = null;
 		});
+	};
 
 	const setReadOnly = (subId: number, cred: Credential, readOnly: boolean) =>
 		run(async () => {
@@ -205,11 +250,26 @@
 			notice = readOnly ? 'Key set to read-only.' : 'Trading enabled on key.';
 		});
 
-	const revoke = (account: AccountInfo, credentialId: number) =>
+	// Revoke is only meaningful when the venue can destroy the key for us —
+	// subaccount keys on a self-service venue. It also removes the local record.
+	const canRevoke = (account: AccountInfo, cred: Credential) =>
+		!!caps?.api_key_revoke && account.account_type === 'sub' && cred.status === 'active';
+
+	const revoke = (account: AccountInfo, credentialId: number) => {
+		if (!confirm(`Revoke this API key on ${exchange} and remove it from CPanel?`)) return;
 		run(async () => {
 			await revokeCredential(account.id, credentialId);
 			notice = `Key revoked on "${account.label}".`;
 		});
+	};
+
+	const removeKey = (account: AccountInfo, credentialId: number) => {
+		if (!confirm('Remove this API key from CPanel? The key is not touched on the venue.')) return;
+		run(async () => {
+			await deleteCredential(account.id, credentialId);
+			notice = `Removed a key from "${account.label}".`;
+		});
+	};
 
 	const toggleFreeze = (main: AccountNode, sub: AccountInfo) =>
 		run(async () => {
@@ -385,9 +445,10 @@
 							{revealed[cred.id] ? 'Hide' : 'Reveal'}
 						</button>
 						<button class="btn secondary small" on:click={() => startTagEdit(cred)}>Tags</button>
-						{#if cred.status === 'active'}
+						{#if canRevoke(main, cred)}
 							<button class="btn danger small" disabled={busy} on:click={() => revoke(main, cred.id)}>Revoke</button>
 						{/if}
+						<button class="btn danger small" disabled={busy} on:click={() => removeKey(main, cred.id)}>Delete</button>
 					</div>
 				</div>
 				{#if revealed[cred.id]}
@@ -446,6 +507,9 @@
 						{#if sub.native_uid}<span class="uid">{sub.native_uid}</span>{/if}
 						{#if sub.status === 'frozen'}<span class="tag warn">frozen</span>{/if}
 						<div class="row-actions">
+							{#if caps?.api_key_create}
+								<button class="btn small" disabled={busy} on:click={() => openKeyDialog(main, sub)}>Create key</button>
+							{/if}
 							{#if showAddKey(sub)}
 								<button class="btn secondary small" on:click={() => toggleAddKey(sub.id)}>
 									{keyReg[sub.id] !== undefined ? 'Cancel' : 'Add API key'}
@@ -478,9 +542,10 @@
 										<button class="btn secondary small" disabled={busy} on:click={() => setReadOnly(sub.id, cred, true)}>Make read-only</button>
 									{/if}
 								{/if}
-								{#if cred.status === 'active'}
+								{#if canRevoke(sub, cred)}
 									<button class="btn danger small" disabled={busy} on:click={() => revoke(sub, cred.id)}>Revoke</button>
 								{/if}
+								<button class="btn danger small" disabled={busy} on:click={() => removeKey(sub, cred.id)}>Delete</button>
 							</div>
 						</div>
 						{#if revealed[cred.id]}
@@ -497,19 +562,6 @@
 							</form>
 						{/if}
 					{/each}
-
-					{#if caps?.api_key_create}
-						<form class="inline-form indent" on:submit|preventDefault={() => issueKey(main, sub)}>
-							<label class="check">
-								<input type="checkbox" checked={keyForm[sub.id]?.trade ?? false}
-									on:change={(e) => { keyForm[sub.id] = { trade: e.currentTarget.checked, tags: keyForm[sub.id]?.tags ?? '' }; keyForm = keyForm; }} />
-								allow trading
-							</label>
-							<input placeholder="Tags" value={keyForm[sub.id]?.tags ?? ''}
-								on:input={(e) => { keyForm[sub.id] = { trade: keyForm[sub.id]?.trade ?? false, tags: e.currentTarget.value }; keyForm = keyForm; }} />
-							<button class="btn small" disabled={busy}>Create key</button>
-						</form>
-					{/if}
 
 					{#if showAddKey(sub) && keyReg[sub.id] !== undefined}
 						<form class="key-form indent" on:submit|preventDefault={() => submitAddKey(sub)}>
@@ -550,6 +602,77 @@
 			{/if}
 		</div>
 	{/each}
+{/if}
+
+<svelte:window
+	on:keydown={(e) => {
+		if (e.key !== 'Escape') return;
+		if (createdSecret) createdSecret = null;
+		else if (keyDialog) closeKeyDialog();
+	}}
+/>
+
+{#if createdSecret}
+	<div class="overlay" on:click|self={() => (createdSecret = null)} role="presentation">
+		<div class="dialog" role="dialog" aria-modal="true" aria-label="API key created">
+			<h2>API key created</h2>
+			<p class="muted">Store the secret now — it is also retrievable later via Reveal.</p>
+			<div class="reveal">
+				<div><span>Key</span><code>{createdSecret.api_key}</code></div>
+				<div><span>Secret</span><code>{createdSecret.secret}</code></div>
+			</div>
+			<div class="dialog-actions">
+				<button class="btn" on:click={() => (createdSecret = null)}>Done</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+{#if keyDialog}
+	<div class="overlay" on:click|self={closeKeyDialog} role="presentation">
+		<div class="dialog" role="dialog" aria-modal="true" aria-label="Create API key">
+			<h2>Create API key</h2>
+			<p class="muted">For subaccount “{keyDialog.subLabel}” on {exchange}.</p>
+
+			<div class="field">
+				<span class="field-label">Permissions</span>
+				<div class="scopes">
+					{#each PERMISSION_SCOPES as scope}
+						<label class="scope">
+							<input type="checkbox" bind:checked={keyDialog.scopes[scope.id]} />
+							<span class="scope-name">{scope.label}</span>
+							<span class="scope-hint">{scope.hint}</span>
+						</label>
+					{/each}
+				</div>
+			</div>
+
+			<label class="check">
+				<input type="checkbox" bind:checked={keyDialog.readOnly} />
+				Read-only (no trading; the key can only read the selected modules)
+			</label>
+
+			<div class="field">
+				<span class="field-label">IP allowlist <span class="muted">(optional, comma-separated)</span></span>
+				<input placeholder="e.g. 203.0.113.4, 203.0.113.5" bind:value={keyDialog.ips} />
+			</div>
+
+			<div class="field">
+				<span class="field-label">Note <span class="muted">(optional)</span></span>
+				<input placeholder="Shown on the venue and as this key's label" bind:value={keyDialog.note} />
+			</div>
+
+			<div class="field">
+				<span class="field-label">Tags <span class="muted">(optional, comma-separated)</span></span>
+				<input placeholder="e.g. spot, hedge" bind:value={keyDialog.tags} />
+			</div>
+
+			<div class="dialog-actions">
+				<button class="btn secondary" on:click={closeKeyDialog}>Cancel</button>
+				<button class="btn" disabled={busy} on:click={submitKeyDialog}>Create key</button>
+			</div>
+		</div>
+	</div>
 {/if}
 
 <style>
@@ -838,5 +961,91 @@
 			background: #0d1117;
 			border-color: #30363d;
 		}
+		.dialog {
+			background: #161b22;
+			border-color: #30363d;
+		}
+		.scope {
+			border-color: #30363d;
+		}
+		.scope:hover {
+			background: #0d1117;
+		}
+	}
+
+	.overlay {
+		position: fixed;
+		inset: 0;
+		background: rgba(1, 4, 9, 0.6);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 1rem;
+		z-index: 50;
+	}
+	.dialog {
+		background: #ffffff;
+		border: 1px solid #e3e5e8;
+		border-radius: 0.75rem;
+		padding: 1.5rem;
+		width: min(32rem, 100%);
+		max-height: 90vh;
+		overflow-y: auto;
+		box-shadow: 0 12px 32px rgba(1, 4, 9, 0.25);
+	}
+	.dialog h2 {
+		margin: 0 0 0.25rem;
+	}
+	.field {
+		margin-top: 1rem;
+	}
+	.field-label {
+		display: block;
+		font-size: 0.8125rem;
+		font-weight: 500;
+		margin-bottom: 0.375rem;
+	}
+	.field input {
+		width: 100%;
+	}
+	.scopes {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 0.5rem;
+	}
+	.scope {
+		display: flex;
+		align-items: baseline;
+		gap: 0.4rem;
+		padding: 0.5rem 0.625rem;
+		border: 1px solid #d0d7de;
+		border-radius: 0.375rem;
+		cursor: pointer;
+		flex-wrap: wrap;
+	}
+	.scope:hover {
+		background: #f6f8fa;
+	}
+	.scope input {
+		height: auto;
+	}
+	.scope-name {
+		font-size: 0.8125rem;
+		font-weight: 500;
+	}
+	.scope-hint {
+		font-size: 0.6875rem;
+		color: #8b949e;
+		flex-basis: 100%;
+		margin-left: 1.25rem;
+	}
+	.dialog .check {
+		margin-top: 1rem;
+	}
+	.dialog-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 0.5rem;
+		margin-top: 1.5rem;
 	}
 </style>
