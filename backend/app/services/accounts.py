@@ -79,6 +79,7 @@ async def add_credential(
     api_key: str,
     secret: str,
     label: str | None = None,
+    tags: list[str] | None = None,
 ) -> tuple[ApiCredential, CredentialInfo]:
     """Encrypt, verify against the venue, and store a credential."""
     info = await connector.verify_credential(
@@ -96,6 +97,7 @@ async def add_credential(
         permissions=info.permissions,
         read_only=info.read_only,
         can_withdraw=info.can_withdraw,
+        tags=list(tags or []),
         status="active",
         verified_at=datetime.now(timezone.utc),
     )
@@ -105,6 +107,80 @@ async def add_credential(
     await db.commit()
     await db.refresh(credential)
     return credential, info
+
+
+async def register_account_with_credential(
+    db: AsyncSession,
+    connector: ExchangeConnector,
+    exchange: str,
+    label: str,
+    account_type: str,
+    scheme: str,
+    api_key: str,
+    secret: str,
+    tags: list[str] | None = None,
+    parent_id: int | None = None,
+    cred_label: str | None = None,
+) -> tuple[Account, ApiCredential, CredentialInfo]:
+    """Register an account and its API key in a single step.
+
+    The key is verified against the venue first; only if it is valid are the
+    account and credential persisted together. The venue-native id is derived
+    from verification and stored on the account.
+    """
+    if account_type == "sub" and parent_id is None:
+        raise AccountError("Subaccounts must reference a parent account")
+    if account_type == "main" and parent_id is not None:
+        raise AccountError("Main accounts cannot have a parent")
+
+    info = await connector.verify_credential(
+        {"api_key": api_key, "secret": secret, "scheme": scheme}
+    )
+    if not info.valid:
+        raise CredentialInvalid("The venue rejected this API key")
+
+    account = Account(
+        exchange=exchange.upper(),
+        label=label,
+        account_type=account_type,
+        parent_id=parent_id,
+        native_uid=info.native_uid,
+    )
+    db.add(account)
+    await db.flush()
+
+    credential = ApiCredential(
+        account_id=account.id,
+        scheme=scheme,
+        api_key=api_key,
+        secret_enc=SecretBox().encrypt(secret),
+        label=cred_label,
+        permissions=info.permissions,
+        read_only=info.read_only,
+        can_withdraw=info.can_withdraw,
+        tags=list(tags or []),
+        status="active",
+        verified_at=datetime.now(timezone.utc),
+    )
+    db.add(credential)
+    await db.commit()
+    await db.refresh(account)
+    await db.refresh(credential)
+    return account, credential, info
+
+
+def reveal_secret(credential: ApiCredential) -> str:
+    """Decrypt and return a stored secret. Callers MUST audit each reveal."""
+    return SecretBox().decrypt(credential.secret_enc)
+
+
+async def set_credential_tags(
+    db: AsyncSession, credential: ApiCredential, tags: list[str]
+) -> ApiCredential:
+    credential.tags = list(tags)
+    await db.commit()
+    await db.refresh(credential)
+    return credential
 
 
 async def sync_subaccounts(
@@ -142,7 +218,8 @@ async def sync_subaccounts(
                 )
             )
             created += 1
-        elif existing.status != "active":
+        elif existing.status == "removed":
+            # Revive a previously-removed sub; leave a frozen one frozen.
             existing.status = "active"
 
     removed = 0
@@ -185,6 +262,7 @@ async def create_sub_api_key(
     sub_account: Account,
     permissions: list[str],
     scheme: str = "HMAC",
+    tags: list[str] | None = None,
 ) -> tuple[ApiCredential, str]:
     """Create an API key for a subaccount via the venue.
 
@@ -211,6 +289,7 @@ async def create_sub_api_key(
         permissions={"granted": key.permissions},
         read_only="trade" not in permissions,
         can_withdraw=False,
+        tags=list(tags or []),
         status="active",
         verified_at=datetime.now(timezone.utc),
     )
@@ -218,6 +297,57 @@ async def create_sub_api_key(
     await db.commit()
     await db.refresh(credential)
     return credential, key.secret
+
+
+async def modify_sub_api_key(
+    db: AsyncSession,
+    connector: ExchangeConnector,
+    main_account: Account,
+    credential: ApiCredential,
+    permissions: list[str] | None = None,
+    read_only: bool | None = None,
+) -> ApiCredential:
+    """Change a subaccount key's permissions / read-only flag on the venue."""
+    sub_account = await db.get(Account, credential.account_id)
+    if sub_account is None or sub_account.account_type != "sub":
+        raise AccountError("Only subaccount keys can be modified")
+    if not sub_account.native_uid:
+        raise AccountError("Subaccount has no native uid")
+    master = await get_active_credential(db, main_account)
+    await connector.modify_api_key(
+        decrypt_credential(master),
+        subaccount=sub_account.native_uid,
+        api_key=credential.api_key,
+        read_only=read_only,
+        permissions=permissions,
+    )
+    if read_only is not None:
+        credential.read_only = read_only
+    if permissions is not None:
+        credential.permissions = {"granted": permissions}
+    await db.commit()
+    await db.refresh(credential)
+    return credential
+
+
+async def set_subaccount_frozen(
+    db: AsyncSession,
+    connector: ExchangeConnector,
+    main_account: Account,
+    sub_account: Account,
+    frozen: bool,
+) -> Account:
+    """Freeze/unfreeze a subaccount on the venue and mirror status locally."""
+    if not sub_account.native_uid:
+        raise AccountError("Subaccount has no native uid; sync subaccounts first")
+    master = await get_active_credential(db, main_account)
+    await connector.set_subaccount_frozen(
+        decrypt_credential(master), sub_account.native_uid, frozen
+    )
+    sub_account.status = "frozen" if frozen else "active"
+    await db.commit()
+    await db.refresh(sub_account)
+    return sub_account
 
 
 async def revoke_credential(
@@ -247,11 +377,11 @@ async def revoke_credential(
 
 
 async def load_account_tree(db: AsyncSession) -> list[Account]:
-    """All active main accounts with active children and credential metadata."""
-    active_children = Account.children.and_(Account.status == "active")
+    """Main accounts with their non-removed children and credential metadata."""
+    active_children = Account.children.and_(Account.status != "removed")
     result = await db.execute(
         select(Account)
-        .where(Account.account_type == "main", Account.status == "active")
+        .where(Account.account_type == "main", Account.status != "removed")
         .options(
             selectinload(Account.credentials),
             selectinload(active_children).selectinload(Account.credentials),

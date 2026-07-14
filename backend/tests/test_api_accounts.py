@@ -144,6 +144,119 @@ async def test_revoke_credential(client, fake):
     assert tree[0]["credentials"][0]["status"] == "revoked"
 
 
+async def test_register_combined(client):
+    response = await client.post(
+        "/accounts/register",
+        json={
+            "exchange": "FAKE",
+            "label": "combined",
+            "account_type": "main",
+            "api_key": "k" * 16,
+            "secret": "s" * 16,
+            "tags": ["spot", "primary"],
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["label"] == "combined"
+    assert body["native_uid"] == "uid-1"
+    assert len(body["credentials"]) == 1
+    assert body["credentials"][0]["tags"] == ["spot", "primary"]
+    assert "secret" not in body["credentials"][0]
+
+
+async def test_register_rejects_bad_key(client):
+    response = await client.post(
+        "/accounts/register",
+        json={
+            "exchange": "FAKE", "label": "bad", "account_type": "main",
+            "api_key": "k" * 16, "secret": "wrong-pad",
+        },
+    )
+    assert response.status_code == 400
+
+
+async def test_reveal_secret_is_audited(client, session_factory):
+    main = await create_main(client)
+    cred = await add_key(client, main["id"])
+
+    response = await client.post(
+        f"/accounts/{main['id']}/credentials/{cred['id']}/reveal"
+    )
+    assert response.status_code == 200
+    assert response.json()["secret"] == "s" * 16
+
+    async with session_factory() as session:
+        entries = (await session.execute(select(AuditLog))).scalars().all()
+    reveals = [e for e in entries if e.action == "accounts.reveal_secret"]
+    assert len(reveals) == 1
+    # The plaintext secret must never land in the audit params
+    for entry in entries:
+        assert "s" * 16 not in str(entry.params)
+
+
+async def test_update_tags(client):
+    main = await create_main(client)
+    cred = await add_key(client, main["id"])
+    response = await client.put(
+        f"/accounts/{main['id']}/credentials/{cred['id']}/tags",
+        json={"tags": ["read-only", "eu"]},
+    )
+    assert response.status_code == 200
+    assert response.json()["tags"] == ["read-only", "eu"]
+
+
+async def test_modify_sub_key(client, fake):
+    main = await create_main(client)
+    await add_key(client, main["id"])
+    sub = (
+        await client.post(f"/accounts/{main['id']}/subaccounts", json={"label": "s1"})
+    ).json()
+    created = (
+        await client.post(
+            f"/accounts/{main['id']}/api-keys",
+            json={"sub_account_id": sub["id"], "permissions": ["read", "trade"]},
+        )
+    ).json()
+    cred_id = created["credential"]["id"]
+
+    response = await client.post(
+        f"/accounts/{sub['id']}/credentials/{cred_id}/modify",
+        json={"read_only": True, "permissions": ["read"]},
+    )
+    assert response.status_code == 200
+    assert response.json()["read_only"] is True
+    assert len(fake.modified_keys) == 1
+
+
+async def test_freeze_subaccount(client, fake):
+    main = await create_main(client)
+    await add_key(client, main["id"])
+    sub = (
+        await client.post(f"/accounts/{main['id']}/subaccounts", json={"label": "s2"})
+    ).json()
+
+    response = await client.post(
+        f"/accounts/{main['id']}/subaccounts/{sub['id']}/freeze", json={"frozen": True}
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "frozen"
+    assert fake.frozen  # venue was told to freeze
+
+    # A frozen sub is still visible in the tree (not removed)
+    tree = (await client.get("/accounts/tree")).json()
+    child = tree[0]["children"][0]
+    assert child["status"] == "frozen"
+
+
+async def test_capabilities_include_new_flags(client):
+    caps = (await client.get("/accounts/exchanges")).json()
+    fake_caps = next(c for c in caps if c["exchange"] == "FAKE")
+    assert fake_caps["subaccount_freeze"] is True
+    assert fake_caps["api_key_modify"] is True
+    assert fake_caps["registration_only"] is False
+
+
 async def test_actions_are_audited(client, session_factory):
     main = await create_main(client)
     await add_key(client, main["id"])

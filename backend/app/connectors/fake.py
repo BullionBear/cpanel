@@ -81,6 +81,8 @@ class FakeConnector(ExchangeConnector):
         self.trades: list[Trade] = []
         self.subaccounts: list[str] = []
         self.revoked_keys: list[str] = []
+        self.modified_keys: list[dict] = []
+        self.frozen: dict[str, bool] = {}
         self.transfers: list[dict] = []
 
     # -- public market data --------------------------------------------------
@@ -230,10 +232,27 @@ class FakeConnector(ExchangeConnector):
             permissions=permissions,
         )
 
+    async def modify_api_key(
+        self,
+        credential: Credential,
+        subaccount: str | None,
+        api_key: str,
+        read_only: bool | None = None,
+        permissions: list[str] | None = None,
+    ) -> None:
+        self.modified_keys.append(
+            {"api_key": api_key, "read_only": read_only, "permissions": permissions}
+        )
+
     async def revoke_api_key(
         self, credential: Credential, subaccount: str | None, api_key: str
     ) -> None:
         self.revoked_keys.append(api_key)
+
+    async def set_subaccount_frozen(
+        self, credential: Credential, subaccount: str, frozen: bool
+    ) -> None:
+        self.frozen[subaccount] = frozen
 
     # -- transfers ------------------------------------------------------
 

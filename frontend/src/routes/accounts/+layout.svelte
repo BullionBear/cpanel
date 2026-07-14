@@ -1,12 +1,34 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 
+	// Per-exchange sub-navigation. Binance is registration-only, so it leads
+	// with a Readme explaining the model; Bybit is full self-service.
 	const exchanges = [
-		{ slug: 'binance', name: 'Binance' },
-		{ slug: 'bybit', name: 'Bybit' }
+		{
+			slug: 'binance',
+			name: 'Binance',
+			tabs: [
+				{ id: 'readme', name: 'Readme' },
+				{ id: 'account', name: 'Account' }
+			]
+		},
+		{
+			slug: 'bybit',
+			name: 'Bybit',
+			tabs: [
+				{ id: 'readme', name: 'Readme' },
+				{ id: 'account', name: 'Account' }
+			]
+		}
 	];
 
 	$: path = $page.url.pathname;
+	$: activeTab = $page.url.searchParams.get('tab');
+
+	function isActive(slug: string, tabId: string, defaultTab: string): boolean {
+		if (path !== `/accounts/${slug}`) return false;
+		return (activeTab ?? defaultTab) === tabId;
+	}
 </script>
 
 <div class="accounts-shell">
@@ -16,11 +38,14 @@
 
 		<div class="section-title">Exchanges</div>
 		{#each exchanges as ex}
-			<a
-				class="side-item"
-				class:active={path.startsWith(`/accounts/${ex.slug}`)}
-				href="/accounts/{ex.slug}">{ex.name}</a
-			>
+			<div class="group-label">{ex.name}</div>
+			{#each ex.tabs as tab}
+				<a
+					class="side-item sub"
+					class:active={isActive(ex.slug, tab.id, ex.tabs[0].id)}
+					href="/accounts/{ex.slug}?tab={tab.id}">{tab.name}</a
+				>
+			{/each}
 		{/each}
 		<span class="side-item disabled">More exchanges soon</span>
 	</aside>
@@ -58,6 +83,16 @@
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
 		color: #8b949e;
+	}
+
+	.group-label {
+		padding: 0.5rem 0.625rem 0.125rem;
+		font-size: 0.8125rem;
+		font-weight: 600;
+		color: #1f2328;
+	}
+	.side-item.sub {
+		padding-left: 1.25rem;
 	}
 
 	.side-item {
@@ -112,6 +147,9 @@
 		}
 		.side-item.disabled:hover {
 			background: transparent;
+		}
+		.group-label {
+			color: #e6edf3;
 		}
 	}
 </style>

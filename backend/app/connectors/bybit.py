@@ -116,7 +116,9 @@ class BybitConnector(ExchangeConnector):
             Capability.CREDENTIAL_VERIFY,
             Capability.SUBACCOUNT_LIST,
             Capability.SUBACCOUNT_CREATE,
+            Capability.SUBACCOUNT_FREEZE,
             Capability.API_KEY_CREATE,
+            Capability.API_KEY_MODIFY,
             Capability.API_KEY_REVOKE,
         }
     )
@@ -233,11 +235,41 @@ class BybitConnector(ExchangeConnector):
             permissions=permissions,
         )
 
+    async def modify_api_key(
+        self,
+        credential: Credential,
+        subaccount: str | None,
+        api_key: str,
+        read_only: bool | None = None,
+        permissions: list[str] | None = None,
+    ) -> None:
+        """Change a sub key's read-only flag and/or permission set.
+
+        Called with the master credential, so the target sub key is named via
+        the ``apikey`` parameter (Bybit's convention for master-managed keys).
+        """
+        session = self._auth_session(credential)
+        kwargs: dict = {"apikey": api_key}
+        if read_only is not None:
+            kwargs["readOnly"] = 1 if read_only else 0
+        if permissions is not None:
+            grant_trade = "trade" in permissions
+            kwargs["permissions"] = _TRADE_PERMISSIONS if grant_trade else _READ_PERMISSIONS
+        await self._call(session.modify_sub_api_key, **kwargs)
+
     async def revoke_api_key(
         self, credential: Credential, subaccount: str | None, api_key: str
     ) -> None:
         session = self._auth_session(credential)
         await self._call(session.delete_sub_api_key, apiKey=api_key)
+
+    async def set_subaccount_frozen(
+        self, credential: Credential, subaccount: str, frozen: bool
+    ) -> None:
+        session = self._auth_session(credential)
+        await self._call(
+            session.freeze_sub_uid, subuid=int(subaccount), frozen=1 if frozen else 0
+        )
 
     # -- connector interface --------------------------------------------------
 

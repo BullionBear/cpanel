@@ -146,9 +146,11 @@ system's view of tradable markets current.
   parent linkage for subaccounts.
 - `api_credential` — a key attached to an account: scheme (HMAC, Ed25519),
   permissions, status (active, revoked), and the encrypted secret material.
-  Secrets are encrypted at rest with a key held outside the database, are
-  decrypted only inside the connector layer at request-signing time, and are
-  never returned by any API.
+  Secrets are encrypted at rest with a key held outside the database and are
+  decrypted only at request-signing time or through an explicit, **audited**
+  reveal endpoint (the operator can retrieve a stored secret on demand; every
+  reveal is written to the audit log). Secrets are never returned by any
+  routine read (account tree, credential listing).
 
 ### Provisioning flow
 

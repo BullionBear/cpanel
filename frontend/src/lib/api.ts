@@ -36,3 +36,8 @@ export async function apiGet<T>(path: string, params?: Record<string, string>): 
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
 	return request<T>('POST', path, body);
 }
+
+/** Authenticated PUT with JSON body. */
+export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
+	return request<T>('PUT', path, body);
+}

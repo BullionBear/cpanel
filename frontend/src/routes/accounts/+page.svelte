@@ -19,6 +19,11 @@
 		return `${active.length} key${active.length > 1 ? 's' : ''}${trading ? ` · ${trading} trading` : ''}`;
 	}
 
+	function accountTags(account: AccountInfo): string[] {
+		const tags = account.credentials.flatMap((c) => c.tags ?? []);
+		return [...new Set(tags)];
+	}
+
 	onMount(async () => {
 		try {
 			tree = await fetchTree();
@@ -59,7 +64,8 @@
 					<div class="account-row main">
 						<div>
 							<span class="label">{main.label}</span>
-							{#if main.native_uid}<span class="uid">uid {main.native_uid}</span>{/if}
+							{#if main.native_uid}<span class="uid">{main.native_uid}</span>{/if}
+							{#each accountTags(main) as t}<span class="chip">{t}</span>{/each}
 						</div>
 						<span class="creds">{credSummary(main)}</span>
 					</div>
@@ -68,7 +74,9 @@
 							<div>
 								<span class="tree-line">└</span>
 								<span class="label">{sub.label}</span>
-								{#if sub.native_uid}<span class="uid">uid {sub.native_uid}</span>{/if}
+								{#if sub.native_uid}<span class="uid">{sub.native_uid}</span>{/if}
+								{#if sub.status === 'frozen'}<span class="chip warn">frozen</span>{/if}
+								{#each accountTags(sub) as t}<span class="chip">{t}</span>{/each}
 							</div>
 							<span class="creds">{credSummary(sub)}</span>
 						</div>
@@ -146,6 +154,19 @@
 		font-size: 0.75rem;
 		color: #8b949e;
 		font-weight: 400;
+	}
+	.chip {
+		margin-left: 0.375rem;
+		padding: 0.05rem 0.4rem;
+		border-radius: 999px;
+		background: #ddf4ff;
+		color: #0969da;
+		font-size: 0.6875rem;
+		font-weight: 500;
+	}
+	.chip.warn {
+		background: #fff1e5;
+		color: #bc4c00;
 	}
 	.creds {
 		font-size: 0.8125rem;

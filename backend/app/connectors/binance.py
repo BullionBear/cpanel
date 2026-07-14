@@ -169,16 +169,16 @@ def normalize_cm_instrument(info: dict) -> Instrument | None:
 
 class BinanceConnector(ExchangeConnector):
     exchange = "BINANCE"
-    # API key create/revoke is deliberately absent: Binance only offers it to
-    # broker accounts, so keys are created in the Binance console and
-    # registered in the panel.
+    # Registration-only. Binance's API cannot mint/rotate/revoke subaccount API
+    # keys for a normal (non-broker) master account, so the panel does no
+    # provisioning for Binance at all: the operator creates keys and
+    # subaccounts on Binance and registers each here. We keep only verification
+    # and read. (See docs/ACCOUNT_REDESIGN.md.)
     capabilities = frozenset(
         {
             Capability.INSTRUMENTS,
             Capability.REFERENCE_PRICES,
             Capability.CREDENTIAL_VERIFY,
-            Capability.SUBACCOUNT_LIST,
-            Capability.SUBACCOUNT_CREATE,
         }
     )
 

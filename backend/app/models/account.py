@@ -63,6 +63,9 @@ class ApiCredential(Base):
     read_only: Mapped[bool | None] = mapped_column()
     can_withdraw: Mapped[bool | None] = mapped_column()
 
+    # Operator-defined free-form tags for organizing keys (list of strings)
+    tags: Mapped[list | None] = mapped_column(JsonDict)
+
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(

@@ -43,7 +43,9 @@ class Capability(StrEnum):
     ORDER_HISTORY = "order_history"
     SUBACCOUNT_LIST = "subaccount_list"
     SUBACCOUNT_CREATE = "subaccount_create"
+    SUBACCOUNT_FREEZE = "subaccount_freeze"
     API_KEY_CREATE = "api_key_create"
+    API_KEY_MODIFY = "api_key_modify"
     API_KEY_REVOKE = "api_key_revoke"
     TRANSFERS = "transfers"
     WITHDRAWALS = "withdrawals"
@@ -146,11 +148,28 @@ class ExchangeConnector:
     async def create_subaccount(self, credential: Credential, label: str) -> SubaccountInfo:
         raise NotSupported(self.exchange, Capability.SUBACCOUNT_CREATE)
 
+    async def set_subaccount_frozen(
+        self, credential: Credential, subaccount: str, frozen: bool
+    ) -> None:
+        """Freeze or unfreeze a subaccount on the venue."""
+        raise NotSupported(self.exchange, Capability.SUBACCOUNT_FREEZE)
+
     async def create_api_key(
         self, credential: Credential, subaccount: str | None, scheme: KeyScheme,
         permissions: list[str],
     ) -> ApiKeyResult:
         raise NotSupported(self.exchange, Capability.API_KEY_CREATE)
+
+    async def modify_api_key(
+        self,
+        credential: Credential,
+        subaccount: str | None,
+        api_key: str,
+        read_only: bool | None = None,
+        permissions: list[str] | None = None,
+    ) -> None:
+        """Change permissions / read-only flag of an existing key on the venue."""
+        raise NotSupported(self.exchange, Capability.API_KEY_MODIFY)
 
     async def revoke_api_key(
         self, credential: Credential, subaccount: str | None, api_key: str
