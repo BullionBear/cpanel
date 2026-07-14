@@ -8,10 +8,12 @@
 		fetchOverview,
 		fetchHoldings,
 		fetchHistory,
+		fetchPnlHistory,
 		triggerSnapshot,
 		type OverviewItem,
 		type Holdings,
-		type HistoryPoint
+		type HistoryPoint,
+		type PnlPoint
 	} from '$lib/portfolio';
 
 	let overview: OverviewItem[] = [];
@@ -21,6 +23,7 @@
 	let selected: number | null = null;
 	let holdings: Holdings | null = null;
 	let history: HistoryPoint[] = [];
+	let pnlHistory: PnlPoint[] = [];
 	let detailLoading = false;
 	let snapshotting = false;
 
@@ -30,21 +33,38 @@
 		return acc;
 	}, {});
 
-	// Pie shows the spot allocation by asset. Derivatives-wallet balances (and
-	// positions, whose PnL can be negative and does not map to a pie slice) are
-	// excluded; they are surfaced via the Positions table instead.
+	// Spot allocation pie: coin holdings aggregated by asset across *all* wallets
+	// (spot, margin, derivatives collateral, funding) valued in the quote asset.
 	$: pieSlices = holdings ? buildSlices(holdings) : [];
 	$: historyPoints = buildPoints(history);
+
+	// Position views: notional-exposure allocation, PnL trend, and summary stats.
+	$: notionalSlices = holdings ? buildNotionalSlices(holdings) : [];
+	$: pnlPoints = buildPnlPoints(pnlHistory);
+	$: posStats = holdings ? buildPosStats(holdings) : null;
 
 	function buildSlices(h: Holdings): Slice[] {
 		const byAsset: Record<string, number> = {};
 		for (const b of h.balances) {
-			if (b.wallet === 'DERIVATIVES') continue;
 			const v = Number(b.value_quote);
 			if (b.value_quote !== null && Number.isFinite(v) && v > 0)
 				byAsset[b.asset] = (byAsset[b.asset] ?? 0) + v;
 		}
 		const items: Slice[] = Object.entries(byAsset).map(([asset, v]) => ({ label: asset, value: v }));
+		return topSlices(items);
+	}
+
+	function buildNotionalSlices(h: Holdings): Slice[] {
+		const items: Slice[] = [];
+		for (const p of h.positions) {
+			const v = Math.abs(Number(p.value_quote));
+			if (p.value_quote !== null && Number.isFinite(v) && v > 0)
+				items.push({ label: p.universal_symbol, value: v });
+		}
+		return topSlices(items);
+	}
+
+	function topSlices(items: Slice[]): Slice[] {
 		items.sort((a, b) => b.value - a.value);
 		const TOP = 8;
 		if (items.length <= TOP + 1) return items;
@@ -56,6 +76,53 @@
 		return hist
 			.map((p) => ({ t: new Date(p.taken_at).getTime(), value: Number(p.total_value) }))
 			.filter((p) => Number.isFinite(p.value));
+	}
+
+	function buildPnlPoints(hist: PnlPoint[]): Point[] {
+		return hist
+			.map((p) => ({ t: new Date(p.taken_at).getTime(), value: Number(p.pnl) }))
+			.filter((p) => Number.isFinite(p.value));
+	}
+
+	interface PosStats {
+		notional: number;
+		pnl: number;
+		margin: number | null;
+		leverage: number | null;
+	}
+
+	// Notional = gross exposure (Σ|size·mark|). Leverage = notional / equity.
+	// Posted margin is isolated margin only (cross positions report zero, so
+	// treat "no margin data" as unknown rather than zero).
+	function buildPosStats(h: Holdings): PosStats {
+		let notional = 0;
+		let pnl = 0;
+		let margin = 0;
+		let hasMargin = false;
+		for (const p of h.positions) {
+			const n = Number(p.value_quote);
+			if (p.value_quote !== null && Number.isFinite(n)) notional += Math.abs(n);
+			const u = Number(p.unrealized_pnl);
+			if (p.unrealized_pnl !== null && Number.isFinite(u)) pnl += u;
+			const m = Number(p.margin);
+			if (p.margin !== null && Number.isFinite(m)) {
+				margin += m;
+				if (m > 0) hasMargin = true;
+			}
+		}
+		const equity = Number(h.total_value);
+		const usableEquity = Number.isFinite(equity) && equity > 0 ? equity : null;
+		return {
+			notional,
+			pnl,
+			margin: hasMargin ? margin : null,
+			leverage: usableEquity ? notional / usableEquity : null
+		};
+	}
+
+	function lev(value: number | null): string {
+		if (value === null || !Number.isFinite(value)) return '—';
+		return `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}×`;
 	}
 
 	function money(value: string | number | null): string {
@@ -102,10 +169,12 @@
 		detailLoading = true;
 		holdings = null;
 		history = [];
+		pnlHistory = [];
 		try {
-			[holdings, history] = await Promise.all([
+			[holdings, history, pnlHistory] = await Promise.all([
 				fetchHoldings(item.exchange, item.label),
-				fetchHistory(item.exchange, item.label)
+				fetchHistory(item.exchange, item.label),
+				fetchPnlHistory(item.exchange, item.label)
 			]);
 		} catch {
 			error = 'Failed to load account holdings.';
@@ -121,7 +190,10 @@
 		snapshotting = true;
 		try {
 			holdings = await triggerSnapshot(item.exchange, item.label);
-			history = await fetchHistory(item.exchange, item.label);
+			[history, pnlHistory] = await Promise.all([
+				fetchHistory(item.exchange, item.label),
+				fetchPnlHistory(item.exchange, item.label)
+			]);
 			await loadOverview();
 		} catch (e) {
 			error =
@@ -242,6 +314,47 @@
 									{/each}
 								</tbody>
 							</table>
+						</div>
+					{/if}
+
+					{#if holdings.positions.length > 0 && posStats}
+						<h3>Position statistics</h3>
+						<div class="stats">
+							<div class="stat">
+								<span class="stat-label">Notional</span>
+								<span class="stat-val">{money(posStats.notional)} {holdings.quote_asset}</span>
+							</div>
+							<div class="stat">
+								<span class="stat-label">Unrealized PnL</span>
+								<span
+									class="stat-val"
+									class:pos={posStats.pnl > 0}
+									class:neg={posStats.pnl < 0}
+								>{money(posStats.pnl)} {holdings.quote_asset}</span>
+							</div>
+							<div class="stat">
+								<span class="stat-label">Leverage</span>
+								<span class="stat-val">{lev(posStats.leverage)}</span>
+							</div>
+							<div class="stat">
+								<span class="stat-label">Posted margin</span>
+								<span class="stat-val">
+									{posStats.margin === null ? '—' : `${money(posStats.margin)} ${holdings.quote_asset}`}
+								</span>
+							</div>
+						</div>
+						<div class="charts">
+							<div class="chart-card">
+								<h3>Notional allocation</h3>
+								<PieChart slices={notionalSlices} unit={holdings.quote_asset} />
+							</div>
+							<div class="chart-card">
+								<h3>Position PnL history</h3>
+								<LineChart points={pnlPoints} unit={holdings.quote_asset} />
+								{#if pnlPoints.length < 2}
+									<p class="chart-hint">Take more snapshots to build a trend.</p>
+								{/if}
+							</div>
 						</div>
 					{/if}
 
@@ -440,6 +553,42 @@
 		margin: 0.6rem 0 0;
 		font-size: 0.75rem;
 		color: var(--text-dim);
+	}
+
+	.stats {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+		gap: 0.75rem;
+		margin-bottom: 0.5rem;
+	}
+	.stat {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		box-shadow: var(--inset-hi);
+		padding: 0.7rem 0.85rem;
+	}
+	.stat-label {
+		font-size: 0.6875rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--text-dim);
+	}
+	.stat-val {
+		font-family: var(--mono);
+		font-variant-numeric: tabular-nums;
+		font-size: 1rem;
+		font-weight: 700;
+	}
+	.stat-val.pos {
+		color: #157347;
+	}
+	.stat-val.neg {
+		color: #b02a37;
 	}
 	@media (max-width: 60rem) {
 		.charts {

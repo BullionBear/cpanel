@@ -33,6 +33,7 @@ __all__ = [
     "holdings_total",
     "account_value",
     "value_history",
+    "pnl_history",
 ]
 
 # Common quote asset for portfolio valuation.
@@ -251,6 +252,34 @@ async def value_history(
     )
     for batch_id, taken_at, pnl in positions:
         _add(batch_id, taken_at, pnl)
+
+    points = [
+        (batch_id, taken_at, total) for batch_id, (taken_at, total) in totals.items()
+    ]
+    points.sort(key=lambda p: p[1], reverse=True)
+    return points[:limit]
+
+
+async def pnl_history(
+    db: AsyncSession, account_id: int, limit: int = 90
+) -> list[tuple[str, datetime, Decimal]]:
+    """Per-batch total position unrealized PnL, most recent first.
+
+    One point per capture batch that had positions: the summed
+    ``unrealized_pnl`` of that batch. PnL can be negative.
+    """
+    totals: dict[str, tuple[datetime, Decimal]] = {}
+    positions = await db.execute(
+        select(
+            PositionSnapshot.batch_id,
+            PositionSnapshot.taken_at,
+            PositionSnapshot.unrealized_pnl,
+        ).where(PositionSnapshot.account_id == account_id)
+    )
+    for batch_id, taken_at, pnl in positions:
+        prev = totals.get(batch_id)
+        running = (prev[1] if prev else Decimal("0")) + (pnl or Decimal("0"))
+        totals[batch_id] = (taken_at, running)
 
     points = [
         (batch_id, taken_at, total) for batch_id, (taken_at, total) in totals.items()

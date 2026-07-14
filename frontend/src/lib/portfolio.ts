@@ -49,6 +49,11 @@ export interface HistoryPoint {
 	total_value: string;
 }
 
+export interface PnlPoint {
+	taken_at: string;
+	pnl: string;
+}
+
 // Accounts are addressed by their natural key (exchange + nickname).
 const enc = encodeURIComponent;
 const portfolioPath = (exchange: string, label: string) =>
@@ -61,6 +66,9 @@ export const fetchHoldings = (exchange: string, label: string) =>
 
 export const fetchHistory = (exchange: string, label: string) =>
 	apiGet<HistoryPoint[]>(`${portfolioPath(exchange, label)}/history`);
+
+export const fetchPnlHistory = (exchange: string, label: string) =>
+	apiGet<PnlPoint[]>(`${portfolioPath(exchange, label)}/pnl-history`);
 
 /** Capture a fresh snapshot for one account on demand. */
 export const triggerSnapshot = (exchange: string, label: string) =>

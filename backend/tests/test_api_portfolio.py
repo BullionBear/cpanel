@@ -119,5 +119,14 @@ async def test_history_after_two_snapshots(client):
     assert all(Decimal(point["total_value"]) == Decimal("40200") for point in history)
 
 
+async def test_pnl_history_after_two_snapshots(client):
+    await client.post(f"{client.base}/snapshot")
+    await client.post(f"{client.base}/snapshot")
+    history = (await client.get(f"{client.base}/pnl-history")).json()
+    assert len(history) == 2
+    # Only the position's unrealized PnL (200) per batch.
+    assert all(Decimal(point["pnl"]) == Decimal("200") for point in history)
+
+
 async def test_holdings_unknown_account_404(client):
     assert (await client.get("/portfolio/FAKE/ghost")).status_code == 404

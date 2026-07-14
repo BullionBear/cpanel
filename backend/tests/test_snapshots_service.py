@@ -116,6 +116,18 @@ async def test_value_history_one_point_per_batch(db, connector):
     assert all(total == Decimal("40200") for _, _, total in history)
 
 
+async def test_pnl_history_one_point_per_batch(db, connector):
+    await _seed_prices(db, connector)
+    account = await _account_with_key(db, connector)
+    await svc.capture_snapshots(db, connector, account)
+    await svc.capture_snapshots(db, connector, account)
+
+    history = await svc.pnl_history(db, account.id)
+    assert len(history) == 2
+    # Only the position's unrealized PnL (200); balances do not contribute.
+    assert all(pnl == Decimal("200") for _, _, pnl in history)
+
+
 async def test_unpriced_asset_has_null_value(db, connector):
     await _seed_prices(db, connector)
     account = await _account_with_key(db, connector)

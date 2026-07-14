@@ -80,6 +80,11 @@ class HistoryPoint(BaseModel):
     total_value: Decimal
 
 
+class PnlPoint(BaseModel):
+    taken_at: datetime
+    pnl: Decimal
+
+
 # -- helpers ------------------------------------------------------------------
 
 async def _account_by_ref(db: AsyncSession, exchange: str, label: str) -> Account:
@@ -162,6 +167,19 @@ async def account_history(
     account = await _account_by_ref(db, exchange, label)
     points = await svc.value_history(db, account.id, limit=limit)
     return [HistoryPoint(taken_at=taken_at, total_value=total) for _, taken_at, total in points]
+
+
+@router.get("/{exchange}/{label}/pnl-history", response_model=list[PnlPoint])
+async def account_pnl_history(
+    exchange: str,
+    label: str,
+    limit: int = Query(default=90, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+):
+    """Total position unrealized PnL over time, one point per capture batch."""
+    account = await _account_by_ref(db, exchange, label)
+    points = await svc.pnl_history(db, account.id, limit=limit)
+    return [PnlPoint(taken_at=taken_at, pnl=pnl) for _, taken_at, pnl in points]
 
 
 @router.post("/{exchange}/{label}/snapshot", response_model=HoldingsOut, status_code=201)
