@@ -3,8 +3,13 @@ from decimal import Decimal
 
 import pytest
 
-from app.connectors.bybit import BybitConnector, normalize_instrument
-from app.connectors.types import MarketType
+from app.connectors.bybit import (
+    BybitConnector,
+    normalize_instrument,
+    normalize_positions,
+    normalize_wallet_balances,
+)
+from app.connectors.types import MarketType, WalletType
 
 SPOT_BTCUSDT = {
     "symbol": "BTCUSDT",
@@ -132,6 +137,93 @@ async def test_reference_prices(connector):
         "BYBIT_SPOT_BTCUSDT": Decimal("62600.5"),
         "BYBIT_PERP_ETHUSDT": Decimal("3301"),
         "BYBIT_CMARGIN_BTCUSD": Decimal("62601"),
+    }
+
+
+# -- balances / positions ----------------------------------------------------
+
+WALLET_COINS = [
+    {"coin": "USDT", "walletBalance": "10000", "locked": "500"},
+    {"coin": "BTC", "walletBalance": "0.25", "locked": "0"},
+    {"coin": "DUST", "walletBalance": "0", "locked": "0"},
+]
+
+LINEAR_POSITIONS = [
+    {
+        "symbol": "ETHUSDT",
+        "side": "Buy",
+        "size": "2",
+        "avgPrice": "3000",
+        "markPrice": "3100",
+        "unrealisedPnl": "200",
+        "positionIM": "600",
+    },
+    {"symbol": "ETHUSDT", "side": "", "size": "0", "avgPrice": "0"},
+]
+INVERSE_POSITIONS = [
+    {
+        "symbol": "BTCUSD",
+        "side": "Sell",
+        "size": "1000",
+        "avgPrice": "60000",
+        "markPrice": "59000",
+        "unrealisedPnl": "5",
+    }
+]
+
+
+def test_normalize_wallet_balances_drops_zero_and_splits_locked():
+    balances = normalize_wallet_balances(WALLET_COINS)
+    assert {b.asset for b in balances} == {"USDT", "BTC"}
+    usdt = next(b for b in balances if b.asset == "USDT")
+    assert usdt.wallet == WalletType.DERIVATIVES
+    assert usdt.locked == Decimal("500")
+    assert usdt.free == Decimal("9500")
+    assert usdt.total == Decimal("10000")
+
+
+def test_normalize_positions_linear_and_inverse():
+    native_map = {
+        (MarketType.PERP, "ETHUSDT"): "BYBIT_PERP_ETHUSDT",
+        (MarketType.CMARGIN, "BTCUSD"): "BYBIT_CMARGIN_BTCUSD",
+    }
+    positions = normalize_positions(LINEAR_POSITIONS + INVERSE_POSITIONS, native_map)
+    assert {p.universal_symbol for p in positions} == {
+        "BYBIT_PERP_ETHUSDT",
+        "BYBIT_CMARGIN_BTCUSD",
+    }
+    eth = next(p for p in positions if p.universal_symbol == "BYBIT_PERP_ETHUSDT")
+    assert eth.side == "long" and eth.size == Decimal("2")
+    btc = next(p for p in positions if p.universal_symbol == "BYBIT_CMARGIN_BTCUSD")
+    assert btc.side == "short"
+
+
+def test_positions_skip_untracked_symbols():
+    assert normalize_positions(LINEAR_POSITIONS, {}) == []
+
+
+async def test_fetch_balances(connector, monkeypatch):
+    async def wallet_coins(cred):
+        return WALLET_COINS
+
+    monkeypatch.setattr(connector, "_fetch_wallet_coins", wallet_coins)
+    balances = await connector.fetch_balances({"api_key": "k", "secret": "s"})
+    assert {b.asset for b in balances} == {"USDT", "BTC"}
+
+
+async def test_fetch_positions(connector, monkeypatch):
+    async def positions(cred, category, settle_coin=None):
+        if category == "linear" and settle_coin == "USDT":
+            return LINEAR_POSITIONS
+        if category == "inverse":
+            return INVERSE_POSITIONS
+        return []
+
+    monkeypatch.setattr(connector, "_fetch_positions", positions)
+    result = await connector.fetch_positions({"api_key": "k", "secret": "s"})
+    assert {p.universal_symbol for p in result} == {
+        "BYBIT_PERP_ETHUSDT",
+        "BYBIT_CMARGIN_BTCUSD",
     }
 
 

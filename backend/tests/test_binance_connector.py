@@ -11,10 +11,13 @@ from app.connectors.binance import (
     BinanceConnector,
     _normalize_pem,
     normalize_cm_instrument,
+    normalize_futures_balances,
+    normalize_positions,
+    normalize_spot_balances,
     normalize_spot_instrument,
     normalize_um_instrument,
 )
-from app.connectors.types import MarketType
+from app.connectors.types import MarketType, WalletType
 
 # A syntactically valid Ed25519 PKCS#8 private key (test-only, not a real key).
 ED25519_BODY = "MC4CAQAwBQYDK2VwBCIEINaP1QKxqnkgM63/wvkTeuRg2MKi4iEbgNW9QxR4vzCI"
@@ -204,4 +207,111 @@ async def test_reference_prices_mapped_to_universal(connector):
         "BINANCE_SPOT_BTCUSDT": Decimal("62598.00"),
         "BINANCE_PERP_ETHUSDT": Decimal("3300.10"),
         "BINANCE_CMARGIN_SOLUSD": Decimal("150.500"),
+    }
+
+
+# -- balances / positions ----------------------------------------------------
+
+SPOT_BALANCES = [
+    {"asset": "BTC", "free": "0.5", "locked": "0.1"},
+    {"asset": "USDT", "free": "1000", "locked": "0"},
+    {"asset": "DUST", "free": "0", "locked": "0"},
+]
+UM_BALANCES = [{"asset": "USDT", "balance": "5000", "availableBalance": "4000"}]
+CM_BALANCES = [{"asset": "BTC", "balance": "0.2", "availableBalance": "0.2"}]
+
+UM_POSITIONS = [
+    {
+        "symbol": "ETHUSDT",
+        "positionAmt": "2",
+        "entryPrice": "3000",
+        "markPrice": "3100",
+        "unRealizedProfit": "200",
+        "isolatedMargin": "600",
+    },
+    {"symbol": "ETHUSDT", "positionAmt": "0", "entryPrice": "0", "markPrice": "3100"},
+]
+CM_POSITIONS = [
+    {
+        "symbol": "SOLUSD_PERP",
+        "positionAmt": "-10",
+        "entryPrice": "150",
+        "markPrice": "148",
+        "unRealizedProfit": "20",
+    }
+]
+
+
+def test_normalize_spot_balances_drops_zero():
+    balances = normalize_spot_balances(SPOT_BALANCES)
+    assert {b.asset for b in balances} == {"BTC", "USDT"}
+    btc = next(b for b in balances if b.asset == "BTC")
+    assert btc.wallet == WalletType.SPOT
+    assert btc.total == Decimal("0.6")
+
+
+def test_normalize_futures_balances_splits_available_and_margin():
+    balances = normalize_futures_balances(UM_BALANCES)
+    assert balances[0].wallet == WalletType.DERIVATIVES
+    assert balances[0].free == Decimal("4000")
+    assert balances[0].locked == Decimal("1000")
+    assert balances[0].total == Decimal("5000")
+
+
+def test_normalize_positions_maps_and_skips_zero():
+    native_map = {(MarketType.PERP, "ETHUSDT"): "BINANCE_PERP_ETHUSDT"}
+    positions = normalize_positions(UM_POSITIONS, MarketType.PERP, native_map)
+    assert len(positions) == 1
+    assert positions[0].universal_symbol == "BINANCE_PERP_ETHUSDT"
+    assert positions[0].side == "long"
+    assert positions[0].size == Decimal("2")
+
+
+def test_normalize_positions_short_side():
+    native_map = {(MarketType.CMARGIN, "SOLUSD_PERP"): "BINANCE_CMARGIN_SOLUSD"}
+    positions = normalize_positions(CM_POSITIONS, MarketType.CMARGIN, native_map)
+    assert positions[0].side == "short"
+    assert positions[0].size == Decimal("10")
+
+
+def test_positions_skip_untracked_symbols():
+    positions = normalize_positions(UM_POSITIONS, MarketType.PERP, {})
+    assert positions == []
+
+
+async def test_fetch_balances_merges_wallets(connector, monkeypatch):
+    async def spot_balances(cred):
+        return SPOT_BALANCES
+
+    async def um_balances(cred):
+        return UM_BALANCES
+
+    async def cm_balances(cred):
+        return CM_BALANCES
+
+    monkeypatch.setattr(connector, "_fetch_spot_balances", spot_balances)
+    monkeypatch.setattr(connector, "_fetch_um_balances", um_balances)
+    monkeypatch.setattr(connector, "_fetch_cm_balances", cm_balances)
+
+    balances = await connector.fetch_balances({"api_key": "k", "secret": "s"})
+    spot = [b for b in balances if b.wallet == WalletType.SPOT]
+    deriv = [b for b in balances if b.wallet == WalletType.DERIVATIVES]
+    assert {b.asset for b in spot} == {"BTC", "USDT"}
+    assert {b.asset for b in deriv} == {"USDT", "BTC"}
+
+
+async def test_fetch_positions_across_surfaces(connector, monkeypatch):
+    async def um_positions(cred):
+        return UM_POSITIONS
+
+    async def cm_positions(cred):
+        return CM_POSITIONS
+
+    monkeypatch.setattr(connector, "_fetch_um_positions", um_positions)
+    monkeypatch.setattr(connector, "_fetch_cm_positions", cm_positions)
+
+    positions = await connector.fetch_positions({"api_key": "k", "secret": "s"})
+    assert {p.universal_symbol for p in positions} == {
+        "BINANCE_PERP_ETHUSDT",
+        "BINANCE_CMARGIN_SOLUSD",
     }

@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.db import dispose_engine, get_session_factory
 from app.core.ratelimit import rate_limiters
 from app.jobs.scheduler import JobDefinition, scheduler
+from app.jobs.snapshots import make_snapshot_job
 from app.jobs.symbols import make_instrument_refresh, make_price_refresh
 
 EXCHANGES = ["BINANCE", "BYBIT"]
@@ -40,6 +41,14 @@ def setup_jobs() -> None:
                 name="symbols.refresh_prices",
                 interval_seconds=300,
                 func=make_price_refresh(exchange),
+                exchange=exchange,
+            )
+        )
+        scheduler.register(
+            JobDefinition(
+                name="snapshots.capture",
+                interval_seconds=3600,
+                func=make_snapshot_job(exchange),
                 exchange=exchange,
             )
         )

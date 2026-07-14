@@ -36,11 +36,14 @@ from app.connectors.errors import credential_error_reason
 from app.connectors.sdk_util import dump_sdk_model
 from app.connectors.symbols import build_universal_symbol
 from app.connectors.types import (
+    Balance,
     CredentialInfo,
     Instrument,
     InstrumentFilters,
     MarketType,
+    Position,
     SubaccountInfo,
+    WalletType,
 )
 from app.core.ratelimit import Priority, TokenBucket
 
@@ -195,6 +198,82 @@ def normalize_cm_instrument(info: dict) -> Instrument | None:
     )
 
 
+def normalize_spot_balances(rows: list[dict]) -> list[Balance]:
+    """Spot get_account balances → normalized SPOT balances (zeros dropped)."""
+    balances: list[Balance] = []
+    for row in rows:
+        free = _dec(row.get("free", 0))
+        locked = _dec(row.get("locked", 0))
+        if free == 0 and locked == 0:
+            continue
+        balances.append(
+            Balance(wallet=WalletType.SPOT, asset=row["asset"], free=free, locked=locked)
+        )
+    return balances
+
+
+def normalize_futures_balances(rows: list[dict]) -> list[Balance]:
+    """USD-M/COIN-M account-balance rows → normalized DERIVATIVES balances.
+
+    ``balance`` is the wallet total; ``availableBalance`` is what is free of
+    margin, so the margin currently posted is the difference.
+    """
+    balances: list[Balance] = []
+    for row in rows:
+        total = _dec(row.get("balance", 0))
+        available = _dec(row.get("availableBalance", row.get("balance", 0)))
+        if total == 0 and available == 0:
+            continue
+        locked = total - available
+        if locked < 0:
+            locked = Decimal("0")
+        balances.append(
+            Balance(
+                wallet=WalletType.DERIVATIVES,
+                asset=row["asset"],
+                free=total - locked,
+                locked=locked,
+            )
+        )
+    return balances
+
+
+def _opt_dec(value) -> Decimal | None:
+    return _dec(value) if value not in (None, "") else None
+
+
+def normalize_positions(
+    rows: list[dict],
+    market_type: MarketType,
+    native_map: dict[tuple[MarketType, str], str],
+) -> list[Position]:
+    """Futures position rows → normalized non-zero positions.
+
+    Symbols not present in the instrument map (e.g. dated-futures positions,
+    which the panel does not track yet) are skipped rather than guessed.
+    """
+    positions: list[Position] = []
+    for row in rows:
+        amount = _dec(row.get("positionAmt", 0))
+        if amount == 0:
+            continue
+        universal = native_map.get((market_type, row.get("symbol", "")))
+        if universal is None:
+            continue
+        positions.append(
+            Position(
+                universal_symbol=universal,
+                side="long" if amount > 0 else "short",
+                size=abs(amount),
+                entry_price=_dec(row.get("entryPrice", 0)),
+                mark_price=_opt_dec(row.get("markPrice")),
+                unrealized_pnl=_opt_dec(row.get("unRealizedProfit")),
+                margin=_opt_dec(row.get("isolatedMargin")),
+            )
+        )
+    return positions
+
+
 class BinanceConnector(ExchangeConnector):
     exchange = "BINANCE"
     # Registration-only for keys. Binance's API cannot mint/rotate/revoke
@@ -207,6 +286,8 @@ class BinanceConnector(ExchangeConnector):
             Capability.INSTRUMENTS,
             Capability.REFERENCE_PRICES,
             Capability.CREDENTIAL_VERIFY,
+            Capability.BALANCES,
+            Capability.POSITIONS,
             Capability.SUBACCOUNT_LIST,
         }
     )
@@ -311,6 +392,56 @@ class BinanceConnector(ExchangeConnector):
             can_withdraw=can_withdraw,
             permissions=restrictions,
         )
+
+    # -- account state ------------------------------------------------------
+
+    async def _fetch_spot_balances(self, credential: Credential) -> list[dict]:
+        spot = Spot(config_rest_api=_auth_config(credential))
+        resp = await self._call(spot.rest_api.get_account, omit_zero_balances=True)
+        return dump_sdk_model(resp.data()).get("balances", [])
+
+    async def _fetch_um_balances(self, credential: Credential) -> list[dict]:
+        um = DerivativesTradingUsdsFutures(config_rest_api=_auth_config(credential))
+        resp = await self._call(um.rest_api.futures_account_balance_v3)
+        data = dump_sdk_model(resp.data())
+        return data if isinstance(data, list) else [data]
+
+    async def _fetch_cm_balances(self, credential: Credential) -> list[dict]:
+        cm = DerivativesTradingCoinFutures(config_rest_api=_auth_config(credential))
+        resp = await self._call(cm.rest_api.futures_account_balance)
+        data = dump_sdk_model(resp.data())
+        return data if isinstance(data, list) else [data]
+
+    async def _fetch_um_positions(self, credential: Credential) -> list[dict]:
+        um = DerivativesTradingUsdsFutures(config_rest_api=_auth_config(credential))
+        resp = await self._call(um.rest_api.position_information_v3)
+        data = dump_sdk_model(resp.data())
+        return data if isinstance(data, list) else [data]
+
+    async def _fetch_cm_positions(self, credential: Credential) -> list[dict]:
+        cm = DerivativesTradingCoinFutures(config_rest_api=_auth_config(credential))
+        resp = await self._call(cm.rest_api.position_information)
+        data = dump_sdk_model(resp.data())
+        return data if isinstance(data, list) else [data]
+
+    async def fetch_balances(self, credential: Credential) -> list[Balance]:
+        return [
+            *normalize_spot_balances(await self._fetch_spot_balances(credential)),
+            *normalize_futures_balances(await self._fetch_um_balances(credential)),
+            *normalize_futures_balances(await self._fetch_cm_balances(credential)),
+        ]
+
+    async def fetch_positions(self, credential: Credential) -> list[Position]:
+        if not self._native_map:
+            await self.fetch_instruments()
+        return [
+            *normalize_positions(
+                await self._fetch_um_positions(credential), MarketType.PERP, self._native_map
+            ),
+            *normalize_positions(
+                await self._fetch_cm_positions(credential), MarketType.CMARGIN, self._native_map
+            ),
+        ]
 
     async def list_subaccounts(self, credential: Credential) -> list[SubaccountInfo]:
         sub = SubAccount(config_rest_api=_auth_config(credential))

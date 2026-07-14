@@ -25,12 +25,15 @@ from app.connectors.errors import credential_error_reason
 from app.connectors.symbols import build_universal_symbol
 from app.connectors.types import (
     ApiKeyResult,
+    Balance,
     CredentialInfo,
     Instrument,
     InstrumentFilters,
     KeyScheme,
     MarketType,
+    Position,
     SubaccountInfo,
+    WalletType,
 )
 from app.core.ratelimit import Priority, TokenBucket
 
@@ -134,6 +137,71 @@ def normalize_instrument(info: dict, market_type: MarketType) -> Instrument | No
     )
 
 
+def _opt_dec(value) -> Decimal | None:
+    return _dec(value) if value not in (None, "") else None
+
+
+def normalize_wallet_balances(coins: list[dict]) -> list[Balance]:
+    """Unified-account coin rows → normalized balances (zeros dropped).
+
+    Bybit's Unified Trading Account holds spot and derivatives collateral
+    together; there is no separate spot/derivatives split over the API, so
+    every coin is reported under the DERIVATIVES wallet. ``walletBalance`` is
+    the coin total and ``locked`` the amount reserved by open orders/margin.
+    """
+    balances: list[Balance] = []
+    for coin in coins:
+        total = _dec(coin.get("walletBalance", 0) or 0)
+        locked = _dec(coin.get("locked", 0) or 0)
+        if total == 0 and locked == 0:
+            continue
+        if locked > total:
+            locked = total
+        balances.append(
+            Balance(
+                wallet=WalletType.DERIVATIVES,
+                asset=coin["coin"],
+                free=total - locked,
+                locked=locked,
+            )
+        )
+    return balances
+
+
+def normalize_positions(
+    rows: list[dict], native_map: dict[tuple[MarketType, str], str]
+) -> list[Position]:
+    """Position rows → normalized non-zero positions.
+
+    A native symbol resolves to exactly one universal symbol across the
+    perpetual categories (linear→PERP, inverse→CMARGIN); symbols the panel
+    does not track are skipped.
+    """
+    positions: list[Position] = []
+    for row in rows:
+        size = _dec(row.get("size", 0) or 0)
+        if size == 0:
+            continue
+        symbol = row.get("symbol", "")
+        universal = native_map.get((MarketType.PERP, symbol)) or native_map.get(
+            (MarketType.CMARGIN, symbol)
+        )
+        if universal is None:
+            continue
+        positions.append(
+            Position(
+                universal_symbol=universal,
+                side="long" if row.get("side") == "Buy" else "short",
+                size=size,
+                entry_price=_dec(row.get("avgPrice", 0) or 0),
+                mark_price=_opt_dec(row.get("markPrice")),
+                unrealized_pnl=_opt_dec(row.get("unrealisedPnl")),
+                margin=_opt_dec(row.get("positionIM")),
+            )
+        )
+    return positions
+
+
 class BybitConnector(ExchangeConnector):
     exchange = "BYBIT"
     # Bybit exposes full self-service account management over API, so the
@@ -144,6 +212,8 @@ class BybitConnector(ExchangeConnector):
             Capability.INSTRUMENTS,
             Capability.REFERENCE_PRICES,
             Capability.CREDENTIAL_VERIFY,
+            Capability.BALANCES,
+            Capability.POSITIONS,
             Capability.SUBACCOUNT_LIST,
             Capability.SUBACCOUNT_CREATE,
             Capability.SUBACCOUNT_FREEZE,
@@ -152,6 +222,10 @@ class BybitConnector(ExchangeConnector):
             Capability.API_KEY_REVOKE,
         }
     )
+
+    # settle coins queried for linear (USDT/USDC) positions; inverse settles
+    # in the base coin, queried with no settle filter.
+    _LINEAR_SETTLE = ("USDT", "USDC")
 
     def __init__(self, bucket: TokenBucket | None = None):
         self._bucket = bucket
@@ -193,6 +267,39 @@ class BybitConnector(ExchangeConnector):
             api_secret=credential["secret"],
             timeout=30,
         )
+
+    # -- account state ------------------------------------------------------
+
+    async def _fetch_wallet_coins(self, credential: Credential) -> list[dict]:
+        session = self._auth_session(credential)
+        response = await self._call(session.get_wallet_balance, accountType="UNIFIED")
+        accounts = response.get("result", {}).get("list", [])
+        coins: list[dict] = []
+        for account in accounts:
+            coins.extend(account.get("coin", []))
+        return coins
+
+    async def _fetch_positions(
+        self, credential: Credential, category: str, settle_coin: str | None = None
+    ) -> list[dict]:
+        session = self._auth_session(credential)
+        kwargs: dict = {"category": category, "limit": 200}
+        if settle_coin:
+            kwargs["settleCoin"] = settle_coin
+        response = await self._call(session.get_positions, **kwargs)
+        return response.get("result", {}).get("list", [])
+
+    async def fetch_balances(self, credential: Credential) -> list[Balance]:
+        return normalize_wallet_balances(await self._fetch_wallet_coins(credential))
+
+    async def fetch_positions(self, credential: Credential) -> list[Position]:
+        if not self._native_map:
+            await self.fetch_instruments()
+        rows: list[dict] = []
+        for settle in self._LINEAR_SETTLE:
+            rows.extend(await self._fetch_positions(credential, "linear", settle))
+        rows.extend(await self._fetch_positions(credential, "inverse"))
+        return normalize_positions(rows, self._native_map)
 
     async def verify_credential(self, credential: Credential) -> CredentialInfo:
         session = self._auth_session(credential)
