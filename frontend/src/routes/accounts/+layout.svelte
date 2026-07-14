@@ -35,6 +35,7 @@
 	<aside class="sidebar">
 		<div class="section-title">Accounts</div>
 		<a class="side-item" class:active={path === '/accounts'} href="/accounts">General</a>
+		<a class="side-item" class:active={path === '/accounts/passphrase'} href="/accounts/passphrase">Passphrase</a>
 
 		<div class="section-title">Exchanges</div>
 		{#each exchanges as ex}
