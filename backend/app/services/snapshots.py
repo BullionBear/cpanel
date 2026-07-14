@@ -133,17 +133,20 @@ async def capture_snapshots(
 
 # -- read paths ---------------------------------------------------------------
 
-# Asset value is spot value + position notional: every snapshot row (balance or
-# position) already carries its ``value_quote`` in the quote asset, so a total
-# is just the sum of both across a batch.
+# Asset value is account equity: spot balance value (holdings valued in the
+# quote asset) plus the unrealized PnL of open positions. Position *notional*
+# is exposure, not value, so it is deliberately not summed here.
 
 
 def holdings_total(balances, positions) -> Decimal:
-    """Total asset value = spot balance value + position notional value."""
+    """Total asset value = spot balance value + position unrealized PnL."""
     total = Decimal("0")
-    for row in (*balances, *positions):
-        if row.value_quote is not None:
-            total += row.value_quote
+    for balance in balances:
+        if balance.value_quote is not None:
+            total += balance.value_quote
+    for position in positions:
+        if position.unrealized_pnl is not None:
+            total += position.unrealized_pnl
     return total
 
 
@@ -194,21 +197,26 @@ async def account_value(
 ) -> tuple[datetime | None, Decimal]:
     """(taken_at, total asset value) of the latest batch.
 
-    Asset value is spot balance value plus position notional value; unpriced
-    rows contribute nothing.
+    Asset value is spot balance value plus position unrealized PnL; unpriced
+    balances and PnL-less positions contribute nothing.
     """
     batch = await latest_batch(db, account_id)
     if batch is None:
         return None, Decimal("0")
     batch_id, taken_at = batch
     total = Decimal("0")
-    for model in (BalanceSnapshot, PositionSnapshot):
-        result = await db.execute(
-            select(model.value_quote).where(model.batch_id == batch_id)
-        )
-        for value in result.scalars():
-            if value is not None:
-                total += value
+    balances = await db.execute(
+        select(BalanceSnapshot.value_quote).where(BalanceSnapshot.batch_id == batch_id)
+    )
+    for value in balances.scalars():
+        if value is not None:
+            total += value
+    positions = await db.execute(
+        select(PositionSnapshot.unrealized_pnl).where(PositionSnapshot.batch_id == batch_id)
+    )
+    for pnl in positions.scalars():
+        if pnl is not None:
+            total += pnl
     return taken_at, total
 
 
@@ -217,21 +225,33 @@ async def value_history(
 ) -> list[tuple[str, datetime, Decimal]]:
     """Per-batch total asset value in the quote asset, most recent first.
 
-    One point per capture batch: the summed ``value_quote`` of that batch's
-    balances *and* positions (spot value + position notional). Unpriced rows
-    contribute nothing.
+    One point per capture batch: that batch's spot balance value plus its
+    positions' unrealized PnL. Unpriced rows contribute nothing.
     """
     totals: dict[str, tuple[datetime, Decimal]] = {}
-    for model in (BalanceSnapshot, PositionSnapshot):
-        result = await db.execute(
-            select(model.batch_id, model.taken_at, model.value_quote).where(
-                model.account_id == account_id
-            )
-        )
-        for batch_id, taken_at, value in result:
-            prev = totals.get(batch_id)
-            running = (prev[1] if prev else Decimal("0")) + (value or Decimal("0"))
-            totals[batch_id] = (taken_at, running)
+
+    def _add(batch_id: str, taken_at: datetime, amount: Decimal | None) -> None:
+        prev = totals.get(batch_id)
+        running = (prev[1] if prev else Decimal("0")) + (amount or Decimal("0"))
+        totals[batch_id] = (taken_at, running)
+
+    balances = await db.execute(
+        select(
+            BalanceSnapshot.batch_id, BalanceSnapshot.taken_at, BalanceSnapshot.value_quote
+        ).where(BalanceSnapshot.account_id == account_id)
+    )
+    for batch_id, taken_at, value in balances:
+        _add(batch_id, taken_at, value)
+    positions = await db.execute(
+        select(
+            PositionSnapshot.batch_id,
+            PositionSnapshot.taken_at,
+            PositionSnapshot.unrealized_pnl,
+        ).where(PositionSnapshot.account_id == account_id)
+    )
+    for batch_id, taken_at, pnl in positions:
+        _add(batch_id, taken_at, pnl)
+
     points = [
         (batch_id, taken_at, total) for batch_id, (taken_at, total) in totals.items()
     ]

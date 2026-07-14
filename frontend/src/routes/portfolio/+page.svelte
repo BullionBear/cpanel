@@ -30,24 +30,21 @@
 		return acc;
 	}, {});
 
-	// Composition slices for the pie: spot balances (aggregated per asset) plus
-	// each position's notional value. Asset value = spot value + position notional.
+	// Pie shows the spot allocation by asset. Derivatives-wallet balances (and
+	// positions, whose PnL can be negative and does not map to a pie slice) are
+	// excluded; they are surfaced via the Positions table instead.
 	$: pieSlices = holdings ? buildSlices(holdings) : [];
 	$: historyPoints = buildPoints(history);
 
 	function buildSlices(h: Holdings): Slice[] {
 		const byAsset: Record<string, number> = {};
 		for (const b of h.balances) {
+			if (b.wallet === 'DERIVATIVES') continue;
 			const v = Number(b.value_quote);
 			if (b.value_quote !== null && Number.isFinite(v) && v > 0)
 				byAsset[b.asset] = (byAsset[b.asset] ?? 0) + v;
 		}
 		const items: Slice[] = Object.entries(byAsset).map(([asset, v]) => ({ label: asset, value: v }));
-		for (const p of h.positions) {
-			const v = Number(p.value_quote);
-			if (p.value_quote !== null && Number.isFinite(v) && v > 0)
-				items.push({ label: p.universal_symbol, value: v });
-		}
 		items.sort((a, b) => b.value - a.value);
 		const TOP = 8;
 		if (items.length <= TOP + 1) return items;
@@ -205,8 +202,8 @@
 					{:else}
 						<div class="charts">
 							<div class="chart-card">
-								<h3>Composition</h3>
-								<PieChart slices={pieSlices} unit={holdings.quote_asset} />
+							<h3>Spot allocation</h3>
+							<PieChart slices={pieSlices} unit={holdings.quote_asset} />
 							</div>
 							<div class="chart-card">
 								<h3>Asset value history</h3>
