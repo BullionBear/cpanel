@@ -49,14 +49,19 @@ export interface HistoryPoint {
 	total_value: string;
 }
 
+// Accounts are addressed by their natural key (exchange + nickname).
+const enc = encodeURIComponent;
+const portfolioPath = (exchange: string, label: string) =>
+	`/portfolio/${enc(exchange)}/${enc(label)}`;
+
 export const fetchOverview = () => apiGet<OverviewItem[]>('/portfolio');
 
-export const fetchHoldings = (accountId: number) =>
-	apiGet<Holdings>(`/portfolio/${accountId}`);
+export const fetchHoldings = (exchange: string, label: string) =>
+	apiGet<Holdings>(portfolioPath(exchange, label));
 
-export const fetchHistory = (accountId: number) =>
-	apiGet<HistoryPoint[]>(`/portfolio/${accountId}/history`);
+export const fetchHistory = (exchange: string, label: string) =>
+	apiGet<HistoryPoint[]>(`${portfolioPath(exchange, label)}/history`);
 
 /** Capture a fresh snapshot for one account on demand. */
-export const triggerSnapshot = (accountId: number) =>
-	apiPost<Holdings>(`/portfolio/${accountId}/snapshot`);
+export const triggerSnapshot = (exchange: string, label: string) =>
+	apiPost<Holdings>(`${portfolioPath(exchange, label)}/snapshot`);

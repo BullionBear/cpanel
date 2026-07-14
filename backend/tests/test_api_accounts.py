@@ -43,9 +43,9 @@ async def create_main(client) -> dict:
     return response.json()
 
 
-async def add_key(client, account_id: int) -> dict:
+async def add_key(client, account: dict) -> dict:
     response = await client.post(
-        f"/accounts/{account_id}/credentials",
+        f"/accounts/{account['exchange']}/{account['label']}/credentials",
         json={"scheme": "HMAC", "api_key": "k" * 16, "secret": "s" * 16},
     )
     assert response.status_code == 201
@@ -67,7 +67,7 @@ async def test_create_account_unknown_exchange(client):
 
 async def test_register_and_tree(client):
     main = await create_main(client)
-    credential = await add_key(client, main["id"])
+    credential = await add_key(client, main)
     assert credential["status"] == "active"
     assert "secret" not in credential  # never echoed back
 
@@ -81,7 +81,7 @@ async def test_register_and_tree(client):
 async def test_bad_credential_rejected(client):
     main = await create_main(client)
     response = await client.post(
-        f"/accounts/{main['id']}/credentials",
+        f"/accounts/{main['exchange']}/{main['label']}/credentials",
         json={"scheme": "HMAC", "api_key": "k" * 16, "secret": "wrong-pad"},
     )
     assert response.status_code == 400
@@ -96,30 +96,28 @@ async def test_exchange_capabilities(client):
 
 async def test_subaccount_create_and_sync(client, fake):
     main = await create_main(client)
-    await add_key(client, main["id"])
+    await add_key(client, main)
+    base = f"/accounts/{main['exchange']}/{main['label']}"
 
-    response = await client.post(
-        f"/accounts/{main['id']}/subaccounts", json={"label": "alpha"}
-    )
+    response = await client.post(f"{base}/subaccounts", json={"label": "alpha"})
     assert response.status_code == 201
     assert response.json()["account_type"] == "sub"
 
     # A subaccount created directly on the venue appears after sync
     await fake.create_subaccount({}, "beta")
-    synced = (await client.post(f"/accounts/{main['id']}/subaccounts/sync")).json()
+    synced = (await client.post(f"{base}/subaccounts/sync")).json()
     assert {s["label"] for s in synced} == {"alpha", "beta"}
 
 
 async def test_sub_api_key_returns_secret_once(client):
     main = await create_main(client)
-    await add_key(client, main["id"])
-    sub = (
-        await client.post(f"/accounts/{main['id']}/subaccounts", json={"label": "gamma"})
-    ).json()
+    await add_key(client, main)
+    base = f"/accounts/{main['exchange']}/{main['label']}"
+    sub = (await client.post(f"{base}/subaccounts", json={"label": "gamma"})).json()
 
     response = await client.post(
-        f"/accounts/{main['id']}/api-keys",
-        json={"sub_account_id": sub["id"], "permissions": ["read", "trade"]},
+        f"{base}/api-keys",
+        json={"sub_label": sub["label"], "permissions": ["read", "trade"]},
     )
     assert response.status_code == 201
     body = response.json()
@@ -134,9 +132,10 @@ async def test_sub_api_key_returns_secret_once(client):
 
 async def test_revoke_credential_removes_it(client, fake):
     main = await create_main(client)
-    credential = await add_key(client, main["id"])
+    credential = await add_key(client, main)
     response = await client.post(
-        f"/accounts/{main['id']}/credentials/{credential['id']}/revoke"
+        f"/accounts/{main['exchange']}/{main['label']}"
+        f"/credentials/{credential['api_key']}/revoke"
     )
     assert response.status_code == 204
 
@@ -146,17 +145,16 @@ async def test_revoke_credential_removes_it(client, fake):
 
 async def test_delete_credential(client):
     main = await create_main(client)
-    credential = await add_key(client, main["id"])
-    response = await client.delete(
-        f"/accounts/{main['id']}/credentials/{credential['id']}"
-    )
+    credential = await add_key(client, main)
+    base = f"/accounts/{main['exchange']}/{main['label']}"
+    response = await client.delete(f"{base}/credentials/{credential['api_key']}")
     assert response.status_code == 204
 
     tree = (await client.get("/accounts/tree")).json()
     assert tree[0]["credentials"] == []
 
     # Deleting a missing credential is a 404
-    missing = await client.delete(f"/accounts/{main['id']}/credentials/999999")
+    missing = await client.delete(f"{base}/credentials/does-not-exist")
     assert missing.status_code == 404
 
 
@@ -194,7 +192,9 @@ async def test_register_rejects_bad_key(client):
 
 async def test_rename_account(client):
     main = await create_main(client)
-    response = await client.patch(f"/accounts/{main['id']}", json={"label": "renamed"})
+    response = await client.patch(
+        f"/accounts/{main['exchange']}/{main['label']}", json={"label": "renamed"}
+    )
     assert response.status_code == 200
     assert response.json()["label"] == "renamed"
 
@@ -207,16 +207,19 @@ async def test_rename_duplicate_rejected(client):
     await client.post(
         "/accounts", json={"exchange": "FAKE", "label": "other", "account_type": "main"}
     )
-    response = await client.patch(f"/accounts/{a['id']}", json={"label": "other"})
+    response = await client.patch(
+        f"/accounts/{a['exchange']}/{a['label']}", json={"label": "other"}
+    )
     assert response.status_code == 400
 
 
 async def test_reveal_secret_is_audited(client, session_factory):
     main = await create_main(client)
-    cred = await add_key(client, main["id"])
+    cred = await add_key(client, main)
 
     response = await client.post(
-        f"/accounts/{main['id']}/credentials/{cred['id']}/reveal"
+        f"/accounts/{main['exchange']}/{main['label']}"
+        f"/credentials/{cred['api_key']}/reveal"
     )
     assert response.status_code == 200
     assert response.json()["secret"] == "s" * 16
@@ -232,9 +235,10 @@ async def test_reveal_secret_is_audited(client, session_factory):
 
 async def test_update_tags(client):
     main = await create_main(client)
-    cred = await add_key(client, main["id"])
+    cred = await add_key(client, main)
     response = await client.put(
-        f"/accounts/{main['id']}/credentials/{cred['id']}/tags",
+        f"/accounts/{main['exchange']}/{main['label']}"
+        f"/credentials/{cred['api_key']}/tags",
         json={"tags": ["read-only", "eu"]},
     )
     assert response.status_code == 200
@@ -243,20 +247,19 @@ async def test_update_tags(client):
 
 async def test_modify_sub_key(client, fake):
     main = await create_main(client)
-    await add_key(client, main["id"])
-    sub = (
-        await client.post(f"/accounts/{main['id']}/subaccounts", json={"label": "s1"})
-    ).json()
+    await add_key(client, main)
+    base = f"/accounts/{main['exchange']}/{main['label']}"
+    sub = (await client.post(f"{base}/subaccounts", json={"label": "s1"})).json()
     created = (
         await client.post(
-            f"/accounts/{main['id']}/api-keys",
-            json={"sub_account_id": sub["id"], "permissions": ["read", "trade"]},
+            f"{base}/api-keys",
+            json={"sub_label": sub["label"], "permissions": ["read", "trade"]},
         )
     ).json()
-    cred_id = created["credential"]["id"]
+    cred_key = created["credential"]["api_key"]
 
     response = await client.post(
-        f"/accounts/{sub['id']}/credentials/{cred_id}/modify",
+        f"/accounts/{sub['exchange']}/{sub['label']}/credentials/{cred_key}/modify",
         json={"read_only": True, "permissions": ["read"]},
     )
     assert response.status_code == 200
@@ -266,13 +269,12 @@ async def test_modify_sub_key(client, fake):
 
 async def test_freeze_subaccount(client, fake):
     main = await create_main(client)
-    await add_key(client, main["id"])
-    sub = (
-        await client.post(f"/accounts/{main['id']}/subaccounts", json={"label": "s2"})
-    ).json()
+    await add_key(client, main)
+    base = f"/accounts/{main['exchange']}/{main['label']}"
+    sub = (await client.post(f"{base}/subaccounts", json={"label": "s2"})).json()
 
     response = await client.post(
-        f"/accounts/{main['id']}/subaccounts/{sub['id']}/freeze", json={"frozen": True}
+        f"{base}/subaccounts/{sub['label']}/freeze", json={"frozen": True}
     )
     assert response.status_code == 200
     assert response.json()["status"] == "frozen"
@@ -294,7 +296,7 @@ async def test_capabilities_include_new_flags(client):
 
 async def test_actions_are_audited(client, session_factory):
     main = await create_main(client)
-    await add_key(client, main["id"])
+    await add_key(client, main)
 
     async with session_factory() as session:
         actions = {

@@ -82,8 +82,14 @@ class HistoryPoint(BaseModel):
 
 # -- helpers ------------------------------------------------------------------
 
-async def _get_account(db: AsyncSession, account_id: int) -> Account:
-    account = await db.get(Account, account_id)
+async def _account_by_ref(db: AsyncSession, exchange: str, label: str) -> Account:
+    """Resolve an account by its natural key (exchange + nickname)."""
+    result = await db.execute(
+        select(Account).where(
+            Account.exchange == exchange.upper(), Account.label == label
+        )
+    )
+    account = result.scalars().first()
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
     return account
@@ -126,11 +132,13 @@ async def portfolio_overview(db: AsyncSession = Depends(get_db)):
     return items
 
 
-@router.get("/{account_id}", response_model=HoldingsOut)
-async def account_holdings(account_id: int, db: AsyncSession = Depends(get_db)):
+@router.get("/{exchange}/{label}", response_model=HoldingsOut)
+async def account_holdings(
+    exchange: str, label: str, db: AsyncSession = Depends(get_db)
+):
     """Current holdings (balances + positions) from the latest batch."""
-    account = await _get_account(db, account_id)
-    balances, positions, taken_at = await svc.get_holdings(db, account_id)
+    account = await _account_by_ref(db, exchange, label)
+    balances, positions, taken_at = await svc.get_holdings(db, account.id)
     total = sum((b.value_quote for b in balances if b.value_quote is not None), Decimal("0"))
     return HoldingsOut(
         account_id=account.id,
@@ -144,26 +152,28 @@ async def account_holdings(account_id: int, db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.get("/{account_id}/history", response_model=list[HistoryPoint])
+@router.get("/{exchange}/{label}/history", response_model=list[HistoryPoint])
 async def account_history(
-    account_id: int,
+    exchange: str,
+    label: str,
     limit: int = Query(default=90, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
 ):
     """Total portfolio value over time, one point per capture batch."""
-    await _get_account(db, account_id)
-    points = await svc.balance_history(db, account_id, limit=limit)
+    account = await _account_by_ref(db, exchange, label)
+    points = await svc.balance_history(db, account.id, limit=limit)
     return [HistoryPoint(taken_at=taken_at, total_value=total) for _, taken_at, total in points]
 
 
-@router.post("/{account_id}/snapshot", response_model=HoldingsOut, status_code=201)
+@router.post("/{exchange}/{label}/snapshot", response_model=HoldingsOut, status_code=201)
 async def trigger_snapshot(
-    account_id: int,
+    exchange: str,
+    label: str,
     actor: Actor = Depends(current_actor),
     db: AsyncSession = Depends(get_db),
 ):
     """Capture a fresh snapshot for one account on demand."""
-    account = await _get_account(db, account_id)
+    account = await _account_by_ref(db, exchange, label)
     connector = _get_connector(account.exchange)
     if not (
         connector.supports(Capability.BALANCES)
@@ -182,7 +192,7 @@ async def trigger_snapshot(
         except svc.AccountError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         entry.params = {"rows": written}
-    balances, positions, taken_at = await svc.get_holdings(db, account_id)
+    balances, positions, taken_at = await svc.get_holdings(db, account.id)
     total = sum((b.value_quote for b in balances if b.value_quote is not None), Decimal("0"))
     return HoldingsOut(
         account_id=account.id,

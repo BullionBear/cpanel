@@ -66,15 +66,15 @@
 		}
 	}
 
-	async function select(accountId: number) {
-		selected = accountId;
+	async function select(item: OverviewItem) {
+		selected = item.account_id;
 		detailLoading = true;
 		holdings = null;
 		history = [];
 		try {
 			[holdings, history] = await Promise.all([
-				fetchHoldings(accountId),
-				fetchHistory(accountId)
+				fetchHoldings(item.exchange, item.label),
+				fetchHistory(item.exchange, item.label)
 			]);
 		} catch {
 			error = 'Failed to load account holdings.';
@@ -85,10 +85,12 @@
 
 	async function snapshotNow() {
 		if (selected === null) return;
+		const item = overview.find((o) => o.account_id === selected);
+		if (!item) return;
 		snapshotting = true;
 		try {
-			holdings = await triggerSnapshot(selected);
-			history = await fetchHistory(selected);
+			holdings = await triggerSnapshot(item.exchange, item.label);
+			history = await fetchHistory(item.exchange, item.label);
 			await loadOverview();
 		} catch (e) {
 			error =
@@ -130,7 +132,7 @@
 								class="acct"
 								class:active={selected === item.account_id}
 								class:sub={item.account_type === 'sub'}
-								on:click={() => select(item.account_id)}
+								on:click={() => select(item)}
 							>
 								<span class="acct-label">{item.label}</span>
 								<span class="acct-val">{money(item.total_value)}</span>

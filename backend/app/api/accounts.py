@@ -117,7 +117,7 @@ class SubaccountCreate(BaseModel):
 
 
 class SubKeyCreate(BaseModel):
-    sub_account_id: int
+    sub_label: str
     # Panel-level permission scope tokens (e.g. spot, derivatives, wallet).
     permissions: list[str] = ["derivatives"]
     read_only: bool = False
@@ -152,7 +152,40 @@ class SecretOut(BaseModel):
 
 # -- helpers ----------------------------------------------------------------
 
-async def _get_account(db: AsyncSession, account_id: int) -> Account:
+async def _account_by_ref(db: AsyncSession, exchange: str, label: str) -> Account:
+    """Resolve an account by its natural key (exchange + nickname)."""
+    result = await db.execute(
+        select(Account)
+        .where(Account.exchange == exchange.upper(), Account.label == label)
+        .options(selectinload(Account.credentials))
+    )
+    account = result.scalars().first()
+    if account is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return account
+
+
+async def _subaccount_by_ref(db: AsyncSession, parent: Account, sub_label: str) -> Account:
+    result = await db.execute(
+        select(Account)
+        .where(Account.parent_id == parent.id, Account.label == sub_label)
+        .options(selectinload(Account.credentials))
+    )
+    sub = result.scalars().first()
+    if sub is None:
+        raise HTTPException(status_code=404, detail="Subaccount not found")
+    return sub
+
+
+def _credential_by_key(account: Account, api_key: str) -> ApiCredential:
+    for credential in account.credentials:
+        if credential.api_key == api_key:
+            return credential
+    raise HTTPException(status_code=404, detail="Credential not found")
+
+
+async def _load_account(db: AsyncSession, account_id: int) -> Account:
+    """Reload an account with fresh credentials for building a response."""
     account = await db.get(
         Account,
         account_id,
@@ -230,18 +263,19 @@ async def create_account(
             )
         except svc.AccountError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-    return AccountOut.model_validate(await _get_account(db, account.id))
+    return AccountOut.model_validate(await _load_account(db, account.id))
 
 
-@router.patch("/{account_id}", response_model=AccountOut)
+@router.patch("/{exchange}/{label}", response_model=AccountOut)
 async def rename_account(
-    account_id: int,
+    exchange: str,
+    label: str,
     body: AccountRename,
     actor: Actor = Depends(current_actor),
     db: AsyncSession = Depends(get_db),
 ):
     """Change an account's nickname."""
-    account = await _get_account(db, account_id)
+    account = await _account_by_ref(db, exchange, label)
     async with audit(
         db, actor, "accounts.rename",
         target=f"{account.exchange}:{account.label}",
@@ -251,7 +285,7 @@ async def rename_account(
             await svc.rename_account(db, account, body.label)
         except svc.AccountError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-    return AccountOut.model_validate(await _get_account(db, account.id))
+    return AccountOut.model_validate(await _load_account(db, account.id))
 
 
 @router.post("/register", response_model=AccountOut, status_code=201)
@@ -264,7 +298,7 @@ async def register_account(
     connector = _get_connector(body.exchange)
     _require(connector, Capability.CREDENTIAL_VERIFY)
     if body.parent_id is not None:
-        parent = await _get_account(db, body.parent_id)
+        parent = await _load_account(db, body.parent_id)
         if parent.exchange.upper() != body.exchange.upper():
             raise HTTPException(status_code=400, detail="Parent belongs to a different exchange")
     async with audit(
@@ -282,17 +316,18 @@ async def register_account(
             raise HTTPException(status_code=400, detail=str(exc))
         except svc.AccountError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-    return AccountOut.model_validate(await _get_account(db, account.id))
+    return AccountOut.model_validate(await _load_account(db, account.id))
 
 
-@router.post("/{account_id}/credentials", response_model=CredentialOut, status_code=201)
+@router.post("/{exchange}/{label}/credentials", response_model=CredentialOut, status_code=201)
 async def add_credential(
-    account_id: int,
+    exchange: str,
+    label: str,
     body: CredentialCreate,
     actor: Actor = Depends(current_actor),
     db: AsyncSession = Depends(get_db),
 ):
-    account = await _get_account(db, account_id)
+    account = await _account_by_ref(db, exchange, label)
     connector = _get_connector(account.exchange)
     _require(connector, Capability.CREDENTIAL_VERIFY)
     async with audit(
@@ -311,19 +346,18 @@ async def add_credential(
 
 
 @router.post(
-    "/{account_id}/credentials/{credential_id}/reveal", response_model=SecretOut
+    "/{exchange}/{label}/credentials/{api_key}/reveal", response_model=SecretOut
 )
 async def reveal_credential_secret(
-    account_id: int,
-    credential_id: int,
+    exchange: str,
+    label: str,
+    api_key: str,
     actor: Actor = Depends(current_actor),
     db: AsyncSession = Depends(get_db),
 ):
     """Decrypt and return a stored secret. Every reveal is audited."""
-    account = await _get_account(db, account_id)
-    credential = await db.get(ApiCredential, credential_id)
-    if credential is None or credential.account_id != account.id:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    account = await _account_by_ref(db, exchange, label)
+    credential = _credential_by_key(account, api_key)
     async with audit(
         db, actor, "accounts.reveal_secret",
         target=f"{account.exchange}:{account.label}",
@@ -334,19 +368,18 @@ async def reveal_credential_secret(
 
 
 @router.put(
-    "/{account_id}/credentials/{credential_id}/tags", response_model=CredentialOut
+    "/{exchange}/{label}/credentials/{api_key}/tags", response_model=CredentialOut
 )
 async def update_credential_tags(
-    account_id: int,
-    credential_id: int,
+    exchange: str,
+    label: str,
+    api_key: str,
     body: TagsUpdate,
     actor: Actor = Depends(current_actor),
     db: AsyncSession = Depends(get_db),
 ):
-    account = await _get_account(db, account_id)
-    credential = await db.get(ApiCredential, credential_id)
-    if credential is None or credential.account_id != account.id:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    account = await _account_by_ref(db, exchange, label)
+    credential = _credential_by_key(account, api_key)
     async with audit(
         db, actor, "accounts.set_tags",
         target=f"{account.exchange}:{account.label}",
@@ -357,25 +390,24 @@ async def update_credential_tags(
 
 
 @router.post(
-    "/{account_id}/credentials/{credential_id}/modify", response_model=CredentialOut
+    "/{exchange}/{label}/credentials/{api_key}/modify", response_model=CredentialOut
 )
 async def modify_credential(
-    account_id: int,
-    credential_id: int,
+    exchange: str,
+    label: str,
+    api_key: str,
     body: KeyModify,
     actor: Actor = Depends(current_actor),
     db: AsyncSession = Depends(get_db),
 ):
     """Change a subaccount key's permissions / read-only flag on the venue."""
-    account = await _get_account(db, account_id)  # the subaccount
-    credential = await db.get(ApiCredential, credential_id)
-    if credential is None or credential.account_id != account.id:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    account = await _account_by_ref(db, exchange, label)  # the subaccount
+    credential = _credential_by_key(account, api_key)
     connector = _get_connector(account.exchange)
     _require(connector, Capability.API_KEY_MODIFY)
     if account.parent_id is None:
         raise HTTPException(status_code=400, detail="Only subaccount keys can be modified")
-    main_account = await _get_account(db, account.parent_id)
+    main_account = await _load_account(db, account.parent_id)
     async with audit(
         db, actor, "accounts.modify_api_key",
         target=f"{account.exchange}:{account.label}",
@@ -391,17 +423,16 @@ async def modify_credential(
     return CredentialOut.model_validate(credential)
 
 
-@router.post("/{account_id}/credentials/{credential_id}/revoke", status_code=204)
+@router.post("/{exchange}/{label}/credentials/{api_key}/revoke", status_code=204)
 async def revoke_credential(
-    account_id: int,
-    credential_id: int,
+    exchange: str,
+    label: str,
+    api_key: str,
     actor: Actor = Depends(current_actor),
     db: AsyncSession = Depends(get_db),
 ):
-    account = await _get_account(db, account_id)
-    credential = await db.get(ApiCredential, credential_id)
-    if credential is None or credential.account_id != account.id:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    account = await _account_by_ref(db, exchange, label)
+    credential = _credential_by_key(account, api_key)
     connector = _get_connector(account.exchange)
     main_account = (
         await db.get(Account, account.parent_id) if account.parent_id else None
@@ -414,18 +445,17 @@ async def revoke_credential(
         await svc.revoke_credential(db, connector, credential, main_account=main_account)
 
 
-@router.delete("/{account_id}/credentials/{credential_id}", status_code=204)
+@router.delete("/{exchange}/{label}/credentials/{api_key}", status_code=204)
 async def delete_credential(
-    account_id: int,
-    credential_id: int,
+    exchange: str,
+    label: str,
+    api_key: str,
     actor: Actor = Depends(current_actor),
     db: AsyncSession = Depends(get_db),
 ):
     """Remove a stored credential from the panel (no venue call)."""
-    account = await _get_account(db, account_id)
-    credential = await db.get(ApiCredential, credential_id)
-    if credential is None or credential.account_id != account.id:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    account = await _account_by_ref(db, exchange, label)
+    credential = _credential_by_key(account, api_key)
     async with audit(
         db, actor, "accounts.delete_credential",
         target=f"{account.exchange}:{account.label}",
@@ -436,13 +466,14 @@ async def delete_credential(
 
 # -- venue-side operations (capability-gated) ---------------------------------
 
-@router.post("/{account_id}/subaccounts/sync", response_model=list[AccountOut])
+@router.post("/{exchange}/{label}/subaccounts/sync", response_model=list[AccountOut])
 async def sync_subaccounts(
-    account_id: int,
+    exchange: str,
+    label: str,
     actor: Actor = Depends(current_actor),
     db: AsyncSession = Depends(get_db),
 ):
-    account = await _get_account(db, account_id)
+    account = await _account_by_ref(db, exchange, label)
     connector = _get_connector(account.exchange)
     _require(connector, Capability.SUBACCOUNT_LIST)
     async with audit(
@@ -456,7 +487,7 @@ async def sync_subaccounts(
         entry.params = {"created": created, "removed": removed}
     result = await db.execute(
         select(Account)
-        .where(Account.parent_id == account_id, Account.status != "removed")
+        .where(Account.parent_id == account.id, Account.status != "removed")
         .options(selectinload(Account.credentials))
         .order_by(Account.label)
     )
@@ -464,21 +495,20 @@ async def sync_subaccounts(
 
 
 @router.post(
-    "/{account_id}/subaccounts/{sub_id}/freeze", response_model=AccountOut
+    "/{exchange}/{label}/subaccounts/{sub_label}/freeze", response_model=AccountOut
 )
 async def freeze_subaccount(
-    account_id: int,
-    sub_id: int,
+    exchange: str,
+    label: str,
+    sub_label: str,
     body: FreezeUpdate,
     actor: Actor = Depends(current_actor),
     db: AsyncSession = Depends(get_db),
 ):
-    account = await _get_account(db, account_id)
+    account = await _account_by_ref(db, exchange, label)
     connector = _get_connector(account.exchange)
     _require(connector, Capability.SUBACCOUNT_FREEZE)
-    sub = await _get_account(db, sub_id)
-    if sub.parent_id != account.id:
-        raise HTTPException(status_code=400, detail="Subaccount does not belong to this account")
+    sub = await _subaccount_by_ref(db, account, sub_label)
     async with audit(
         db, actor, "accounts.freeze_subaccount",
         target=f"{account.exchange}:{sub.label}",
@@ -488,17 +518,18 @@ async def freeze_subaccount(
             sub = await svc.set_subaccount_frozen(db, connector, account, sub, body.frozen)
         except svc.AccountError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-    return AccountOut.model_validate(await _get_account(db, sub.id))
+    return AccountOut.model_validate(await _load_account(db, sub.id))
 
 
-@router.post("/{account_id}/subaccounts", response_model=AccountOut, status_code=201)
+@router.post("/{exchange}/{label}/subaccounts", response_model=AccountOut, status_code=201)
 async def create_subaccount(
-    account_id: int,
+    exchange: str,
+    label: str,
     body: SubaccountCreate,
     actor: Actor = Depends(current_actor),
     db: AsyncSession = Depends(get_db),
 ):
-    account = await _get_account(db, account_id)
+    account = await _account_by_ref(db, exchange, label)
     connector = _get_connector(account.exchange)
     _require(connector, Capability.SUBACCOUNT_CREATE)
     async with audit(
@@ -510,22 +541,21 @@ async def create_subaccount(
             sub = await svc.create_subaccount(db, connector, account, body.label)
         except svc.AccountError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-    return AccountOut.model_validate(await _get_account(db, sub.id))
+    return AccountOut.model_validate(await _load_account(db, sub.id))
 
 
-@router.post("/{account_id}/api-keys", response_model=SubKeyCreated, status_code=201)
+@router.post("/{exchange}/{label}/api-keys", response_model=SubKeyCreated, status_code=201)
 async def create_sub_api_key(
-    account_id: int,
+    exchange: str,
+    label: str,
     body: SubKeyCreate,
     actor: Actor = Depends(current_actor),
     db: AsyncSession = Depends(get_db),
 ):
-    account = await _get_account(db, account_id)
+    account = await _account_by_ref(db, exchange, label)
     connector = _get_connector(account.exchange)
     _require(connector, Capability.API_KEY_CREATE)
-    sub = await _get_account(db, body.sub_account_id)
-    if sub.parent_id != account.id:
-        raise HTTPException(status_code=400, detail="Subaccount does not belong to this account")
+    sub = await _subaccount_by_ref(db, account, body.sub_label)
     async with audit(
         db, actor, "accounts.create_api_key",
         target=f"{account.exchange}:{sub.label}",

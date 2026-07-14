@@ -46,7 +46,7 @@ async def client(session_factory):
         await refresh_prices(db, connector)
         account = await accounts_svc.register_account(db, "FAKE", "main", "main")
         await accounts_svc.add_credential(db, connector, account, "HMAC", "api-key-1", "secret-1")
-        account_id = account.id
+        base = f"/portfolio/{account.exchange}/{account.label}"
 
     async def override_db():
         async with session_factory() as session:
@@ -56,7 +56,7 @@ async def client(session_factory):
     app.dependency_overrides[current_actor] = lambda: Actor(type="user", id="42", name="t")
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
-        c.account_id = account_id  # type: ignore[attr-defined]
+        c.base = base  # type: ignore[attr-defined]
         c.session_factory = session_factory  # type: ignore[attr-defined]
         yield c
     app.dependency_overrides.clear()
@@ -82,7 +82,7 @@ async def test_overview_empty_before_snapshot(client):
 
 
 async def test_trigger_snapshot_then_holdings(client):
-    resp = await client.post(f"/portfolio/{client.account_id}/snapshot")
+    resp = await client.post(f"{client.base}/snapshot")
     assert resp.status_code == 201
     body = resp.json()
     assert Decimal(body["total_value"]) == Decimal("40000")
@@ -96,12 +96,12 @@ async def test_trigger_snapshot_then_holdings(client):
     assert overview[0]["taken_at"] is not None
 
     # Holdings endpoint returns the same latest batch.
-    holdings = (await client.get(f"/portfolio/{client.account_id}")).json()
+    holdings = (await client.get(client.base)).json()
     assert Decimal(holdings["total_value"]) == Decimal("40000")
 
 
 async def test_snapshot_is_audited(client):
-    await client.post(f"/portfolio/{client.account_id}/snapshot")
+    await client.post(f"{client.base}/snapshot")
     async with client.session_factory() as db:
         rows = (await db.execute(select(AuditLog).where(AuditLog.action == "snapshots.capture"))).scalars().all()
     assert len(rows) == 1
@@ -110,12 +110,12 @@ async def test_snapshot_is_audited(client):
 
 
 async def test_history_after_two_snapshots(client):
-    await client.post(f"/portfolio/{client.account_id}/snapshot")
-    await client.post(f"/portfolio/{client.account_id}/snapshot")
-    history = (await client.get(f"/portfolio/{client.account_id}/history")).json()
+    await client.post(f"{client.base}/snapshot")
+    await client.post(f"{client.base}/snapshot")
+    history = (await client.get(f"{client.base}/history")).json()
     assert len(history) == 2
     assert all(Decimal(point["total_value"]) == Decimal("40000") for point in history)
 
 
 async def test_holdings_unknown_account_404(client):
-    assert (await client.get("/portfolio/999999")).status_code == 404
+    assert (await client.get("/portfolio/FAKE/ghost")).status_code == 404

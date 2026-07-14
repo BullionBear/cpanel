@@ -54,8 +54,8 @@
 		{ id: 'exchange', label: 'Exchange history', hint: 'Read exchange history' }
 	];
 	type KeyDialog = {
-		mainId: number;
-		subId: number;
+		mainExchange: string;
+		mainLabel: string;
 		subLabel: string;
 		scopes: Record<string, boolean>;
 		readOnly: boolean;
@@ -171,7 +171,7 @@
 	};
 	const saveName = (account: AccountInfo) =>
 		run(async () => {
-			await renameAccount(account.id, nameDraft[account.id].trim());
+			await renameAccount(account.exchange, account.label, nameDraft[account.id].trim());
 			notice = `Renamed to "${nameDraft[account.id].trim()}".`;
 			delete nameDraft[account.id];
 			nameDraft = nameDraft;
@@ -194,7 +194,7 @@
 	const submitAddKey = (account: AccountInfo) =>
 		run(async () => {
 			const form = keyReg[account.id];
-			await addCredential(account.id, {
+			await addCredential(account.exchange, account.label, {
 				scheme: form.scheme,
 				api_key: form.api_key.trim(),
 				secret: form.secret.trim(),
@@ -207,21 +207,21 @@
 
 	const addSub = (main: AccountNode) =>
 		run(async () => {
-			await createSubaccount(main.id, subName[main.id].trim());
+			await createSubaccount(main.exchange, main.label, subName[main.id].trim());
 			notice = `Subaccount "${subName[main.id].trim()}" created on ${exchange}.`;
 			subName[main.id] = '';
 		});
 
 	const sync = (main: AccountNode) =>
 		run(async () => {
-			const subs = await syncSubaccounts(main.id);
+			const subs = await syncSubaccounts(main.exchange, main.label);
 			notice = `Synced ${subs.length} subaccount${subs.length === 1 ? '' : 's'} from ${exchange}.`;
 		});
 
 	const openKeyDialog = (main: AccountNode, sub: AccountInfo) => {
 		keyDialog = {
-			mainId: main.id,
-			subId: sub.id,
+			mainExchange: main.exchange,
+			mainLabel: main.label,
 			subLabel: sub.label,
 			scopes: { derivatives: true },
 			readOnly: false,
@@ -239,8 +239,8 @@
 		if (!d) return;
 		const permissions = PERMISSION_SCOPES.filter((s) => d.scopes[s.id]).map((s) => s.id);
 		run(async () => {
-			const result = await createSubApiKey(d.mainId, {
-				sub_account_id: d.subId,
+			const result = await createSubApiKey(d.mainExchange, d.mainLabel, {
+				sub_label: d.subLabel,
 				permissions,
 				read_only: d.readOnly,
 				ips: parseTags(d.ips),
@@ -253,9 +253,9 @@
 		});
 	};
 
-	const setReadOnly = (subId: number, cred: Credential, readOnly: boolean) =>
+	const setReadOnly = (sub: AccountInfo, cred: Credential, readOnly: boolean) =>
 		run(async () => {
-			await modifyCredential(subId, cred.id, {
+			await modifyCredential(sub.exchange, sub.label, cred.api_key, {
 				read_only: readOnly,
 				permissions: readOnly ? ['read'] : ['read', 'trade']
 			});
@@ -267,18 +267,18 @@
 	const canRevoke = (account: AccountInfo, cred: Credential) =>
 		!!caps?.api_key_revoke && account.account_type === 'sub' && cred.status === 'active';
 
-	const revoke = (account: AccountInfo, credentialId: number) => {
+	const revoke = (account: AccountInfo, cred: Credential) => {
 		if (!confirm(`Revoke this API key on ${exchange} and remove it from CPanel?`)) return;
 		run(async () => {
-			await revokeCredential(account.id, credentialId);
+			await revokeCredential(account.exchange, account.label, cred.api_key);
 			notice = `Key revoked on "${account.label}".`;
 		});
 	};
 
-	const removeKey = (account: AccountInfo, credentialId: number) => {
+	const removeKey = (account: AccountInfo, cred: Credential) => {
 		if (!confirm('Remove this API key from CPanel? The key is not touched on the venue.')) return;
 		run(async () => {
-			await deleteCredential(account.id, credentialId);
+			await deleteCredential(account.exchange, account.label, cred.api_key);
 			notice = `Removed a key from "${account.label}".`;
 		});
 	};
@@ -286,7 +286,7 @@
 	const toggleFreeze = (main: AccountNode, sub: AccountInfo) =>
 		run(async () => {
 			const freeze = sub.status !== 'frozen';
-			await freezeSubaccount(main.id, sub.id, freeze);
+			await freezeSubaccount(main.exchange, main.label, sub.label, freeze);
 			notice = `${freeze ? 'Froze' : 'Unfroze'} "${sub.label}".`;
 		});
 
@@ -298,7 +298,7 @@
 		}
 		error = '';
 		try {
-			revealed[cred.id] = await revealSecret(account.id, cred.id);
+			revealed[cred.id] = await revealSecret(account.exchange, account.label, cred.api_key);
 			revealed = revealed;
 		} catch (e) {
 			error = e instanceof ApiError ? e.message : 'Could not reveal secret.';
@@ -311,7 +311,7 @@
 	};
 	const saveTags = (account: AccountInfo, cred: Credential) =>
 		run(async () => {
-			await setTags(account.id, cred.id, parseTags(tagDraft[cred.id]));
+			await setTags(account.exchange, account.label, cred.api_key, parseTags(tagDraft[cred.id]));
 			delete tagDraft[cred.id];
 			tagDraft = tagDraft;
 		});
@@ -465,9 +465,9 @@
 						<button class="menu-item" on:click={() => startTagEdit(cred)}>Edit tags</button>
 						<div class="menu-sep"></div>
 						{#if canRevoke(main, cred)}
-							<button class="menu-item danger" disabled={busy} on:click={() => revoke(main, cred.id)}>Revoke</button>
+							<button class="menu-item danger" disabled={busy} on:click={() => revoke(main, cred)}>Revoke</button>
 						{/if}
-						<button class="menu-item danger" disabled={busy} on:click={() => removeKey(main, cred.id)}>Delete</button>
+						<button class="menu-item danger" disabled={busy} on:click={() => removeKey(main, cred)}>Delete</button>
 					</Menu>
 				</div>
 				{#if revealed[cred.id]}
@@ -556,16 +556,16 @@
 								<button class="menu-item" on:click={() => startTagEdit(cred)}>Edit tags</button>
 								{#if caps?.api_key_modify && cred.status === 'active'}
 									{#if cred.read_only}
-										<button class="menu-item" disabled={busy} on:click={() => setReadOnly(sub.id, cred, false)}>Allow trading</button>
+										<button class="menu-item" disabled={busy} on:click={() => setReadOnly(sub, cred, false)}>Allow trading</button>
 									{:else}
-										<button class="menu-item" disabled={busy} on:click={() => setReadOnly(sub.id, cred, true)}>Make read-only</button>
+										<button class="menu-item" disabled={busy} on:click={() => setReadOnly(sub, cred, true)}>Make read-only</button>
 									{/if}
 								{/if}
 								<div class="menu-sep"></div>
 								{#if canRevoke(sub, cred)}
-									<button class="menu-item danger" disabled={busy} on:click={() => revoke(sub, cred.id)}>Revoke</button>
+									<button class="menu-item danger" disabled={busy} on:click={() => revoke(sub, cred)}>Revoke</button>
 								{/if}
-								<button class="menu-item danger" disabled={busy} on:click={() => removeKey(sub, cred.id)}>Delete</button>
+								<button class="menu-item danger" disabled={busy} on:click={() => removeKey(sub, cred)}>Delete</button>
 							</Menu>
 						</div>
 						{#if revealed[cred.id]}

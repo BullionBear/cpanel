@@ -66,47 +66,59 @@ export const fetchCapabilities = () => apiGet<ExchangeCapabilities[]>('/accounts
 export const registerAccount = (body: RegisterAccountBody) =>
 	apiPost<AccountInfo>('/accounts/register', body);
 
+// Accounts are addressed by their natural key (exchange + nickname) and
+// credentials by their api_key, so URLs read as the resource they name.
+const enc = encodeURIComponent;
+const accountPath = (exchange: string, label: string) =>
+	`/accounts/${enc(exchange)}/${enc(label)}`;
+
 /** Change an account's nickname (system-only label). */
-export const renameAccount = (accountId: number, label: string) =>
-	apiPatch<AccountInfo>(`/accounts/${accountId}`, { label });
+export const renameAccount = (exchange: string, label: string, newLabel: string) =>
+	apiPatch<AccountInfo>(accountPath(exchange, label), { label: newLabel });
 
 /** Register an existing venue-made API key against an account. */
 export const addCredential = (
-	accountId: number,
+	exchange: string,
+	label: string,
 	body: { scheme?: string; api_key: string; secret: string; tags?: string[]; label?: string }
-) => apiPost<Credential>(`/accounts/${accountId}/credentials`, body);
+) => apiPost<Credential>(`${accountPath(exchange, label)}/credentials`, body);
 
-export const revealSecret = (accountId: number, credentialId: number) =>
-	apiPost<RevealedSecret>(`/accounts/${accountId}/credentials/${credentialId}/reveal`);
+export const revealSecret = (exchange: string, label: string, apiKey: string) =>
+	apiPost<RevealedSecret>(`${accountPath(exchange, label)}/credentials/${enc(apiKey)}/reveal`);
 
-export const setTags = (accountId: number, credentialId: number, tags: string[]) =>
-	apiPut<Credential>(`/accounts/${accountId}/credentials/${credentialId}/tags`, { tags });
+export const setTags = (exchange: string, label: string, apiKey: string, tags: string[]) =>
+	apiPut<Credential>(`${accountPath(exchange, label)}/credentials/${enc(apiKey)}/tags`, { tags });
 
 /** Revoke a key on the venue (where supported) and remove it from the panel. */
-export const revokeCredential = (accountId: number, credentialId: number) =>
-	apiPost<void>(`/accounts/${accountId}/credentials/${credentialId}/revoke`);
+export const revokeCredential = (exchange: string, label: string, apiKey: string) =>
+	apiPost<void>(`${accountPath(exchange, label)}/credentials/${enc(apiKey)}/revoke`);
 
 /** Remove a stored key from the panel without touching the venue. */
-export const deleteCredential = (accountId: number, credentialId: number) =>
-	apiDelete<void>(`/accounts/${accountId}/credentials/${credentialId}`);
+export const deleteCredential = (exchange: string, label: string, apiKey: string) =>
+	apiDelete<void>(`${accountPath(exchange, label)}/credentials/${enc(apiKey)}`);
 
 export const modifyCredential = (
-	accountId: number,
-	credentialId: number,
+	exchange: string,
+	label: string,
+	apiKey: string,
 	body: { permissions?: string[]; read_only?: boolean }
-) => apiPost<Credential>(`/accounts/${accountId}/credentials/${credentialId}/modify`, body);
+) => apiPost<Credential>(`${accountPath(exchange, label)}/credentials/${enc(apiKey)}/modify`, body);
 
-export const syncSubaccounts = (accountId: number) =>
-	apiPost<AccountInfo[]>(`/accounts/${accountId}/subaccounts/sync`);
+export const syncSubaccounts = (exchange: string, label: string) =>
+	apiPost<AccountInfo[]>(`${accountPath(exchange, label)}/subaccounts/sync`);
 
-export const createSubaccount = (accountId: number, label: string) =>
-	apiPost<AccountInfo>(`/accounts/${accountId}/subaccounts`, { label });
+export const createSubaccount = (exchange: string, label: string, subLabel: string) =>
+	apiPost<AccountInfo>(`${accountPath(exchange, label)}/subaccounts`, { label: subLabel });
 
-export const freezeSubaccount = (accountId: number, subId: number, frozen: boolean) =>
-	apiPost<AccountInfo>(`/accounts/${accountId}/subaccounts/${subId}/freeze`, { frozen });
+export const freezeSubaccount = (
+	exchange: string,
+	label: string,
+	subLabel: string,
+	frozen: boolean
+) => apiPost<AccountInfo>(`${accountPath(exchange, label)}/subaccounts/${enc(subLabel)}/freeze`, { frozen });
 
 export interface SubKeyOptions {
-	sub_account_id: number;
+	sub_label: string;
 	permissions: string[];
 	read_only?: boolean;
 	ips?: string[];
@@ -114,5 +126,8 @@ export interface SubKeyOptions {
 	tags?: string[];
 }
 
-export const createSubApiKey = (accountId: number, body: SubKeyOptions) =>
-	apiPost<{ credential: Credential; secret: string }>(`/accounts/${accountId}/api-keys`, body);
+export const createSubApiKey = (exchange: string, label: string, body: SubKeyOptions) =>
+	apiPost<{ credential: Credential; secret: string }>(
+		`${accountPath(exchange, label)}/api-keys`,
+		body
+	);
