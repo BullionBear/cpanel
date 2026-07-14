@@ -148,6 +148,14 @@
 		delete keyReg[accountId];
 		keyReg = keyReg;
 	};
+	const toggleAddKey = (accountId: number) =>
+		keyReg[accountId] !== undefined ? cancelAddKey(accountId) : startAddKey(accountId);
+
+	// Focus the field as soon as an inline editor opens.
+	const autofocus = (node: HTMLInputElement) => {
+		node.focus();
+		node.select();
+	};
 	const submitAddKey = (account: AccountInfo) =>
 		run(async () => {
 			const form = keyReg[account.id];
@@ -346,13 +354,18 @@
 			<div class="card-head">
 				{#if nameDraft[main.id] !== undefined}
 					<form class="inline-form" on:submit|preventDefault={() => saveName(main)}>
-						<input bind:value={nameDraft[main.id]} required />
+						<!-- svelte-ignore a11y-autofocus -->
+						<input bind:value={nameDraft[main.id]} required use:autofocus />
 						<button class="btn small" disabled={busy || !nameDraft[main.id]?.trim()}>Save</button>
 						<button type="button" class="btn secondary small" on:click={() => cancelRename(main.id)}>Cancel</button>
 					</form>
 				{:else}
-					<h2>{main.label}</h2>
-					<button class="btn secondary small" on:click={() => startRename(main)}>Rename</button>
+					<!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
+					<h2 class="editable" title="Double-click to rename" role="button" tabindex="0"
+						on:dblclick={() => startRename(main)}
+						on:keydown={(e) => { if (e.key === 'Enter' || e.key === 'F2') startRename(main); }}>
+						{main.label}
+					</h2>
 				{/if}
 				{#if main.native_uid}<span class="uid">{main.native_uid}</span>{/if}
 			</div>
@@ -418,18 +431,25 @@
 					<div class="cred-row">
 						{#if nameDraft[sub.id] !== undefined}
 							<form class="inline-form" on:submit|preventDefault={() => saveName(sub)}>
-								<input bind:value={nameDraft[sub.id]} required />
+								<!-- svelte-ignore a11y-autofocus -->
+								<input bind:value={nameDraft[sub.id]} required use:autofocus />
 								<button class="btn small" disabled={busy || !nameDraft[sub.id]?.trim()}>Save</button>
 								<button type="button" class="btn secondary small" on:click={() => cancelRename(sub.id)}>Cancel</button>
 							</form>
 						{:else}
-							<span class="sub-label">{sub.label}</span>
+							<span class="sub-label editable" title="Double-click to rename" role="button" tabindex="0"
+								on:dblclick={() => startRename(sub)}
+								on:keydown={(e) => { if (e.key === 'Enter' || e.key === 'F2') startRename(sub); }}>
+								{sub.label}
+							</span>
 						{/if}
 						{#if sub.native_uid}<span class="uid">{sub.native_uid}</span>{/if}
 						{#if sub.status === 'frozen'}<span class="tag warn">frozen</span>{/if}
 						<div class="row-actions">
-							{#if nameDraft[sub.id] === undefined}
-								<button class="btn secondary small" on:click={() => startRename(sub)}>Rename</button>
+							{#if showAddKey(sub)}
+								<button class="btn secondary small" on:click={() => toggleAddKey(sub.id)}>
+									{keyReg[sub.id] !== undefined ? 'Cancel' : 'Add API key'}
+								</button>
 							{/if}
 							{#if caps?.subaccount_freeze}
 								<button class="btn secondary small" disabled={busy} on:click={() => toggleFreeze(main, sub)}>
@@ -491,23 +511,20 @@
 						</form>
 					{/if}
 
-					{#if showAddKey(sub)}
-						{#if keyReg[sub.id] !== undefined}
-							<form class="key-form indent" on:submit|preventDefault={() => submitAddKey(sub)}>
-								{#if schemes.length > 1}
-									<select bind:value={keyReg[sub.id].scheme}>
-										{#each schemes as s}<option value={s}>{s}</option>{/each}
-									</select>
-								{/if}
-								<input placeholder="API key" bind:value={keyReg[sub.id].api_key} required />
-								<input type="password" placeholder="Secret / private key" bind:value={keyReg[sub.id].secret} required />
-								<input placeholder="Tags (comma-separated)" bind:value={keyReg[sub.id].tags} />
-								<button class="btn small" disabled={busy}>Verify &amp; register key</button>
-								<button type="button" class="btn secondary small" on:click={() => cancelAddKey(sub.id)}>Cancel</button>
-							</form>
-						{:else}
-							<button class="btn secondary small indent" on:click={() => startAddKey(sub.id)}>Add API key</button>
-						{/if}
+					{#if showAddKey(sub) && keyReg[sub.id] !== undefined}
+						<form class="key-form indent" on:submit|preventDefault={() => submitAddKey(sub)}>
+							{#if schemes.length > 1}
+								<select bind:value={keyReg[sub.id].scheme}>
+									{#each schemes as s}<option value={s}>{s}</option>{/each}
+								</select>
+							{/if}
+							<!-- svelte-ignore a11y-autofocus -->
+							<input placeholder="API key" bind:value={keyReg[sub.id].api_key} required use:autofocus />
+							<input type="password" placeholder="Secret / private key" bind:value={keyReg[sub.id].secret} required />
+							<input placeholder="Tags (comma-separated)" bind:value={keyReg[sub.id].tags} />
+							<button class="btn small" disabled={busy}>Verify &amp; register key</button>
+							<button type="button" class="btn secondary small" on:click={() => cancelAddKey(sub.id)}>Cancel</button>
+						</form>
 					{/if}
 				</div>
 			{/each}
@@ -708,6 +725,24 @@
 	}
 	.sub-label {
 		font-weight: 500;
+	}
+	.editable {
+		cursor: text;
+		border-radius: 0.25rem;
+		padding: 0.05rem 0.25rem;
+		margin: -0.05rem -0.25rem;
+	}
+	.editable:hover {
+		background: #eef1f4;
+	}
+	.editable:focus-visible {
+		outline: 2px solid #5865f2;
+		outline-offset: 0;
+	}
+	@media (prefers-color-scheme: dark) {
+		.editable:hover {
+			background: #21262d;
+		}
 	}
 
 	.reveal {
