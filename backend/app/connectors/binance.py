@@ -18,6 +18,7 @@ testable with fixtures from the API docs.
 import asyncio
 import logging
 import re
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from binance_common.configuration import ConfigurationRestAPI
@@ -41,6 +42,11 @@ from app.connectors.types import (
     Instrument,
     InstrumentFilters,
     MarketType,
+    Order,
+    OrderRequest,
+    OrderSide,
+    OrderStatus,
+    OrderType,
     Position,
     SubaccountInfo,
     WalletType,
@@ -274,6 +280,55 @@ def normalize_positions(
     return positions
 
 
+# Binance native order status -> normalized lifecycle.
+_ORDER_STATUS = {
+    "NEW": OrderStatus.OPEN,
+    "PENDING_NEW": OrderStatus.OPEN,
+    "PARTIALLY_FILLED": OrderStatus.PARTIALLY_FILLED,
+    "FILLED": OrderStatus.FILLED,
+    "CANCELED": OrderStatus.CANCELLED,
+    "PENDING_CANCEL": OrderStatus.OPEN,
+    "REJECTED": OrderStatus.REJECTED,
+    "EXPIRED": OrderStatus.CANCELLED,
+    "EXPIRED_IN_MATCH": OrderStatus.CANCELLED,
+}
+
+
+def _order_status(raw: str | None) -> OrderStatus:
+    return _ORDER_STATUS.get((raw or "").upper(), OrderStatus.OPEN)
+
+
+def _order_type(raw: str | None) -> OrderType:
+    return OrderType.MARKET if (raw or "").upper() == "MARKET" else OrderType.LIMIT
+
+
+def normalize_order(raw: dict, universal_symbol: str) -> Order:
+    """A Binance order dict (spot or futures) → normalized Order."""
+    order_id = raw.get("orderId")
+    return Order(
+        universal_symbol=universal_symbol,
+        native_order_id=str(order_id) if order_id is not None else "",
+        client_order_id=raw.get("clientOrderId") or None,
+        side=OrderSide(str(raw.get("side", "BUY")).upper()),
+        type=_order_type(raw.get("type")),
+        status=_order_status(raw.get("status")),
+        qty=_dec(raw.get("origQty", 0) or 0),
+        filled_qty=_dec(raw.get("executedQty", 0) or 0),
+        price=_opt_dec(raw.get("price")) if _opt_dec(raw.get("price")) else None,
+        created_at=_epoch_ms(raw.get("time") or raw.get("transactTime")),
+        updated_at=_epoch_ms(raw.get("updateTime")),
+    )
+
+
+def _epoch_ms(value) -> datetime | None:
+    if value in (None, "", 0):
+        return None
+    try:
+        return datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc)
+    except (ValueError, TypeError, OSError):
+        return None
+
+
 class BinanceConnector(ExchangeConnector):
     exchange = "BINANCE"
     # Registration-only for keys. Binance's API cannot mint/rotate/revoke
@@ -288,6 +343,7 @@ class BinanceConnector(ExchangeConnector):
             Capability.CREDENTIAL_VERIFY,
             Capability.BALANCES,
             Capability.POSITIONS,
+            Capability.ORDERS,
             Capability.SUBACCOUNT_LIST,
         }
     )
@@ -300,6 +356,8 @@ class BinanceConnector(ExchangeConnector):
         self._cm = DerivativesTradingCoinFutures(config_rest_api=config())
         # (market_type, native_symbol) -> universal_symbol, warmed by fetch_instruments
         self._native_map: dict[tuple[MarketType, str], str] = {}
+        # universal_symbol -> (market_type, native_symbol), the reverse lookup
+        self._universal_map: dict[str, tuple[MarketType, str]] = {}
 
     async def _call(self, func, *args, **kwargs):
         if self._bucket is not None:
@@ -355,6 +413,9 @@ class BinanceConnector(ExchangeConnector):
                     instruments.append(instrument)
         self._native_map = {
             (i.market_type, i.native_symbol): i.universal_symbol for i in instruments
+        }
+        self._universal_map = {
+            i.universal_symbol: (i.market_type, i.native_symbol) for i in instruments
         }
         return instruments
 
@@ -442,6 +503,101 @@ class BinanceConnector(ExchangeConnector):
                 await self._fetch_cm_positions(credential), MarketType.CMARGIN, self._native_map
             ),
         ]
+
+    # -- orders -------------------------------------------------------------
+
+    async def _resolve_symbol(self, universal_symbol: str) -> tuple[MarketType, str]:
+        if not self._universal_map:
+            await self.fetch_instruments()
+        pair = self._universal_map.get(universal_symbol)
+        if pair is None:
+            raise ValueError(f"Unknown instrument {universal_symbol!r} for Binance")
+        return pair
+
+    def _rest_for(self, market_type: MarketType, credential: Credential):
+        cfg = _auth_config(credential)
+        if market_type == MarketType.SPOT:
+            return Spot(config_rest_api=cfg).rest_api
+        if market_type == MarketType.PERP:
+            return DerivativesTradingUsdsFutures(config_rest_api=cfg).rest_api
+        if market_type == MarketType.CMARGIN:
+            return DerivativesTradingCoinFutures(config_rest_api=cfg).rest_api
+        raise ValueError(f"Orders are not supported on {market_type} for Binance")
+
+    async def place_order(self, credential: Credential, request: OrderRequest) -> Order:
+        market_type, native_symbol = await self._resolve_symbol(request.universal_symbol)
+        rest = self._rest_for(market_type, credential)
+        kwargs: dict = {
+            "symbol": native_symbol,
+            "side": request.side.value,
+            "type": request.type.value,
+            "quantity": float(request.qty),
+        }
+        if request.type == OrderType.LIMIT:
+            kwargs["time_in_force"] = "GTC"
+            if request.price is not None:
+                kwargs["price"] = float(request.price)
+        if request.client_order_id:
+            kwargs["new_client_order_id"] = request.client_order_id
+        resp = await self._call(rest.new_order, **kwargs)
+        return normalize_order(dump_sdk_model(resp.data()), request.universal_symbol)
+
+    async def cancel_order(
+        self, credential: Credential, universal_symbol: str, native_order_id: str
+    ) -> Order:
+        market_type, native_symbol = await self._resolve_symbol(universal_symbol)
+        rest = self._rest_for(market_type, credential)
+        method = rest.delete_order if market_type == MarketType.SPOT else rest.cancel_order
+        resp = await self._call(method, symbol=native_symbol, order_id=int(native_order_id))
+        return normalize_order(dump_sdk_model(resp.data()), universal_symbol)
+
+    async def fetch_open_orders(
+        self, credential: Credential, universal_symbol: str | None = None
+    ) -> list[Order]:
+        if not self._native_map:
+            await self.fetch_instruments()
+        orders: list[Order] = []
+        surfaces = [
+            (MarketType.SPOT, "get_open_orders"),
+            (MarketType.PERP, "current_all_open_orders"),
+            (MarketType.CMARGIN, "current_all_open_orders"),
+        ]
+        for market_type, method_name in surfaces:
+            rest = self._rest_for(market_type, credential)
+            resp = await self._call(getattr(rest, method_name))
+            rows = dump_sdk_model(resp.data())
+            for raw in rows if isinstance(rows, list) else [rows]:
+                universal = self._native_map.get((market_type, raw.get("symbol", "")))
+                if universal is None:
+                    continue
+                if universal_symbol and universal != universal_symbol:
+                    continue
+                orders.append(normalize_order(raw, universal))
+        return orders
+
+    async def fetch_order(
+        self,
+        credential: Credential,
+        universal_symbol: str,
+        native_order_id: str | None = None,
+        client_order_id: str | None = None,
+    ) -> Order | None:
+        market_type, native_symbol = await self._resolve_symbol(universal_symbol)
+        rest = self._rest_for(market_type, credential)
+        method = rest.get_order if market_type == MarketType.SPOT else rest.query_order
+        kwargs: dict = {"symbol": native_symbol}
+        if native_order_id is not None:
+            kwargs["order_id"] = int(native_order_id)
+        elif client_order_id is not None:
+            kwargs["orig_client_order_id"] = client_order_id
+        else:
+            return None
+        try:
+            resp = await self._call(method, **kwargs)
+        except Exception:  # noqa: BLE001 - unknown id → treated as "not found"
+            return None
+        raw = dump_sdk_model(resp.data())
+        return normalize_order(raw, universal_symbol) if raw else None
 
     async def list_subaccounts(self, credential: Credential) -> list[SubaccountInfo]:
         sub = SubAccount(config_rest_api=_auth_config(credential))

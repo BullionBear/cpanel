@@ -16,6 +16,7 @@ Uses the official ``pybit`` SDK (synchronous, run in a worker thread).
 """
 import asyncio
 import logging
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from pybit.unified_trading import HTTP
@@ -31,6 +32,11 @@ from app.connectors.types import (
     InstrumentFilters,
     KeyScheme,
     MarketType,
+    Order,
+    OrderRequest,
+    OrderSide,
+    OrderStatus,
+    OrderType,
     Position,
     SubaccountInfo,
     WalletType,
@@ -81,6 +87,27 @@ _CATEGORIES: list[tuple[str, MarketType]] = [
     ("linear", MarketType.PERP),
     ("inverse", MarketType.CMARGIN),
 ]
+
+# Normalized market type -> Bybit v5 category.
+_CATEGORY_OF = {
+    MarketType.SPOT: "spot",
+    MarketType.PERP: "linear",
+    MarketType.CMARGIN: "inverse",
+}
+
+# Bybit native order status -> normalized lifecycle.
+_ORDER_STATUS = {
+    "New": OrderStatus.OPEN,
+    "Created": OrderStatus.OPEN,
+    "Untriggered": OrderStatus.OPEN,
+    "Triggered": OrderStatus.OPEN,
+    "PartiallyFilled": OrderStatus.PARTIALLY_FILLED,
+    "Filled": OrderStatus.FILLED,
+    "Cancelled": OrderStatus.CANCELLED,
+    "PartiallyFilledCanceled": OrderStatus.CANCELLED,
+    "Deactivated": OrderStatus.CANCELLED,
+    "Rejected": OrderStatus.REJECTED,
+}
 
 _PERP_CONTRACT_TYPES = {"LinearPerpetual", "InversePerpetual"}
 
@@ -202,6 +229,37 @@ def normalize_positions(
     return positions
 
 
+def _order_status(raw: str | None) -> OrderStatus:
+    return _ORDER_STATUS.get(raw or "", OrderStatus.OPEN)
+
+
+def _epoch_ms(value) -> datetime | None:
+    if value in (None, "", 0, "0"):
+        return None
+    try:
+        return datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc)
+    except (ValueError, TypeError, OSError):
+        return None
+
+
+def normalize_order(raw: dict, universal_symbol: str) -> Order:
+    """A Bybit order dict → normalized Order."""
+    price = _opt_dec(raw.get("price"))
+    return Order(
+        universal_symbol=universal_symbol,
+        native_order_id=str(raw.get("orderId", "")),
+        client_order_id=raw.get("orderLinkId") or None,
+        side=OrderSide.BUY if raw.get("side") == "Buy" else OrderSide.SELL,
+        type=OrderType.MARKET if raw.get("orderType") == "Market" else OrderType.LIMIT,
+        status=_order_status(raw.get("orderStatus")),
+        qty=_dec(raw.get("qty", 0) or 0),
+        filled_qty=_dec(raw.get("cumExecQty", 0) or 0),
+        price=price if price and price > 0 else None,
+        created_at=_epoch_ms(raw.get("createdTime")),
+        updated_at=_epoch_ms(raw.get("updatedTime")),
+    )
+
+
 class BybitConnector(ExchangeConnector):
     exchange = "BYBIT"
     # Bybit exposes full self-service account management over API, so the
@@ -214,6 +272,7 @@ class BybitConnector(ExchangeConnector):
             Capability.CREDENTIAL_VERIFY,
             Capability.BALANCES,
             Capability.POSITIONS,
+            Capability.ORDERS,
             Capability.SUBACCOUNT_LIST,
             Capability.SUBACCOUNT_CREATE,
             Capability.SUBACCOUNT_FREEZE,
@@ -231,6 +290,7 @@ class BybitConnector(ExchangeConnector):
         self._bucket = bucket
         self._session = HTTP(timeout=30)
         self._native_map: dict[tuple[MarketType, str], str] = {}
+        self._universal_map: dict[str, tuple[MarketType, str]] = {}
 
     async def _call(self, func, **kwargs):
         if self._bucket is not None:
@@ -300,6 +360,136 @@ class BybitConnector(ExchangeConnector):
             rows.extend(await self._fetch_positions(credential, "linear", settle))
         rows.extend(await self._fetch_positions(credential, "inverse"))
         return normalize_positions(rows, self._native_map)
+
+    # -- orders -------------------------------------------------------------
+
+    async def _resolve_symbol(self, universal_symbol: str) -> tuple[str, str]:
+        """universal symbol -> (bybit category, native symbol)."""
+        if not self._universal_map:
+            await self.fetch_instruments()
+        pair = self._universal_map.get(universal_symbol)
+        if pair is None:
+            raise ValueError(f"Unknown instrument {universal_symbol!r} for Bybit")
+        market_type, native_symbol = pair
+        return _CATEGORY_OF[market_type], native_symbol
+
+    async def place_order(self, credential: Credential, request: OrderRequest) -> Order:
+        category, native_symbol = await self._resolve_symbol(request.universal_symbol)
+        session = self._auth_session(credential)
+        kwargs: dict = {
+            "category": category,
+            "symbol": native_symbol,
+            "side": "Buy" if request.side == OrderSide.BUY else "Sell",
+            "orderType": "Market" if request.type == OrderType.MARKET else "Limit",
+            "qty": str(request.qty),
+        }
+        if request.type == OrderType.LIMIT and request.price is not None:
+            kwargs["price"] = str(request.price)
+            kwargs["timeInForce"] = "GTC"
+        if request.client_order_id:
+            kwargs["orderLinkId"] = request.client_order_id
+        response = await self._call(session.place_order, **kwargs)
+        result = response.get("result", {})
+        # place_order returns only ids; echo the request as an accepted OPEN order.
+        return Order(
+            universal_symbol=request.universal_symbol,
+            native_order_id=str(result.get("orderId", "")),
+            client_order_id=result.get("orderLinkId") or request.client_order_id,
+            side=request.side,
+            type=request.type,
+            status=OrderStatus.OPEN,
+            qty=request.qty,
+            filled_qty=Decimal("0"),
+            price=request.price,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+
+    async def cancel_order(
+        self, credential: Credential, universal_symbol: str, native_order_id: str
+    ) -> Order:
+        category, native_symbol = await self._resolve_symbol(universal_symbol)
+        session = self._auth_session(credential)
+        await self._call(
+            session.cancel_order,
+            category=category,
+            symbol=native_symbol,
+            orderId=native_order_id,
+        )
+        fetched = await self.fetch_order(
+            credential, universal_symbol, native_order_id=native_order_id
+        )
+        if fetched is not None:
+            return fetched
+        return Order(
+            universal_symbol=universal_symbol,
+            native_order_id=native_order_id,
+            client_order_id=None,
+            side=OrderSide.BUY,
+            type=OrderType.LIMIT,
+            status=OrderStatus.CANCELLED,
+            qty=Decimal("0"),
+            filled_qty=Decimal("0"),
+            price=None,
+            updated_at=datetime.now(timezone.utc),
+        )
+
+    async def _fetch_open_orders(
+        self, session: HTTP, category: str, settle_coin: str | None = None
+    ) -> list[dict]:
+        kwargs: dict = {"category": category, "limit": 50}
+        if settle_coin:
+            kwargs["settleCoin"] = settle_coin
+        response = await self._call(session.get_open_orders, **kwargs)
+        return response.get("result", {}).get("list", [])
+
+    async def fetch_open_orders(
+        self, credential: Credential, universal_symbol: str | None = None
+    ) -> list[Order]:
+        if not self._native_map:
+            await self.fetch_instruments()
+        session = self._auth_session(credential)
+        rows: list[tuple[MarketType, dict]] = []
+        for raw in await self._fetch_open_orders(session, "spot"):
+            rows.append((MarketType.SPOT, raw))
+        for settle in self._LINEAR_SETTLE:
+            for raw in await self._fetch_open_orders(session, "linear", settle):
+                rows.append((MarketType.PERP, raw))
+        for raw in await self._fetch_open_orders(session, "inverse"):
+            rows.append((MarketType.CMARGIN, raw))
+
+        orders: list[Order] = []
+        for market_type, raw in rows:
+            universal = self._native_map.get((market_type, raw.get("symbol", "")))
+            if universal is None:
+                continue
+            if universal_symbol and universal != universal_symbol:
+                continue
+            orders.append(normalize_order(raw, universal))
+        return orders
+
+    async def fetch_order(
+        self,
+        credential: Credential,
+        universal_symbol: str,
+        native_order_id: str | None = None,
+        client_order_id: str | None = None,
+    ) -> Order | None:
+        category, native_symbol = await self._resolve_symbol(universal_symbol)
+        session = self._auth_session(credential)
+        kwargs: dict = {"category": category, "symbol": native_symbol}
+        if native_order_id is not None:
+            kwargs["orderId"] = native_order_id
+        elif client_order_id is not None:
+            kwargs["orderLinkId"] = client_order_id
+        else:
+            return None
+        try:
+            response = await self._call(session.get_order_history, **kwargs)
+        except Exception:  # noqa: BLE001 - unknown id → treated as "not found"
+            return None
+        items = response.get("result", {}).get("list", [])
+        return normalize_order(items[0], universal_symbol) if items else None
 
     async def verify_credential(self, credential: Credential) -> CredentialInfo:
         session = self._auth_session(credential)
@@ -425,6 +615,9 @@ class BybitConnector(ExchangeConnector):
                     instruments.append(instrument)
         self._native_map = {
             (i.market_type, i.native_symbol): i.universal_symbol for i in instruments
+        }
+        self._universal_map = {
+            i.universal_symbol: (i.market_type, i.native_symbol) for i in instruments
         }
         return instruments
 

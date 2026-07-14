@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # Generate with: python -c "from app.core.crypto import generate_master_key; print(generate_master_key())"
     CREDENTIAL_ENCRYPTION_KEY: str = ""
 
+    # Order guardrails (enforced before every placement).
+    #   ORDER_MAX_NOTIONAL       max price*qty per order in the quote asset; 0 = no cap.
+    #   ORDER_SYMBOL_ALLOWLIST   comma-separated universal symbols; empty = allow all.
+    ORDER_MAX_NOTIONAL: float = 0
+    ORDER_SYMBOL_ALLOWLIST: str = ""
+
     # Security. JWT signing key — set a strong value in production:
     # python -c "import secrets; print(secrets.token_urlsafe(64))"
     SECRET_KEY: str = ""

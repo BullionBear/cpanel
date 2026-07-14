@@ -10,6 +10,7 @@ from app.connectors.registry import connectors
 from app.core.config import settings
 from app.core.db import dispose_engine, get_session_factory
 from app.core.ratelimit import rate_limiters
+from app.jobs.orders import make_open_order_poll_job
 from app.jobs.scheduler import JobDefinition, scheduler
 from app.jobs.snapshots import make_snapshot_job
 from app.jobs.symbols import make_instrument_refresh, make_price_refresh
@@ -49,6 +50,14 @@ def setup_jobs() -> None:
                 name="snapshots.capture",
                 interval_seconds=3600,
                 func=make_snapshot_job(exchange),
+                exchange=exchange,
+            )
+        )
+        scheduler.register(
+            JobDefinition(
+                name="orders.poll_open",
+                interval_seconds=30,
+                func=make_open_order_poll_job(exchange),
                 exchange=exchange,
             )
         )

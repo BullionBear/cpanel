@@ -8,6 +8,7 @@ from app.models.base import Base
 from app.models.account import Account, ApiCredential
 from app.models.audit_log import AuditLog
 from app.models.job_run import JobRun
+from app.models.order import Order
 from app.models.snapshot import BalanceSnapshot, PositionSnapshot
 from app.models.universal_ticker import UniversalTicker
 
@@ -17,6 +18,7 @@ __all__ = [
     "ApiCredential",
     "AuditLog",
     "JobRun",
+    "Order",
     "BalanceSnapshot",
     "PositionSnapshot",
     "UniversalTicker",
