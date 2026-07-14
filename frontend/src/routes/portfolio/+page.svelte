@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { ApiError } from '$lib/api';
+	import PieChart from '$lib/PieChart.svelte';
+	import LineChart from '$lib/LineChart.svelte';
+	import type { Slice, Point } from '$lib/charts';
 	import {
 		fetchOverview,
 		fetchHoldings,
@@ -26,6 +29,37 @@
 		(acc[item.exchange] ??= []).push(item);
 		return acc;
 	}, {});
+
+	// Composition slices for the pie: spot balances (aggregated per asset) plus
+	// each position's notional value. Asset value = spot value + position notional.
+	$: pieSlices = holdings ? buildSlices(holdings) : [];
+	$: historyPoints = buildPoints(history);
+
+	function buildSlices(h: Holdings): Slice[] {
+		const byAsset: Record<string, number> = {};
+		for (const b of h.balances) {
+			const v = Number(b.value_quote);
+			if (b.value_quote !== null && Number.isFinite(v) && v > 0)
+				byAsset[b.asset] = (byAsset[b.asset] ?? 0) + v;
+		}
+		const items: Slice[] = Object.entries(byAsset).map(([asset, v]) => ({ label: asset, value: v }));
+		for (const p of h.positions) {
+			const v = Number(p.value_quote);
+			if (p.value_quote !== null && Number.isFinite(v) && v > 0)
+				items.push({ label: p.universal_symbol, value: v });
+		}
+		items.sort((a, b) => b.value - a.value);
+		const TOP = 8;
+		if (items.length <= TOP + 1) return items;
+		const rest = items.slice(TOP).reduce((s, i) => s + i.value, 0);
+		return [...items.slice(0, TOP), { label: 'Other', value: rest }];
+	}
+
+	function buildPoints(hist: HistoryPoint[]): Point[] {
+		return hist
+			.map((p) => ({ t: new Date(p.taken_at).getTime(), value: Number(p.total_value) }))
+			.filter((p) => Number.isFinite(p.value));
+	}
 
 	function money(value: string | number | null): string {
 		if (value === null) return '—';
@@ -168,6 +202,20 @@
 						<div class="notice">
 							No snapshot data yet. Use “Snapshot now” to capture the current state.
 						</div>
+					{:else}
+						<div class="charts">
+							<div class="chart-card">
+								<h3>Composition</h3>
+								<PieChart slices={pieSlices} unit={holdings.quote_asset} />
+							</div>
+							<div class="chart-card">
+								<h3>Asset value history</h3>
+								<LineChart points={historyPoints} unit={holdings.quote_asset} />
+								{#if historyPoints.length < 2}
+									<p class="chart-hint">Take more snapshots to build a trend.</p>
+								{/if}
+							</div>
+						</div>
 					{/if}
 
 					{#if holdings.balances.length > 0}
@@ -232,27 +280,6 @@
 						</div>
 					{/if}
 
-					{#if history.length > 1}
-						<h3>History</h3>
-						<div class="table-wrap history">
-							<table>
-								<thead>
-									<tr>
-										<th>Taken at</th>
-										<th class="right">Total value ({holdings.quote_asset})</th>
-									</tr>
-								</thead>
-								<tbody>
-									{#each history as point}
-										<tr>
-											<td>{new Date(point.taken_at).toLocaleString()}</td>
-											<td class="mono right">{money(point.total_value)}</td>
-										</tr>
-									{/each}
-								</tbody>
-							</table>
-						</div>
-					{/if}
 				{/if}
 			</section>
 		</div>
@@ -395,6 +422,34 @@
 		color: var(--text-dim);
 	}
 
+	.charts {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 1rem;
+		margin-bottom: 0.5rem;
+	}
+	.chart-card {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		box-shadow: var(--inset-hi);
+		padding: 1rem 1.25rem 1.25rem;
+		min-width: 0;
+	}
+	.chart-card h3 {
+		margin-top: 0.25rem;
+	}
+	.chart-hint {
+		margin: 0.6rem 0 0;
+		font-size: 0.75rem;
+		color: var(--text-dim);
+	}
+	@media (max-width: 60rem) {
+		.charts {
+			grid-template-columns: 1fr;
+		}
+	}
+
 	.notice {
 		padding: 2rem;
 		text-align: center;
@@ -411,10 +466,6 @@
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
 		box-shadow: var(--inset-hi);
-	}
-	.table-wrap.history {
-		max-height: 20rem;
-		overflow-y: auto;
 	}
 	table {
 		width: 100%;

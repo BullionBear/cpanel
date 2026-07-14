@@ -85,19 +85,20 @@ async def test_trigger_snapshot_then_holdings(client):
     resp = await client.post(f"{client.base}/snapshot")
     assert resp.status_code == 201
     body = resp.json()
-    assert Decimal(body["total_value"]) == Decimal("40000")
+    # Asset value = spot value (40000) + position notional (6200).
+    assert Decimal(body["total_value"]) == Decimal("46200")
     assert {b["asset"] for b in body["balances"]} == {"USDT", "BTC"}
     assert body["positions"][0]["universal_symbol"] == "FAKE_PERP_ETHUSDT"
     assert Decimal(body["positions"][0]["value_quote"]) == Decimal("6200")
 
     # Overview now reflects the captured value.
     overview = (await client.get("/portfolio")).json()
-    assert Decimal(overview[0]["total_value"]) == Decimal("40000")
+    assert Decimal(overview[0]["total_value"]) == Decimal("46200")
     assert overview[0]["taken_at"] is not None
 
     # Holdings endpoint returns the same latest batch.
     holdings = (await client.get(client.base)).json()
-    assert Decimal(holdings["total_value"]) == Decimal("40000")
+    assert Decimal(holdings["total_value"]) == Decimal("46200")
 
 
 async def test_snapshot_is_audited(client):
@@ -114,7 +115,7 @@ async def test_history_after_two_snapshots(client):
     await client.post(f"{client.base}/snapshot")
     history = (await client.get(f"{client.base}/history")).json()
     assert len(history) == 2
-    assert all(Decimal(point["total_value"]) == Decimal("40000") for point in history)
+    assert all(Decimal(point["total_value"]) == Decimal("46200") for point in history)
 
 
 async def test_holdings_unknown_account_404(client):

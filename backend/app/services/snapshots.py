@@ -30,8 +30,9 @@ __all__ = [
     "capture_snapshots",
     "latest_batch",
     "get_holdings",
+    "holdings_total",
     "account_value",
-    "balance_history",
+    "value_history",
 ]
 
 # Common quote asset for portfolio valuation.
@@ -132,6 +133,19 @@ async def capture_snapshots(
 
 # -- read paths ---------------------------------------------------------------
 
+# Asset value is spot value + position notional: every snapshot row (balance or
+# position) already carries its ``value_quote`` in the quote asset, so a total
+# is just the sum of both across a batch.
+
+
+def holdings_total(balances, positions) -> Decimal:
+    """Total asset value = spot balance value + position notional value."""
+    total = Decimal("0")
+    for row in (*balances, *positions):
+        if row.value_quote is not None:
+            total += row.value_quote
+    return total
+
 
 async def latest_batch(db: AsyncSession, account_id: int) -> tuple[str, datetime] | None:
     """(batch_id, taken_at) of the most recent capture for an account, or None."""
@@ -178,41 +192,46 @@ async def get_holdings(
 async def account_value(
     db: AsyncSession, account_id: int
 ) -> tuple[datetime | None, Decimal]:
-    """(taken_at, summed balance value in the quote asset) of the latest batch."""
+    """(taken_at, total asset value) of the latest batch.
+
+    Asset value is spot balance value plus position notional value; unpriced
+    rows contribute nothing.
+    """
     batch = await latest_batch(db, account_id)
     if batch is None:
         return None, Decimal("0")
     batch_id, taken_at = batch
-    result = await db.execute(
-        select(BalanceSnapshot.value_quote).where(BalanceSnapshot.batch_id == batch_id)
-    )
     total = Decimal("0")
-    for value in result.scalars():
-        if value is not None:
-            total += value
+    for model in (BalanceSnapshot, PositionSnapshot):
+        result = await db.execute(
+            select(model.value_quote).where(model.batch_id == batch_id)
+        )
+        for value in result.scalars():
+            if value is not None:
+                total += value
     return taken_at, total
 
 
-async def balance_history(
+async def value_history(
     db: AsyncSession, account_id: int, limit: int = 90
 ) -> list[tuple[str, datetime, Decimal]]:
-    """Per-batch total value in the quote asset, most recent first.
+    """Per-batch total asset value in the quote asset, most recent first.
 
     One point per capture batch: the summed ``value_quote`` of that batch's
-    balances (unpriced assets contribute nothing).
+    balances *and* positions (spot value + position notional). Unpriced rows
+    contribute nothing.
     """
-    result = await db.execute(
-        select(
-            BalanceSnapshot.batch_id,
-            BalanceSnapshot.taken_at,
-            BalanceSnapshot.value_quote,
-        ).where(BalanceSnapshot.account_id == account_id)
-    )
     totals: dict[str, tuple[datetime, Decimal]] = {}
-    for batch_id, taken_at, value in result:
-        prev = totals.get(batch_id)
-        running = (prev[1] if prev else Decimal("0")) + (value or Decimal("0"))
-        totals[batch_id] = (taken_at, running)
+    for model in (BalanceSnapshot, PositionSnapshot):
+        result = await db.execute(
+            select(model.batch_id, model.taken_at, model.value_quote).where(
+                model.account_id == account_id
+            )
+        )
+        for batch_id, taken_at, value in result:
+            prev = totals.get(batch_id)
+            running = (prev[1] if prev else Decimal("0")) + (value or Decimal("0"))
+            totals[batch_id] = (taken_at, running)
     points = [
         (batch_id, taken_at, total) for batch_id, (taken_at, total) in totals.items()
     ]

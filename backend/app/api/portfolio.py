@@ -139,14 +139,13 @@ async def account_holdings(
     """Current holdings (balances + positions) from the latest batch."""
     account = await _account_by_ref(db, exchange, label)
     balances, positions, taken_at = await svc.get_holdings(db, account.id)
-    total = sum((b.value_quote for b in balances if b.value_quote is not None), Decimal("0"))
     return HoldingsOut(
         account_id=account.id,
         exchange=account.exchange,
         label=account.label,
         taken_at=taken_at,
         quote_asset=svc.QUOTE_ASSET,
-        total_value=total,
+        total_value=svc.holdings_total(balances, positions),
         balances=[BalanceOut.model_validate(b) for b in balances],
         positions=[PositionOut.model_validate(p) for p in positions],
     )
@@ -161,7 +160,7 @@ async def account_history(
 ):
     """Total portfolio value over time, one point per capture batch."""
     account = await _account_by_ref(db, exchange, label)
-    points = await svc.balance_history(db, account.id, limit=limit)
+    points = await svc.value_history(db, account.id, limit=limit)
     return [HistoryPoint(taken_at=taken_at, total_value=total) for _, taken_at, total in points]
 
 
@@ -193,14 +192,13 @@ async def trigger_snapshot(
             raise HTTPException(status_code=400, detail=str(exc))
         entry.params = {"rows": written}
     balances, positions, taken_at = await svc.get_holdings(db, account.id)
-    total = sum((b.value_quote for b in balances if b.value_quote is not None), Decimal("0"))
     return HoldingsOut(
         account_id=account.id,
         exchange=account.exchange,
         label=account.label,
         taken_at=taken_at,
         quote_asset=svc.QUOTE_ASSET,
-        total_value=total,
+        total_value=svc.holdings_total(balances, positions),
         balances=[BalanceOut.model_validate(b) for b in balances],
         positions=[PositionOut.model_validate(p) for p in positions],
     )

@@ -70,8 +70,9 @@ async def test_valuation_uses_reference_prices(db, connector):
     assert rows["BTC"].value_quote == Decimal("30000")    # 0.5 * 60000
     assert rows["BTC"].quote_asset == "USDT"
 
+    # Asset value = spot value (40000) + position notional (2 * 3100 = 6200).
     _, total = await svc.account_value(db, account.id)
-    assert total == Decimal("40000")
+    assert total == Decimal("46200")
 
 
 async def test_position_notional_valued(db, connector):
@@ -103,15 +104,16 @@ async def test_holdings_returns_latest_batch(db, connector):
     assert taken_at is not None
 
 
-async def test_balance_history_one_point_per_batch(db, connector):
+async def test_value_history_one_point_per_batch(db, connector):
     await _seed_prices(db, connector)
     account = await _account_with_key(db, connector)
     await svc.capture_snapshots(db, connector, account)
     await svc.capture_snapshots(db, connector, account)
 
-    history = await svc.balance_history(db, account.id)
+    history = await svc.value_history(db, account.id)
     assert len(history) == 2
-    assert all(total == Decimal("40000") for _, _, total in history)
+    # spot value (40000) + position notional (6200)
+    assert all(total == Decimal("46200") for _, _, total in history)
 
 
 async def test_unpriced_asset_has_null_value(db, connector):
