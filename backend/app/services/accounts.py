@@ -86,7 +86,7 @@ async def add_credential(
         {"api_key": api_key, "secret": secret, "scheme": scheme}
     )
     if not info.valid:
-        raise CredentialInvalid("The venue rejected this API key")
+        raise CredentialInvalid(info.reason or "The venue rejected this API key")
 
     credential = ApiCredential(
         account_id=account.id,
@@ -137,7 +137,7 @@ async def register_account_with_credential(
         {"api_key": api_key, "secret": secret, "scheme": scheme}
     )
     if not info.valid:
-        raise CredentialInvalid("The venue rejected this API key")
+        raise CredentialInvalid(info.reason or "The venue rejected this API key")
 
     account = Account(
         exchange=exchange.upper(),

@@ -16,6 +16,8 @@ normalization works on plain API-shaped dicts (see sdk_util) to keep it
 testable with fixtures from the API docs.
 """
 import asyncio
+import logging
+import re
 from decimal import Decimal
 
 from binance_common.configuration import ConfigurationRestAPI
@@ -30,6 +32,7 @@ from binance_sdk_sub_account.sub_account import SubAccount
 from binance_sdk_wallet.wallet import Wallet
 
 from app.connectors.base import Capability, Credential, ExchangeConnector
+from app.connectors.errors import credential_error_reason
 from app.connectors.sdk_util import dump_sdk_model
 from app.connectors.symbols import build_universal_symbol
 from app.connectors.types import (
@@ -41,7 +44,32 @@ from app.connectors.types import (
 )
 from app.core.ratelimit import Priority, TokenBucket
 
+logger = logging.getLogger(__name__)
+
 _TIMEOUT_MS = 30_000
+
+_PEM_RE = re.compile(r"-----BEGIN ([A-Z0-9 ]+?)-----(.*?)-----END \1-----", re.DOTALL)
+
+
+def _normalize_pem(secret: str) -> str:
+    """Restore a PEM whose newlines were flattened to spaces.
+
+    Copy/paste and some form inputs collapse a PEM private key onto a single
+    line (``-----BEGIN PRIVATE KEY----- <base64> -----END PRIVATE KEY-----``).
+    The Binance SDK signs Ed25519 requests with PyCryptodome's
+    ``ECC.import_key``, which requires a real multi-line PEM and otherwise
+    raises ``A PEM file must have at least 3 lines``. Rebuild the canonical
+    header/64-col-body/footer layout; already-valid PEMs pass through
+    unchanged apart from surrounding whitespace.
+    """
+    text = secret.strip()
+    match = _PEM_RE.search(text)
+    if not match:
+        return text
+    label = match.group(1).strip()
+    body = "".join(match.group(2).split())
+    wrapped = "\n".join(body[i : i + 64] for i in range(0, len(body), 64))
+    return f"-----BEGIN {label}-----\n{wrapped}\n-----END {label}-----\n"
 
 
 def _auth_config(credential: Credential) -> ConfigurationRestAPI:
@@ -53,7 +81,7 @@ def _auth_config(credential: Credential) -> ConfigurationRestAPI:
     if credential.get("scheme") == "ED25519":
         return ConfigurationRestAPI(
             api_key=credential["api_key"],
-            private_key=credential["secret"].encode(),
+            private_key=_normalize_pem(credential["secret"]).encode(),
             timeout=_TIMEOUT_MS,
         )
     return ConfigurationRestAPI(
@@ -267,8 +295,10 @@ class BinanceConnector(ExchangeConnector):
     async def verify_credential(self, credential: Credential) -> CredentialInfo:
         try:
             restrictions = await self._fetch_api_restrictions(credential)
-        except Exception:
-            return CredentialInfo(valid=False)
+        except Exception as exc:
+            reason = credential_error_reason(self.exchange, exc)
+            logger.warning("Binance credential verification failed: %s", reason, exc_info=True)
+            return CredentialInfo(valid=False, reason=reason)
         can_trade = bool(
             restrictions.get("enableSpotAndMarginTrading") or restrictions.get("enableFutures")
         )

@@ -156,6 +156,7 @@ class CredentialInfo:
     can_trade: bool | None = None
     can_withdraw: bool | None = None
     permissions: dict | None = None    # venue-specific detail, for display
+    reason: str | None = None          # why verification failed (when not valid)
 
 
 @dataclass(frozen=True)

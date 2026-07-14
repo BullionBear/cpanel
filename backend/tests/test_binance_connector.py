@@ -9,11 +9,16 @@ import pytest
 
 from app.connectors.binance import (
     BinanceConnector,
+    _normalize_pem,
     normalize_cm_instrument,
     normalize_spot_instrument,
     normalize_um_instrument,
 )
 from app.connectors.types import MarketType
+
+# A syntactically valid Ed25519 PKCS#8 private key (test-only, not a real key).
+ED25519_BODY = "MC4CAQAwBQYDK2VwBCIEINaP1QKxqnkgM63/wvkTeuRg2MKi4iEbgNW9QxR4vzCI"
+ED25519_PEM = f"-----BEGIN PRIVATE KEY-----\n{ED25519_BODY}\n-----END PRIVATE KEY-----\n"
 
 SPOT_BTCUSDT = {
     "symbol": "BTCUSDT",
@@ -66,6 +71,32 @@ CM_SOLUSD_PERP = {
 }
 
 CM_SOLUSD_DELIVERY = {**CM_SOLUSD_PERP, "symbol": "SOLUSD_260925", "contractType": "CURRENT_QUARTER"}
+
+
+def test_normalize_pem_restores_spaces_to_newlines():
+    # PEM flattened onto one line with spaces (as some clients submit it).
+    flattened = f"-----BEGIN PRIVATE KEY----- {ED25519_BODY} -----END PRIVATE KEY-----"
+    assert _normalize_pem(flattened) == ED25519_PEM
+
+
+def test_normalize_pem_wraps_long_body_at_64_cols():
+    body = "A" * 200
+    flattened = f"-----BEGIN PRIVATE KEY----- {body} -----END PRIVATE KEY-----"
+    lines = _normalize_pem(flattened).splitlines()
+    assert lines[0] == "-----BEGIN PRIVATE KEY-----"
+    assert lines[-1] == "-----END PRIVATE KEY-----"
+    assert [len(line) for line in lines[1:-1]] == [64, 64, 64, 8]
+
+
+def test_normalize_pem_is_idempotent_on_valid_pem():
+    assert _normalize_pem(ED25519_PEM) == ED25519_PEM
+    # Surrounding whitespace is trimmed but structure is preserved.
+    assert _normalize_pem(f"  \n{ED25519_PEM}\n  ") == ED25519_PEM
+
+
+def test_normalize_pem_leaves_hmac_secret_untouched():
+    assert _normalize_pem("plain-hmac-secret") == "plain-hmac-secret"
+    assert _normalize_pem("  spaced secret  ") == "spaced secret"
 
 
 def test_normalize_spot():

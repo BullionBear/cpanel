@@ -15,11 +15,13 @@ DELIVERY support lands.
 Uses the official ``pybit`` SDK (synchronous, run in a worker thread).
 """
 import asyncio
+import logging
 from decimal import Decimal
 
 from pybit.unified_trading import HTTP
 
 from app.connectors.base import Capability, Credential, ExchangeConnector
+from app.connectors.errors import credential_error_reason
 from app.connectors.symbols import build_universal_symbol
 from app.connectors.types import (
     ApiKeyResult,
@@ -31,6 +33,8 @@ from app.connectors.types import (
     SubaccountInfo,
 )
 from app.core.ratelimit import Priority, TokenBucket
+
+logger = logging.getLogger(__name__)
 
 # Permission sets granted to panel-created sub API keys
 _TRADE_PERMISSIONS = {
@@ -194,8 +198,10 @@ class BybitConnector(ExchangeConnector):
         session = self._auth_session(credential)
         try:
             response = await self._call(session.get_api_key_information)
-        except Exception:
-            return CredentialInfo(valid=False)
+        except Exception as exc:
+            reason = credential_error_reason(self.exchange, exc)
+            logger.warning("Bybit credential verification failed: %s", reason, exc_info=True)
+            return CredentialInfo(valid=False, reason=reason)
         info = response.get("result", {})
         permissions = info.get("permissions") or {}
         can_trade = bool(permissions.get("ContractTrade") or permissions.get("Spot"))
