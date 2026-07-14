@@ -169,6 +169,26 @@ async def register_account_with_credential(
     return account, credential, info
 
 
+async def rename_account(db: AsyncSession, account: Account, label: str) -> Account:
+    """Change an account's nickname (system-only label)."""
+    if label != account.label:
+        clash = await db.execute(
+            select(Account.id).where(
+                Account.exchange == account.exchange,
+                Account.label == label,
+                Account.id != account.id,
+            )
+        )
+        if clash.scalars().first() is not None:
+            raise AccountError(
+                f"Another {account.exchange} account already uses the nickname {label!r}"
+            )
+    account.label = label
+    await db.commit()
+    await db.refresh(account)
+    return account
+
+
 def reveal_secret(credential: ApiCredential) -> str:
     """Decrypt and return a stored secret. Callers MUST audit each reveal."""
     return SecretBox().decrypt(credential.secret_enc)

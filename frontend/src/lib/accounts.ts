@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPut } from './api';
+import { apiGet, apiPatch, apiPost, apiPut } from './api';
 
 export interface Credential {
 	id: number;
@@ -65,6 +65,16 @@ export const fetchCapabilities = () => apiGet<ExchangeCapabilities[]>('/accounts
 /** Combined account + API key registration (the universal flow). */
 export const registerAccount = (body: RegisterAccountBody) =>
 	apiPost<AccountInfo>('/accounts/register', body);
+
+/** Change an account's nickname (system-only label). */
+export const renameAccount = (accountId: number, label: string) =>
+	apiPatch<AccountInfo>(`/accounts/${accountId}`, { label });
+
+/** Register an existing venue-made API key against an account. */
+export const addCredential = (
+	accountId: number,
+	body: { scheme?: string; api_key: string; secret: string; tags?: string[]; label?: string }
+) => apiPost<Credential>(`/accounts/${accountId}/credentials`, body);
 
 export const revealSecret = (accountId: number, credentialId: number) =>
 	apiPost<RevealedSecret>(`/accounts/${accountId}/credentials/${credentialId}/reveal`);

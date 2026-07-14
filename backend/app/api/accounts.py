@@ -108,6 +108,10 @@ class RegisterAccount(BaseModel):
     cred_label: str | None = None
 
 
+class AccountRename(BaseModel):
+    label: str = Field(min_length=1, max_length=128)
+
+
 class SubaccountCreate(BaseModel):
     label: str = Field(min_length=1, max_length=64)
 
@@ -184,13 +188,11 @@ async def exchange_capabilities():
     for c in connectors.all():
         if not c.supports(Capability.CREDENTIAL_VERIFY):
             continue
-        provisioning = any(
-            c.supports(cap)
-            for cap in (
-                Capability.SUBACCOUNT_CREATE,
-                Capability.API_KEY_CREATE,
-                Capability.SUBACCOUNT_LIST,
-            )
+        # "Registration only" means the panel cannot provision keys/subaccounts
+        # on the venue — the operator brings keys made on the venue. Listing
+        # (sync) is a read and does not count as provisioning.
+        provisioning = c.supports(Capability.SUBACCOUNT_CREATE) or c.supports(
+            Capability.API_KEY_CREATE
         )
         result.append(
             ExchangeCapabilities(
@@ -222,6 +224,27 @@ async def create_account(
                 db, body.exchange, body.label, body.account_type,
                 parent_id=body.parent_id, native_uid=body.native_uid,
             )
+        except svc.AccountError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    return AccountOut.model_validate(await _get_account(db, account.id))
+
+
+@router.patch("/{account_id}", response_model=AccountOut)
+async def rename_account(
+    account_id: int,
+    body: AccountRename,
+    actor: Actor = Depends(current_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Change an account's nickname."""
+    account = await _get_account(db, account_id)
+    async with audit(
+        db, actor, "accounts.rename",
+        target=f"{account.exchange}:{account.label}",
+        params={"label": body.label},
+    ):
+        try:
+            await svc.rename_account(db, account, body.label)
         except svc.AccountError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     return AccountOut.model_validate(await _get_account(db, account.id))

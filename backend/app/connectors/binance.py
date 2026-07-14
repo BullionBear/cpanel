@@ -169,16 +169,17 @@ def normalize_cm_instrument(info: dict) -> Instrument | None:
 
 class BinanceConnector(ExchangeConnector):
     exchange = "BINANCE"
-    # Registration-only. Binance's API cannot mint/rotate/revoke subaccount API
-    # keys for a normal (non-broker) master account, so the panel does no
-    # provisioning for Binance at all: the operator creates keys and
-    # subaccounts on Binance and registers each here. We keep only verification
-    # and read. (See docs/ACCOUNT_REDESIGN.md.)
+    # Registration-only for keys. Binance's API cannot mint/rotate/revoke
+    # subaccount API keys for a normal (non-broker) master account, so the
+    # operator creates keys on Binance and registers each here. Subaccounts,
+    # however, can be *listed* from the venue, so we keep read-only sync (no
+    # create). (See docs/ACCOUNT_REDESIGN.md.)
     capabilities = frozenset(
         {
             Capability.INSTRUMENTS,
             Capability.REFERENCE_PRICES,
             Capability.CREDENTIAL_VERIFY,
+            Capability.SUBACCOUNT_LIST,
         }
     )
 

@@ -176,6 +176,25 @@ async def test_register_rejects_bad_key(client):
     assert response.status_code == 400
 
 
+async def test_rename_account(client):
+    main = await create_main(client)
+    response = await client.patch(f"/accounts/{main['id']}", json={"label": "renamed"})
+    assert response.status_code == 200
+    assert response.json()["label"] == "renamed"
+
+    tree = (await client.get("/accounts/tree")).json()
+    assert tree[0]["label"] == "renamed"
+
+
+async def test_rename_duplicate_rejected(client):
+    a = await create_main(client)
+    await client.post(
+        "/accounts", json={"exchange": "FAKE", "label": "other", "account_type": "main"}
+    )
+    response = await client.patch(f"/accounts/{a['id']}", json={"label": "other"})
+    assert response.status_code == 400
+
+
 async def test_reveal_secret_is_audited(client, session_factory):
     main = await create_main(client)
     cred = await add_key(client, main["id"])

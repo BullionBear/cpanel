@@ -6,6 +6,8 @@
 		fetchTree,
 		fetchCapabilities,
 		registerAccount,
+		renameAccount,
+		addCredential,
 		revealSecret,
 		setTags,
 		revokeCredential,
@@ -37,8 +39,6 @@
 
 	// Registration form (main account)
 	let reg = { label: '', scheme: 'HMAC', api_key: '', secret: '', tags: '' };
-	// Per-main subaccount registration form (registration-only venues)
-	let subReg: Record<number, { label: string; scheme: string; api_key: string; secret: string; tags: string }> = {};
 	// Per-main new-subaccount name (self-service venues)
 	let subName: Record<number, string> = {};
 	// Per-sub create-key form (self-service venues)
@@ -48,6 +48,10 @@
 	let revealed: Record<number, { api_key: string; secret: string }> = {};
 	// Tag editing drafts, keyed by credential id
 	let tagDraft: Record<number, string> = {};
+	// Nickname edit drafts, keyed by account id
+	let nameDraft: Record<number, string> = {};
+	// "Register an existing key" drafts, keyed by account id
+	let keyReg: Record<number, { scheme: string; api_key: string; secret: string; tags: string }> = {};
 
 	let loadedFor = '';
 	$: if (browser && exchange && exchange !== loadedFor) {
@@ -56,6 +60,8 @@
 		notice = '';
 		revealed = {};
 		tagDraft = {};
+		nameDraft = {};
+		keyReg = {};
 		reg = { label: '', scheme: schemes[0] ?? 'HMAC', api_key: '', secret: '', tags: '' };
 		load();
 	}
@@ -112,28 +118,49 @@
 			reg = { label: '', scheme: schemes[0] ?? 'HMAC', api_key: '', secret: '', tags: '' };
 		});
 
-	const registerSub = (main: AccountNode) =>
+	// Which accounts accept a manually-registered (venue-made) key: any account
+	// on a registration-only venue, plus every main account (master keys can't
+	// be minted over the API even on self-service venues).
+	const showAddKey = (account: AccountInfo) =>
+		!caps?.api_key_create || account.account_type === 'main';
+
+	const startRename = (account: AccountInfo) => {
+		nameDraft[account.id] = account.label;
+		nameDraft = nameDraft;
+	};
+	const cancelRename = (accountId: number) => {
+		delete nameDraft[accountId];
+		nameDraft = nameDraft;
+	};
+	const saveName = (account: AccountInfo) =>
 		run(async () => {
-			const form = subReg[main.id];
-			await registerAccount({
-				exchange,
-				label: form.label.trim(),
-				account_type: 'sub',
-				parent_id: main.id,
+			await renameAccount(account.id, nameDraft[account.id].trim());
+			notice = `Renamed to "${nameDraft[account.id].trim()}".`;
+			delete nameDraft[account.id];
+			nameDraft = nameDraft;
+		});
+
+	const startAddKey = (accountId: number) => {
+		keyReg[accountId] = { scheme: schemes[0] ?? 'HMAC', api_key: '', secret: '', tags: '' };
+		keyReg = keyReg;
+	};
+	const cancelAddKey = (accountId: number) => {
+		delete keyReg[accountId];
+		keyReg = keyReg;
+	};
+	const submitAddKey = (account: AccountInfo) =>
+		run(async () => {
+			const form = keyReg[account.id];
+			await addCredential(account.id, {
 				scheme: form.scheme,
 				api_key: form.api_key.trim(),
 				secret: form.secret.trim(),
 				tags: parseTags(form.tags)
 			});
-			notice = `Registered subaccount "${form.label.trim()}".`;
-			delete subReg[main.id];
-			subReg = subReg;
+			notice = `Registered a key on "${account.label}".`;
+			delete keyReg[account.id];
+			keyReg = keyReg;
 		});
-
-	const startSubReg = (mainId: number) => {
-		subReg[mainId] = { label: '', scheme: schemes[0] ?? 'HMAC', api_key: '', secret: '', tags: '' };
-		subReg = subReg;
-	};
 
 	const addSub = (main: AccountNode) =>
 		run(async () => {
@@ -244,17 +271,21 @@
 			<ol>
 				<li>Create your API keys and subaccounts on {exchange} directly.</li>
 				<li>
-					Register each key here (under <strong>Account</strong>) so CPanel can read balances,
-					orders, and history and place trades.
+					Register your master account and its key here (under <strong>Account</strong>), then
+					<strong>Sync</strong> to pull your subaccounts in automatically.
 				</li>
 				<li>
-					Give every account a <strong>nickname</strong> to recognize it, and tag each key
-					however you like.
+					Register each subaccount's key so CPanel can read balances, orders, and history and
+					place trades.
+				</li>
+				<li>
+					Give every account a <strong>nickname</strong> and tag each key however you like — you
+					can rename accounts or add more keys anytime.
 				</li>
 			</ol>
 			<p class="muted">
-				The venue account id (e.g. subaccount email) is detected automatically when you register a
-				key — you never enter it.
+				The venue account id (e.g. subaccount email) is detected automatically — you never enter
+				it. Subaccounts are synced from {exchange}, never created here.
 			</p>
 		{:else}
 			<p>
@@ -313,7 +344,16 @@
 	{#each mains as main (main.id)}
 		<div class="card">
 			<div class="card-head">
-				<h2>{main.label}</h2>
+				{#if nameDraft[main.id] !== undefined}
+					<form class="inline-form" on:submit|preventDefault={() => saveName(main)}>
+						<input bind:value={nameDraft[main.id]} required />
+						<button class="btn small" disabled={busy || !nameDraft[main.id]?.trim()}>Save</button>
+						<button type="button" class="btn secondary small" on:click={() => cancelRename(main.id)}>Cancel</button>
+					</form>
+				{:else}
+					<h2>{main.label}</h2>
+					<button class="btn secondary small" on:click={() => startRename(main)}>Rename</button>
+				{/if}
 				{#if main.native_uid}<span class="uid">{main.native_uid}</span>{/if}
 			</div>
 
@@ -352,19 +392,51 @@
 				{/if}
 			{/each}
 
+			{#if showAddKey(main)}
+				{#if keyReg[main.id] !== undefined}
+					<form class="key-form" on:submit|preventDefault={() => submitAddKey(main)}>
+						{#if schemes.length > 1}
+							<select bind:value={keyReg[main.id].scheme}>
+								{#each schemes as s}<option value={s}>{s}</option>{/each}
+							</select>
+						{/if}
+						<input placeholder="API key" bind:value={keyReg[main.id].api_key} required />
+						<input type="password" placeholder="Secret / private key" bind:value={keyReg[main.id].secret} required />
+						<input placeholder="Tags (comma-separated)" bind:value={keyReg[main.id].tags} />
+						<button class="btn small" disabled={busy}>Verify &amp; register key</button>
+						<button type="button" class="btn secondary small" on:click={() => cancelAddKey(main.id)}>Cancel</button>
+					</form>
+				{:else}
+					<button class="btn secondary small" on:click={() => startAddKey(main.id)}>Add API key</button>
+				{/if}
+			{/if}
+
 			<h3>Subaccounts</h3>
 			{#if main.children.length === 0}<p class="muted">No subaccounts.</p>{/if}
 			{#each main.children as sub (sub.id)}
 				<div class="sub-block">
 					<div class="cred-row">
-						<span class="sub-label">{sub.label}</span>
+						{#if nameDraft[sub.id] !== undefined}
+							<form class="inline-form" on:submit|preventDefault={() => saveName(sub)}>
+								<input bind:value={nameDraft[sub.id]} required />
+								<button class="btn small" disabled={busy || !nameDraft[sub.id]?.trim()}>Save</button>
+								<button type="button" class="btn secondary small" on:click={() => cancelRename(sub.id)}>Cancel</button>
+							</form>
+						{:else}
+							<span class="sub-label">{sub.label}</span>
+						{/if}
 						{#if sub.native_uid}<span class="uid">{sub.native_uid}</span>{/if}
 						{#if sub.status === 'frozen'}<span class="tag warn">frozen</span>{/if}
-						{#if caps?.subaccount_freeze}
-							<button class="btn secondary small" disabled={busy} on:click={() => toggleFreeze(main, sub)}>
-								{sub.status === 'frozen' ? 'Unfreeze' : 'Freeze'}
-							</button>
-						{/if}
+						<div class="row-actions">
+							{#if nameDraft[sub.id] === undefined}
+								<button class="btn secondary small" on:click={() => startRename(sub)}>Rename</button>
+							{/if}
+							{#if caps?.subaccount_freeze}
+								<button class="btn secondary small" disabled={busy} on:click={() => toggleFreeze(main, sub)}>
+									{sub.status === 'frozen' ? 'Unfreeze' : 'Freeze'}
+								</button>
+							{/if}
+						</div>
 					</div>
 
 					{#each sub.credentials as cred (cred.id)}
@@ -418,28 +490,30 @@
 							<button class="btn small" disabled={busy}>Create key</button>
 						</form>
 					{/if}
+
+					{#if showAddKey(sub)}
+						{#if keyReg[sub.id] !== undefined}
+							<form class="key-form indent" on:submit|preventDefault={() => submitAddKey(sub)}>
+								{#if schemes.length > 1}
+									<select bind:value={keyReg[sub.id].scheme}>
+										{#each schemes as s}<option value={s}>{s}</option>{/each}
+									</select>
+								{/if}
+								<input placeholder="API key" bind:value={keyReg[sub.id].api_key} required />
+								<input type="password" placeholder="Secret / private key" bind:value={keyReg[sub.id].secret} required />
+								<input placeholder="Tags (comma-separated)" bind:value={keyReg[sub.id].tags} />
+								<button class="btn small" disabled={busy}>Verify &amp; register key</button>
+								<button type="button" class="btn secondary small" on:click={() => cancelAddKey(sub.id)}>Cancel</button>
+							</form>
+						{:else}
+							<button class="btn secondary small indent" on:click={() => startAddKey(sub.id)}>Add API key</button>
+						{/if}
+					{/if}
 				</div>
 			{/each}
 
-			<!-- Subaccount provisioning / registration -->
-			{#if registrationOnly}
-				{#if subReg[main.id] !== undefined}
-					<form class="key-form" on:submit|preventDefault={() => registerSub(main)}>
-						<input placeholder="Subaccount nickname" bind:value={subReg[main.id].label} required />
-						{#if schemes.length > 1}
-							<select bind:value={subReg[main.id].scheme}>
-								{#each schemes as s}<option value={s}>{s}</option>{/each}
-							</select>
-						{/if}
-						<input placeholder="API key" bind:value={subReg[main.id].api_key} required />
-						<input type="password" placeholder="Secret" bind:value={subReg[main.id].secret} required />
-						<input placeholder="Tags" bind:value={subReg[main.id].tags} />
-						<button class="btn small" disabled={busy}>Register subaccount</button>
-					</form>
-				{:else}
-					<button class="btn secondary small" on:click={() => startSubReg(main.id)}>Register a subaccount</button>
-				{/if}
-			{:else}
+			<!-- Subaccount provisioning -->
+			{#if caps?.subaccount_list || caps?.subaccount_create}
 				<div class="sub-actions">
 					{#if caps?.subaccount_list}
 						<button class="btn secondary small" disabled={busy} on:click={() => sync(main)}>Sync from {exchange}</button>
@@ -451,6 +525,11 @@
 						</form>
 					{/if}
 				</div>
+				{#if registrationOnly && caps?.subaccount_list}
+					<p class="muted">
+						Subaccounts are synced from {exchange}; register each one's API key above to use it.
+					</p>
+				{/if}
 			{/if}
 		</div>
 	{/each}

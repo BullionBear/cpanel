@@ -79,39 +79,49 @@ self-service), followed by the Account page.
 
 ## Binance page ✅
 
-**Philosophy: registration-only.** Binance's API cannot create or revoke
-subaccount API keys for a normal (non-broker) master account (see
-[ACCOUNT.md](ACCOUNT.md) → Binance → "API-key lifecycle"). So the panel does
-**no** provisioning for Binance: it never creates, rotates, revokes, or syncs
-keys or subaccounts. The operator does all of that on Binance's own site and
-**injects** the resulting keys into CPanel.
+**Philosophy: registration-only for keys, read-only sync for subaccounts.**
+Binance's API cannot create, rotate, or revoke subaccount API keys for a normal
+(non-broker) master account (see [ACCOUNT.md](ACCOUNT.md) → Binance → "API-key
+lifecycle"). So the panel does **no key provisioning** for Binance: the operator
+creates keys on Binance's own site and **injects** them into CPanel. Binance
+*can*, however, list subaccounts, so the panel offers **read-only subaccount
+sync** — it pulls the subaccount roster from Binance but never creates one.
 
 ### Binance → Readme
 
 A static explainer page stating the model in plain terms:
 
 - Create your API keys and subaccounts on Binance directly.
-- Register each key here so CPanel can read balances/orders/history and trade.
-- CPanel will never create, modify, or delete Binance keys or subaccounts —
-  the panel only *uses* the keys you give it.
+- Register your master account and key, then **Sync** to pull subaccounts in.
+- Register each subaccount's key so CPanel can read balances/orders/history and
+  trade.
+- CPanel will never create, modify, or delete Binance keys, and never creates
+  subaccounts — the panel only *uses* the keys you give it and *reads* the
+  subaccount list.
 
 ### Binance → Account
 
 - Account list showing each registered account by **nickname**, its keys, key
   **tags**, and verified permissions/status.
-- **Combined registration**: one form that registers an account *and* its API
-  key at once (nickname + key + tags), verifying the key against Binance before
-  saving.
-- **Subaccounts are fully manual.** A Binance subaccount is registered exactly
-  like a main account — the operator creates it on Binance, then registers it
-  in CPanel (nickname + its key + tags) and links it to its parent. No venue
-  subaccount sync, create, or listing is exposed.
+- **Combined registration**: one form that registers the master account *and*
+  its API key at once (nickname + key + tags), verifying the key against Binance
+  before saving.
+- **Subaccounts are synced, not created.** After the master is registered,
+  **Sync from Binance** imports the subaccount roster (nickname defaults to the
+  venue id; the operator can rename). Each synced subaccount then gets its
+  operator-made key registered against it. There is no manual subaccount
+  creation.
+- **Existing accounts are editable.** Any account (master or sub) can be
+  **renamed** (nickname only) and can have **additional API keys registered**
+  at any time.
 
 ### Connector
 
-Binance connector stays verification + read only. Provisioning capabilities
-(`SUBACCOUNT_CREATE`, and the absent `API_KEY_CREATE`/`API_KEY_REVOKE`) are not
-surfaced in the Binance UI. `CREDENTIAL_VERIFY` is used at registration time.
+Binance connector is verify + read + subaccount-list. It surfaces
+`CREDENTIAL_VERIFY` (used at registration), `SUBACCOUNT_LIST` (used by Sync),
+and market-data reads. It does **not** surface `SUBACCOUNT_CREATE`,
+`API_KEY_CREATE`, `API_KEY_MODIFY`, or `API_KEY_REVOKE`, so `registration_only`
+is true (listing is a read and does not count as provisioning).
 
 ---
 
