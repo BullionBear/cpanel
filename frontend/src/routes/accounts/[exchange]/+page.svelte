@@ -2,6 +2,7 @@
 	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
 	import { ApiError } from '$lib/api';
+	import Menu from '$lib/Menu.svelte';
 	import {
 		fetchTree,
 		fetchCapabilities,
@@ -66,6 +67,19 @@
 	let keyDialog: KeyDialog | null = null;
 	// Secret shown once right after a key is created (from the create response).
 	let createdSecret: { api_key: string; secret: string } | null = null;
+	// The API key whose full detail dialog is open, or null when closed.
+	let detail: { account: AccountInfo; cred: Credential } | null = null;
+
+	const openDetail = (account: AccountInfo, cred: Credential) => {
+		detail = { account, cred };
+	};
+	const closeDetail = () => {
+		detail = null;
+	};
+
+	const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString() : '—');
+	const fmtPermissions = (p: Record<string, unknown> | null) =>
+		p && Object.keys(p).length ? JSON.stringify(p, null, 2) : '';
 
 	// Revealed secrets, keyed by credential id
 	let revealed: Record<number, { api_key: string; secret: string }> = {};
@@ -171,8 +185,6 @@
 		delete keyReg[accountId];
 		keyReg = keyReg;
 	};
-	const toggleAddKey = (accountId: number) =>
-		keyReg[accountId] !== undefined ? cancelAddKey(accountId) : startAddKey(accountId);
 
 	// Focus the field as soon as an inline editor opens.
 	const autofocus = (node: HTMLInputElement) => {
@@ -428,6 +440,11 @@
 					</h2>
 				{/if}
 				{#if main.native_uid}<span class="uid">{main.native_uid}</span>{/if}
+				{#if nameDraft[main.id] === undefined && showAddKey(main) && keyReg[main.id] === undefined}
+					<Menu label="Account actions">
+						<button class="menu-item" on:click={() => startAddKey(main.id)}>Add API key</button>
+					</Menu>
+				{/if}
 			</div>
 
 			<h3>API keys</h3>
@@ -440,16 +457,18 @@
 					{#if cred.can_withdraw}<span class="tag warn">withdraw</span>{/if}
 					<span class="tag" class:ok={cred.status === 'active'}>{cred.status}</span>
 					{#each cred.tags ?? [] as t}<span class="tag chip">{t}</span>{/each}
-					<div class="row-actions">
-						<button class="btn secondary small" disabled={busy} on:click={() => toggleReveal(main, cred)}>
-							{revealed[cred.id] ? 'Hide' : 'Reveal'}
+					<Menu small label="API key actions">
+						<button class="menu-item" on:click={() => openDetail(main, cred)}>Detail</button>
+						<button class="menu-item" disabled={busy} on:click={() => toggleReveal(main, cred)}>
+							{revealed[cred.id] ? 'Hide secret' : 'Reveal secret'}
 						</button>
-						<button class="btn secondary small" on:click={() => startTagEdit(cred)}>Tags</button>
+						<button class="menu-item" on:click={() => startTagEdit(cred)}>Edit tags</button>
+						<div class="menu-sep"></div>
 						{#if canRevoke(main, cred)}
-							<button class="btn danger small" disabled={busy} on:click={() => revoke(main, cred.id)}>Revoke</button>
+							<button class="menu-item danger" disabled={busy} on:click={() => revoke(main, cred.id)}>Revoke</button>
 						{/if}
-						<button class="btn danger small" disabled={busy} on:click={() => removeKey(main, cred.id)}>Delete</button>
-					</div>
+						<button class="menu-item danger" disabled={busy} on:click={() => removeKey(main, cred.id)}>Delete</button>
+					</Menu>
 				</div>
 				{#if revealed[cred.id]}
 					<div class="reveal">
@@ -466,23 +485,19 @@
 				{/if}
 			{/each}
 
-			{#if showAddKey(main)}
-				{#if keyReg[main.id] !== undefined}
-					<form class="key-form" on:submit|preventDefault={() => submitAddKey(main)}>
-						{#if schemes.length > 1}
-							<select bind:value={keyReg[main.id].scheme}>
-								{#each schemes as s}<option value={s}>{s}</option>{/each}
-							</select>
-						{/if}
-						<input placeholder="API key" bind:value={keyReg[main.id].api_key} required />
-						<input type="password" placeholder="Secret / private key" bind:value={keyReg[main.id].secret} required />
-						<input placeholder="Tags (comma-separated)" bind:value={keyReg[main.id].tags} />
-						<button class="btn small" disabled={busy}>Verify &amp; register key</button>
-						<button type="button" class="btn secondary small" on:click={() => cancelAddKey(main.id)}>Cancel</button>
-					</form>
-				{:else}
-					<button class="btn secondary small" on:click={() => startAddKey(main.id)}>Add API key</button>
-				{/if}
+			{#if showAddKey(main) && keyReg[main.id] !== undefined}
+				<form class="key-form" on:submit|preventDefault={() => submitAddKey(main)}>
+					{#if schemes.length > 1}
+						<select bind:value={keyReg[main.id].scheme}>
+							{#each schemes as s}<option value={s}>{s}</option>{/each}
+						</select>
+					{/if}
+					<input placeholder="API key" bind:value={keyReg[main.id].api_key} required />
+					<input type="password" placeholder="Secret / private key" bind:value={keyReg[main.id].secret} required />
+					<input placeholder="Tags (comma-separated)" bind:value={keyReg[main.id].tags} />
+					<button class="btn small" disabled={busy}>Verify &amp; register key</button>
+					<button type="button" class="btn secondary small" on:click={() => cancelAddKey(main.id)}>Cancel</button>
+				</form>
 			{/if}
 
 			<h3>Subaccounts</h3>
@@ -506,21 +521,24 @@
 						{/if}
 						{#if sub.native_uid}<span class="uid">{sub.native_uid}</span>{/if}
 						{#if sub.status === 'frozen'}<span class="tag warn">frozen</span>{/if}
-						<div class="row-actions">
-							{#if caps?.api_key_create}
-								<button class="btn small" disabled={busy} on:click={() => openKeyDialog(main, sub)}>Create key</button>
-							{/if}
-							{#if showAddKey(sub)}
-								<button class="btn secondary small" on:click={() => toggleAddKey(sub.id)}>
-									{keyReg[sub.id] !== undefined ? 'Cancel' : 'Add API key'}
-								</button>
-							{/if}
-							{#if caps?.subaccount_freeze}
-								<button class="btn secondary small" disabled={busy} on:click={() => toggleFreeze(main, sub)}>
-									{sub.status === 'frozen' ? 'Unfreeze' : 'Freeze'}
-								</button>
-							{/if}
-						</div>
+						{#if nameDraft[sub.id] === undefined && (caps?.api_key_create || (showAddKey(sub) && keyReg[sub.id] === undefined) || caps?.subaccount_freeze)}
+							<Menu small label="Subaccount actions">
+								{#if caps?.api_key_create}
+									<button class="menu-item" disabled={busy} on:click={() => openKeyDialog(main, sub)}>Create key</button>
+								{/if}
+								{#if showAddKey(sub) && keyReg[sub.id] === undefined}
+									<button class="menu-item" on:click={() => startAddKey(sub.id)}>Add API key</button>
+								{/if}
+								{#if caps?.subaccount_freeze}
+									{#if caps?.api_key_create || (showAddKey(sub) && keyReg[sub.id] === undefined)}
+										<div class="menu-sep"></div>
+									{/if}
+									<button class="menu-item" disabled={busy} on:click={() => toggleFreeze(main, sub)}>
+										{sub.status === 'frozen' ? 'Unfreeze' : 'Freeze'}
+									</button>
+								{/if}
+							</Menu>
+						{/if}
 					</div>
 
 					{#each sub.credentials as cred (cred.id)}
@@ -530,23 +548,25 @@
 							{#if cred.read_only}<span class="tag">read-only</span>{/if}
 							<span class="tag" class:ok={cred.status === 'active'}>{cred.status}</span>
 							{#each cred.tags ?? [] as t}<span class="tag chip">{t}</span>{/each}
-							<div class="row-actions">
-								<button class="btn secondary small" disabled={busy} on:click={() => toggleReveal(sub, cred)}>
-									{revealed[cred.id] ? 'Hide' : 'Reveal'}
+							<Menu small label="API key actions">
+								<button class="menu-item" on:click={() => openDetail(sub, cred)}>Detail</button>
+								<button class="menu-item" disabled={busy} on:click={() => toggleReveal(sub, cred)}>
+									{revealed[cred.id] ? 'Hide secret' : 'Reveal secret'}
 								</button>
-								<button class="btn secondary small" on:click={() => startTagEdit(cred)}>Tags</button>
+								<button class="menu-item" on:click={() => startTagEdit(cred)}>Edit tags</button>
 								{#if caps?.api_key_modify && cred.status === 'active'}
 									{#if cred.read_only}
-										<button class="btn secondary small" disabled={busy} on:click={() => setReadOnly(sub.id, cred, false)}>Allow trading</button>
+										<button class="menu-item" disabled={busy} on:click={() => setReadOnly(sub.id, cred, false)}>Allow trading</button>
 									{:else}
-										<button class="btn secondary small" disabled={busy} on:click={() => setReadOnly(sub.id, cred, true)}>Make read-only</button>
+										<button class="menu-item" disabled={busy} on:click={() => setReadOnly(sub.id, cred, true)}>Make read-only</button>
 									{/if}
 								{/if}
+								<div class="menu-sep"></div>
 								{#if canRevoke(sub, cred)}
-									<button class="btn danger small" disabled={busy} on:click={() => revoke(sub, cred.id)}>Revoke</button>
+									<button class="menu-item danger" disabled={busy} on:click={() => revoke(sub, cred.id)}>Revoke</button>
 								{/if}
-								<button class="btn danger small" disabled={busy} on:click={() => removeKey(sub, cred.id)}>Delete</button>
-							</div>
+								<button class="menu-item danger" disabled={busy} on:click={() => removeKey(sub, cred.id)}>Delete</button>
+							</Menu>
 						</div>
 						{#if revealed[cred.id]}
 							<div class="reveal indent">
@@ -608,6 +628,7 @@
 	on:keydown={(e) => {
 		if (e.key !== 'Escape') return;
 		if (createdSecret) createdSecret = null;
+		else if (detail) closeDetail();
 		else if (keyDialog) closeKeyDialog();
 	}}
 />
@@ -624,6 +645,59 @@
 			<div class="dialog-actions">
 				<button class="btn" on:click={() => (createdSecret = null)}>Done</button>
 			</div>
+		</div>
+	</div>
+{/if}
+
+{#if detail}
+	<div class="overlay" on:click|self={closeDetail} role="presentation">
+		<div class="dialog" role="dialog" aria-modal="true" aria-label="API key detail">
+			<h2>API key detail</h2>
+			<p class="muted">On “{detail.account.label}” ({exchange}).</p>
+			<div class="detail">
+				<div class="detail-row"><span class="k">API key</span><span class="v">{detail.cred.api_key}</span></div>
+				{#if detail.cred.label}
+					<div class="detail-row"><span class="k">Label</span><span class="v">{detail.cred.label}</span></div>
+				{/if}
+				<div class="detail-row"><span class="k">Scheme</span><span class="v">{detail.cred.scheme}</span></div>
+				<div class="detail-row">
+					<span class="k">Status</span>
+					<span class="v"><span class="tag" class:ok={detail.cred.status === 'active'}>{detail.cred.status}</span></span>
+				</div>
+				<div class="detail-row"><span class="k">Read-only</span><span class="v">{detail.cred.read_only ? 'Yes' : 'No'}</span></div>
+				<div class="detail-row">
+					<span class="k">Withdraw</span>
+					<span class="v">{detail.cred.can_withdraw ? 'Enabled' : 'Disabled'}</span>
+				</div>
+				<div class="detail-row">
+					<span class="k">Tags</span>
+					<span class="v">
+						{#if detail.cred.tags?.length}
+							{#each detail.cred.tags as t}<span class="tag chip">{t}</span>{/each}
+						{:else}—{/if}
+					</span>
+				</div>
+				{#if fmtPermissions(detail.cred.permissions)}
+					<div class="detail-row">
+						<span class="k">Permissions</span>
+						<pre class="v perms">{fmtPermissions(detail.cred.permissions)}</pre>
+					</div>
+				{/if}
+				<div class="detail-row"><span class="k">Verified</span><span class="v">{fmtDate(detail.cred.verified_at)}</span></div>
+				<div class="detail-row"><span class="k">Created</span><span class="v">{fmtDate(detail.cred.created_at)}</span></div>
+			</div>
+			<div class="dialog-actions">
+				<button class="btn secondary" on:click={() => detail && toggleReveal(detail.account, detail.cred)}>
+					{revealed[detail.cred.id] ? 'Hide secret' : 'Reveal secret'}
+				</button>
+				<button class="btn" on:click={closeDetail}>Done</button>
+			</div>
+			{#if revealed[detail.cred.id]}
+				<div class="reveal">
+					<div><span>Key</span><code>{revealed[detail.cred.id].api_key}</code></div>
+					<div><span>Secret</span><code>{revealed[detail.cred.id].secret}</code></div>
+				</div>
+			{/if}
 		</div>
 	</div>
 {/if}
@@ -758,11 +832,6 @@
 	}
 	.cred-row.revoked {
 		opacity: 0.55;
-	}
-	.row-actions {
-		display: inline-flex;
-		gap: 0.375rem;
-		margin-left: auto;
 	}
 	.sub-block {
 		padding: 0.5rem 0 0.625rem;
@@ -903,5 +972,38 @@
 		justify-content: flex-end;
 		gap: 0.5rem;
 		margin-top: 1.5rem;
+	}
+
+	.detail {
+		margin-top: 1rem;
+	}
+	.detail-row {
+		display: flex;
+		gap: 0.75rem;
+		padding: 0.45rem 0;
+		border-bottom: 1px solid var(--border-light);
+		font-size: 0.8125rem;
+	}
+	.detail-row:last-child {
+		border-bottom: none;
+	}
+	.detail-row .k {
+		flex: 0 0 6.5rem;
+		color: var(--text-muted);
+	}
+	.detail-row .v {
+		flex: 1;
+		min-width: 0;
+		word-break: break-all;
+		font-family: var(--mono);
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.35rem;
+		align-items: center;
+	}
+	.detail-row .perms {
+		margin: 0;
+		white-space: pre-wrap;
+		font-size: 0.75rem;
 	}
 </style>

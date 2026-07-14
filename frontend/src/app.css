@@ -222,6 +222,43 @@ textarea:focus {
 	color: var(--danger-text);
 }
 
+/* ===== Menu items (used inside the kebab Menu dropdown) ===== */
+.menu-item {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	width: 100%;
+	padding: 0.5rem 0.7rem;
+	background: transparent;
+	border: none;
+	border-radius: var(--radius-xs);
+	color: var(--text);
+	font-family: inherit;
+	font-size: 0.8125rem;
+	font-weight: 500;
+	text-align: left;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.menu-item:hover:not(:disabled) {
+	background: var(--surface);
+}
+.menu-item:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+.menu-item.danger {
+	color: var(--danger-text);
+}
+.menu-item.danger:hover:not(:disabled) {
+	background: var(--danger-bg);
+}
+.menu-sep {
+	height: 1px;
+	margin: 0.25rem 0.35rem;
+	background: var(--border-light);
+}
+
 /* ===== Shared text helpers ===== */
 .muted {
 	color: var(--text-muted);
