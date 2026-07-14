@@ -93,29 +93,23 @@
 	}
 	h1 {
 		margin: 0;
-		font-size: 1.375rem;
+		font-size: 1.5rem;
 	}
 	h2 {
 		margin: 0 0 0.625rem;
-		font-size: 0.9375rem;
-		color: #57606a;
-	}
-
-	.muted {
-		color: #8b949e;
-		font-size: 0.875rem;
-	}
-	.error {
-		color: #cf222e;
-		font-size: 0.875rem;
+		font-size: 0.75rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--text-dim);
 	}
 
 	.empty {
 		padding: 2.5rem 1rem;
 		text-align: center;
-		background: #ffffff;
-		border: 1px dashed #d0d7de;
-		border-radius: 0.625rem;
+		background: var(--surface);
+		border: 1px dashed var(--border);
+		border-radius: var(--radius);
 	}
 
 	.exchange-block {
@@ -123,9 +117,10 @@
 	}
 
 	.account-card {
-		background: #ffffff;
-		border: 1px solid #e3e5e8;
-		border-radius: 0.625rem;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		box-shadow: var(--inset-hi);
 		margin-bottom: 0.75rem;
 		overflow: hidden;
 	}
@@ -134,63 +129,33 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 0.75rem 1rem;
+		padding: 0.85rem 1.1rem;
 		font-size: 0.875rem;
 	}
 	.account-row.main {
-		font-weight: 600;
+		font-weight: 700;
 	}
 	.account-row.sub {
-		border-top: 1px solid #f0f2f4;
+		border-top: 1px solid var(--border-light);
 		padding-left: 1.75rem;
 	}
 
 	.tree-line {
-		color: #a8b1ba;
+		color: var(--text-dim);
 		margin-right: 0.375rem;
 	}
 	.uid {
 		margin-left: 0.625rem;
 		font-size: 0.75rem;
-		color: #8b949e;
+		color: var(--text-dim);
 		font-weight: 400;
 	}
 	.chip {
 		margin-left: 0.375rem;
-		padding: 0.05rem 0.4rem;
-		border-radius: 999px;
-		background: #ddf4ff;
-		color: #0969da;
-		font-size: 0.6875rem;
-		font-weight: 500;
-	}
-	.chip.warn {
-		background: #fff1e5;
-		color: #bc4c00;
 	}
 	.creds {
 		font-size: 0.8125rem;
-		color: #57606a;
-		font-weight: 400;
-	}
-
-	@media (prefers-color-scheme: dark) {
-		h2 {
-			color: #8b949e;
-		}
-		.empty {
-			background: #161b22;
-			border-color: #30363d;
-		}
-		.account-card {
-			background: #161b22;
-			border-color: #30363d;
-		}
-		.account-row.sub {
-			border-color: #21262d;
-		}
-		.creds {
-			color: #8b949e;
-		}
+		color: var(--text-muted);
+		font-weight: 500;
 	}
 </style>

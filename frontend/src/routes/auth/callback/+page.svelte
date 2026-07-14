@@ -52,7 +52,7 @@
 		<div class="card" role="alert">
 			<h1>Sign-in failed</h1>
 			<p>{errorMessage}</p>
-			<a class="action" href="/">Back to Home</a>
+			<a class="btn" href="/">Back to Home</a>
 		</div>
 	{/if}
 </div>
@@ -68,41 +68,23 @@
 	.card {
 		width: 90%;
 		max-width: 25rem;
-		background: #ffffff;
-		border: 1px solid #e3e5e8;
-		border-radius: 0.75rem;
-		padding: 1.75rem;
 		box-sizing: border-box;
-		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+		text-align: center;
 	}
 	h1 {
-		font-size: 1.125rem;
-		font-weight: 600;
+		font-size: 1.25rem;
 		margin: 0 0 0.5rem;
 	}
 	p {
-		font-size: 0.875rem;
+		font-size: 0.9375rem;
 		line-height: 1.55;
-		color: #57606a;
+		color: var(--text-muted);
 		margin: 0;
 	}
-	.muted { color: #6e7781; }
 
-	.action {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		height: 2.25rem;
-		padding: 0 1rem;
+	.card .btn {
 		margin-top: 1.25rem;
-		background: #1f2328;
-		color: #ffffff;
-		font-size: 0.875rem;
-		font-weight: 500;
-		text-decoration: none;
-		border-radius: 0.375rem;
 	}
-	.action:hover { background: #2f363d; }
 
 	.loader {
 		display: flex;
@@ -114,29 +96,13 @@
 		width: 1.5rem;
 		height: 1.5rem;
 		border-radius: 50%;
-		border: 0.1875rem solid #e3e5e8;
-		border-top-color: #57606a;
+		border: 0.1875rem solid var(--border);
+		border-top-color: var(--text);
 		animation: spin 0.8s linear infinite;
 	}
 	@keyframes spin {
-		to { transform: rotate(360deg); }
-	}
-
-	@media (prefers-color-scheme: dark) {
-		.card {
-			background: #161b22;
-			border-color: #30363d;
-		}
-		p { color: #8b949e; }
-		.muted { color: #6e7681; }
-		.action {
-			background: #e6edf3;
-			color: #0d1117;
-		}
-		.action:hover { background: #ffffff; }
-		.spinner {
-			border-color: #30363d;
-			border-top-color: #8b949e;
+		to {
+			transform: rotate(360deg);
 		}
 	}
 </style>

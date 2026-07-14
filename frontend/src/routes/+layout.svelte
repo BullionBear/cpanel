@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
 	import { user, loadUser, login, logout } from '$lib/auth';
+	import '../app.css';
 
 	onMount(loadUser);
 </script>
@@ -30,12 +31,12 @@
 		</div>
 
 		<div class="header-right">
-			<span class="greeting">Hi, {$user?.username ?? 'guest'}</span>
-			{#if $user}
-				<button class="action secondary" type="button" on:click={logout}>Logout</button>
-			{:else}
-				<button class="action" type="button" on:click={login}>Login</button>
-			{/if}
+		<span class="greeting">Hi, {$user?.username ?? 'guest'}</span>
+		{#if $user}
+			<button class="btn secondary" type="button" on:click={logout}>Logout</button>
+		{:else}
+			<button class="btn" type="button" on:click={login}>Login</button>
+		{/if}
 		</div>
 	</header>
 
@@ -45,16 +46,6 @@
 </div>
 
 <style>
-	:global(body) {
-		margin: 0;
-		padding: 0;
-		min-height: 100vh;
-		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu,
-			Cantarell, sans-serif;
-		background: #f6f8fa;
-		color: #1f2328;
-	}
-
 	.shell {
 		display: flex;
 		flex-direction: column;
@@ -65,41 +56,45 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		height: 3.5rem;
-		padding: 0 2%;
-		background: #ffffff;
-		border-bottom: 1px solid #e3e5e8;
+		height: 4rem;
+		padding: 0 3%;
+		background: rgba(250, 250, 250, 0.8);
+		backdrop-filter: blur(20px);
+		-webkit-backdrop-filter: blur(20px);
+		border-bottom: 1px solid var(--border);
 		box-sizing: border-box;
+		position: sticky;
+		top: 0;
+		z-index: 100;
 	}
 
 	.header-left {
 		display: flex;
 		align-items: center;
-		gap: 1.5rem;
+		gap: 2rem;
 	}
 
 	.brand {
 		display: flex;
 		align-items: center;
 		gap: 0.625rem;
-		text-decoration: none;
-		color: inherit;
 	}
 	.logo {
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		width: 2rem;
-		height: 2rem;
-		border-radius: 0.5rem;
-		background: #5865f2;
-		color: #ffffff;
+		width: 1.9rem;
+		height: 1.9rem;
+		border-radius: var(--radius-xs);
+		background: var(--accent);
+		color: var(--text);
 		font-size: 1rem;
-		font-weight: 700;
+		font-weight: 800;
 	}
 	.brand-name {
-		font-size: 1rem;
-		font-weight: 600;
+		font-size: 1.0625rem;
+		font-weight: 800;
+		letter-spacing: -0.04em;
 	}
 
 	.nav {
@@ -111,81 +106,35 @@
 		display: inline-flex;
 		align-items: center;
 		height: 2.125rem;
-		padding: 0 0.75rem;
-		border-radius: 0.375rem;
+		padding: 0 0.85rem;
+		border-radius: var(--radius-xs);
 		font-size: 0.875rem;
-		color: #57606a;
-		text-decoration: none;
+		font-weight: 500;
+		color: var(--text-muted);
 	}
 	.nav-item:hover {
-		background: #f6f8fa;
-		color: #1f2328;
+		color: var(--text);
 	}
 	.nav-item.active {
-		background: #eef1f4;
-		color: #1f2328;
+		background: var(--accent);
+		color: var(--text);
 		font-weight: 600;
 	}
 
 	.header-right {
 		display: flex;
 		align-items: center;
-		gap: 0.875rem;
+		gap: 1rem;
 	}
 	.greeting {
 		font-size: 0.875rem;
-		color: #57606a;
+		color: var(--text-muted);
 	}
-
-	.action {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		height: 2.125rem;
-		padding: 0 1rem;
-		background: #5865f2;
-		color: #ffffff;
-		font-size: 0.875rem;
-		font-weight: 500;
-		border: none;
-		border-radius: 0.375rem;
-		cursor: pointer;
-		transition: background-color 0.15s ease;
-	}
-	.action:hover { background: #4752c4; }
-	.action.secondary { background: #1f2328; }
-	.action.secondary:hover { background: #2f363d; }
 
 	.content {
 		flex: 1;
 		width: 100%;
 		padding: 2.5% 3%;
 		box-sizing: border-box;
-	}
-
-	@media (prefers-color-scheme: dark) {
-		:global(body) {
-			background: #0d1117;
-			color: #e6edf3;
-		}
-		.header {
-			background: #161b22;
-			border-color: #30363d;
-		}
-		.greeting { color: #8b949e; }
-		.action.secondary {
-			background: #e6edf3;
-			color: #0d1117;
-		}
-		.action.secondary:hover { background: #ffffff; }
-		.nav-item { color: #8b949e; }
-		.nav-item:hover {
-			background: #21262d;
-			color: #e6edf3;
-		}
-		.nav-item.active {
-			background: #21262d;
-			color: #e6edf3;
-		}
 	}
 </style>

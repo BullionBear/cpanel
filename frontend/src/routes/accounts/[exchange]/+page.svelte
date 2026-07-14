@@ -684,61 +684,48 @@
 	}
 	h1 {
 		margin: 0;
-		font-size: 1.375rem;
+		font-size: 1.5rem;
 	}
 	.cap-note {
 		font-size: 0.8125rem;
-		color: #8b949e;
+		color: var(--text-dim);
 	}
 	h2 {
 		margin: 0 0 0.5rem;
-		font-size: 1rem;
+		font-size: 1.05rem;
 	}
 	h3 {
 		margin: 1.25rem 0 0.5rem;
-		font-size: 0.8125rem;
+		font-size: 0.75rem;
+		font-weight: 700;
 		text-transform: uppercase;
-		letter-spacing: 0.05em;
-		color: #57606a;
+		letter-spacing: 0.06em;
+		color: var(--text-dim);
 	}
 
 	.card {
-		background: #ffffff;
-		border: 1px solid #e3e5e8;
-		border-radius: 0.625rem;
-		padding: 1.25rem;
 		margin-bottom: 1rem;
 	}
 	.card-head {
 		display: flex;
-		align-items: baseline;
+		align-items: center;
 		gap: 0.625rem;
 	}
 	.readme p {
 		font-size: 0.9375rem;
-		line-height: 1.5;
+		line-height: 1.6;
+		color: var(--text-muted);
 	}
 	.readme ol {
 		font-size: 0.9375rem;
-		line-height: 1.6;
+		line-height: 1.7;
 		padding-left: 1.25rem;
-	}
-
-	.muted {
-		color: #8b949e;
-		font-size: 0.875rem;
-	}
-	.error {
-		color: #cf222e;
-		font-size: 0.875rem;
-	}
-	.notice {
-		color: #1a7f37;
-		font-size: 0.875rem;
+		color: var(--text-muted);
 	}
 	.uid {
 		font-size: 0.75rem;
-		color: #8b949e;
+		color: var(--text-dim);
+		font-family: var(--mono);
 	}
 
 	.inline-form,
@@ -750,78 +737,22 @@
 		margin-top: 0.5rem;
 	}
 
-	input,
-	select {
-		height: 2.125rem;
-		padding: 0 0.625rem;
-		border: 1px solid #d0d7de;
-		border-radius: 0.375rem;
-		font-size: 0.875rem;
-		background: #ffffff;
-		color: inherit;
-		box-sizing: border-box;
-	}
-	input:focus,
-	select:focus {
-		outline: 2px solid #5865f2;
-		outline-offset: -1px;
-	}
 	.check {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.375rem;
 		font-size: 0.8125rem;
-		color: #57606a;
+		color: var(--text-muted);
 	}
 	.check input {
 		height: auto;
-	}
-
-	.btn {
-		display: inline-flex;
-		align-items: center;
-		height: 2.125rem;
-		padding: 0 0.875rem;
-		background: #5865f2;
-		color: #ffffff;
-		font-size: 0.8125rem;
-		font-weight: 500;
-		border: none;
-		border-radius: 0.375rem;
-		cursor: pointer;
-		text-decoration: none;
-	}
-	.btn:hover:not(:disabled) {
-		background: #4752c4;
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
-	.btn.secondary {
-		background: #eef1f4;
-		color: #1f2328;
-	}
-	.btn.secondary:hover:not(:disabled) {
-		background: #e3e5e8;
-	}
-	.btn.danger {
-		background: #cf222e;
-	}
-	.btn.danger:hover:not(:disabled) {
-		background: #a40e26;
-	}
-	.btn.small {
-		height: 1.75rem;
-		padding: 0 0.625rem;
-		font-size: 0.75rem;
 	}
 
 	.cred-row {
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
-		padding: 0.375rem 0;
+		padding: 0.4rem 0;
 		font-size: 0.875rem;
 		flex-wrap: wrap;
 	}
@@ -835,7 +766,7 @@
 	}
 	.sub-block {
 		padding: 0.5rem 0 0.625rem;
-		border-bottom: 1px solid #f0f2f4;
+		border-bottom: 1px solid var(--border-light);
 	}
 	.sub-block:last-of-type {
 		border-bottom: none;
@@ -845,33 +776,30 @@
 	}
 	.cred-row code {
 		font-size: 0.8125rem;
+		font-family: var(--mono);
 	}
 	.sub-label {
-		font-weight: 500;
+		font-weight: 600;
 	}
 	.editable {
 		cursor: text;
-		border-radius: 0.25rem;
-		padding: 0.05rem 0.25rem;
-		margin: -0.05rem -0.25rem;
+		border-radius: var(--radius-xs);
+		padding: 0.05rem 0.35rem;
+		margin: -0.05rem -0.35rem;
 	}
 	.editable:hover {
-		background: #eef1f4;
+		background: var(--white);
+		box-shadow: inset 0 0 0 1px var(--border);
 	}
 	.editable:focus-visible {
-		outline: 2px solid #5865f2;
-		outline-offset: 0;
-	}
-	@media (prefers-color-scheme: dark) {
-		.editable:hover {
-			background: #21262d;
-		}
+		outline: none;
+		box-shadow: 0 0 0 3px rgba(212, 255, 0, 0.45);
 	}
 
 	.reveal {
-		background: #f6f8fa;
-		border: 1px solid #e3e5e8;
-		border-radius: 0.375rem;
+		background: var(--white);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-xs);
 		padding: 0.5rem 0.75rem;
 		margin: 0.25rem 0 0.5rem;
 		font-size: 0.8125rem;
@@ -884,30 +812,11 @@
 	}
 	.reveal span {
 		width: 3rem;
-		color: #57606a;
+		color: var(--text-muted);
 	}
 	.reveal code {
 		word-break: break-all;
-	}
-
-	.tag {
-		padding: 0.125rem 0.5rem;
-		border-radius: 999px;
-		background: #eef1f4;
-		font-size: 0.6875rem;
-		color: #57606a;
-	}
-	.tag.ok {
-		background: #dafbe1;
-		color: #1a7f37;
-	}
-	.tag.warn {
-		background: #fff1e5;
-		color: #bc4c00;
-	}
-	.tag.chip {
-		background: #ddf4ff;
-		color: #0969da;
+		font-family: var(--mono);
 	}
 
 	.sub-actions {
@@ -918,65 +827,11 @@
 		margin-top: 0.625rem;
 	}
 
-	@media (prefers-color-scheme: dark) {
-		.card {
-			background: #161b22;
-			border-color: #30363d;
-		}
-		h3 {
-			color: #8b949e;
-		}
-		input,
-		select {
-			background: #0d1117;
-			border-color: #30363d;
-		}
-		.btn.secondary {
-			background: #21262d;
-			color: #e6edf3;
-		}
-		.btn.secondary:hover:not(:disabled) {
-			background: #30363d;
-		}
-		.tag {
-			background: #21262d;
-			color: #8b949e;
-		}
-		.tag.ok {
-			background: #12261e;
-			color: #3fb950;
-		}
-		.tag.warn {
-			background: #2b1a12;
-			color: #d29922;
-		}
-		.tag.chip {
-			background: #121d2f;
-			color: #4493f8;
-		}
-		.sub-block {
-			border-color: #21262d;
-		}
-		.reveal {
-			background: #0d1117;
-			border-color: #30363d;
-		}
-		.dialog {
-			background: #161b22;
-			border-color: #30363d;
-		}
-		.scope {
-			border-color: #30363d;
-		}
-		.scope:hover {
-			background: #0d1117;
-		}
-	}
-
 	.overlay {
 		position: fixed;
 		inset: 0;
-		background: rgba(1, 4, 9, 0.6);
+		background: rgba(17, 17, 17, 0.4);
+		backdrop-filter: blur(2px);
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -984,14 +839,14 @@
 		z-index: 50;
 	}
 	.dialog {
-		background: #ffffff;
-		border: 1px solid #e3e5e8;
-		border-radius: 0.75rem;
+		background: var(--bg);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
 		padding: 1.5rem;
 		width: min(32rem, 100%);
 		max-height: 90vh;
 		overflow-y: auto;
-		box-shadow: 0 12px 32px rgba(1, 4, 9, 0.25);
+		box-shadow: 0 20px 60px -10px rgba(0, 0, 0, 0.25);
 	}
 	.dialog h2 {
 		margin: 0 0 0.25rem;
@@ -1002,7 +857,7 @@
 	.field-label {
 		display: block;
 		font-size: 0.8125rem;
-		font-weight: 500;
+		font-weight: 600;
 		margin-bottom: 0.375rem;
 	}
 	.field input {
@@ -1017,25 +872,26 @@
 		display: flex;
 		align-items: baseline;
 		gap: 0.4rem;
-		padding: 0.5rem 0.625rem;
-		border: 1px solid #d0d7de;
-		border-radius: 0.375rem;
+		padding: 0.5rem 0.7rem;
+		background: var(--white);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-xs);
 		cursor: pointer;
 		flex-wrap: wrap;
 	}
 	.scope:hover {
-		background: #f6f8fa;
+		border-color: var(--text);
 	}
 	.scope input {
 		height: auto;
 	}
 	.scope-name {
 		font-size: 0.8125rem;
-		font-weight: 500;
+		font-weight: 600;
 	}
 	.scope-hint {
 		font-size: 0.6875rem;
-		color: #8b949e;
+		color: var(--text-dim);
 		flex-basis: 100%;
 		margin-left: 1.25rem;
 	}

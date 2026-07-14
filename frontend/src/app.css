@@ -1,0 +1,237 @@
+/*
+ * CPanel design system — "Silver & Acid" light theme.
+ * Adapted from the TemplateMo Catalyst palette: off-white silver surfaces,
+ * an acid-lime accent with black text, Inter type, soft inset-highlighted
+ * cards, and buttons that lift with a hard offset shadow on hover.
+ */
+
+:root {
+	/* Silver & Acid palette */
+	--bg: #fafafa;
+	--surface: #f0f0f0;
+	--white: #ffffff;
+	--text: #111111;
+	--text-muted: #666666;
+	--text-dim: #999999;
+	--accent: #d4ff00;
+	--accent-hover: #c2eb00;
+	--border: #e5e5e5;
+	--border-light: #eeeeee;
+
+	/* Semantic status colors */
+	--success: #16a34a;
+	--success-bg: #dcfce7;
+	--success-text: #166534;
+	--warn: #92400e;
+	--warn-bg: #fef3c7;
+	--danger: #dc2626;
+	--danger-hover: #b91c1c;
+	--danger-bg: #fee2e2;
+	--danger-text: #991b1b;
+	--info-bg: #eef6ff;
+	--info-text: #1d4ed8;
+
+	/* Shape & motion */
+	--radius: 16px;
+	--radius-md: 12px;
+	--radius-sm: 10px;
+	--radius-xs: 8px;
+	--ease: cubic-bezier(0.22, 1, 0.36, 1);
+	--inset-hi: inset 0 1px 0 var(--white);
+	--mono: ui-monospace, 'SF Mono', 'Fira Code', Menlo, monospace;
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html {
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+body {
+	margin: 0;
+	min-height: 100vh;
+	font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+	background: var(--bg);
+	color: var(--text);
+	line-height: 1.6;
+	letter-spacing: -0.02em;
+}
+
+h1,
+h2,
+h3,
+h4 {
+	letter-spacing: -0.03em;
+	font-weight: 800;
+}
+
+a {
+	color: inherit;
+	text-decoration: none;
+}
+
+/* ===== Buttons ===== */
+.btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.4rem;
+	height: 2.25rem;
+	padding: 0 1.1rem;
+	background: var(--accent);
+	color: var(--text);
+	font-family: inherit;
+	font-size: 0.875rem;
+	font-weight: 600;
+	letter-spacing: -0.02em;
+	border: 1px solid transparent;
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+	text-decoration: none;
+	white-space: nowrap;
+	transition:
+		transform 0.2s var(--ease),
+		box-shadow 0.2s var(--ease),
+		background 0.2s ease,
+		border-color 0.2s ease;
+}
+.btn:hover:not(:disabled) {
+	transform: translateY(-2px);
+	box-shadow: 3px 3px 0 var(--text);
+}
+.btn:active:not(:disabled) {
+	transform: translateY(0);
+	box-shadow: 1px 1px 0 var(--text);
+}
+.btn:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+
+.btn.secondary {
+	background: var(--white);
+	color: var(--text);
+	border-color: var(--border);
+}
+.btn.secondary:hover:not(:disabled) {
+	border-color: var(--text);
+}
+
+.btn.danger {
+	background: var(--white);
+	color: var(--danger-text);
+	border-color: var(--danger-bg);
+}
+.btn.danger:hover:not(:disabled) {
+	background: var(--danger);
+	color: var(--white);
+	border-color: var(--danger);
+	box-shadow: 3px 3px 0 var(--danger-hover);
+}
+
+.btn.small {
+	height: 1.85rem;
+	padding: 0 0.7rem;
+	font-size: 0.75rem;
+	border-radius: var(--radius-xs);
+}
+.btn.small:hover:not(:disabled) {
+	box-shadow: 2px 2px 0 var(--text);
+}
+
+/* ===== Cards ===== */
+.card {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	box-shadow: var(--inset-hi);
+	padding: 1.5rem;
+}
+
+/* ===== Form controls ===== */
+input,
+select,
+textarea {
+	height: 2.25rem;
+	padding: 0 0.7rem;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--white);
+	color: var(--text);
+	font-family: inherit;
+	font-size: 0.875rem;
+	box-sizing: border-box;
+}
+textarea {
+	height: auto;
+	padding: 0.5rem 0.7rem;
+}
+input::placeholder,
+textarea::placeholder {
+	color: var(--text-dim);
+}
+input:focus,
+select:focus,
+textarea:focus {
+	outline: none;
+	border-color: var(--text);
+	box-shadow: 0 0 0 3px rgba(212, 255, 0, 0.45);
+}
+
+/* ===== Pill tags / badges ===== */
+.tag,
+.chip,
+.badge {
+	display: inline-flex;
+	align-items: center;
+	padding: 0.15rem 0.55rem;
+	border-radius: 100px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	color: var(--text-muted);
+	font-size: 0.6875rem;
+	font-weight: 600;
+}
+.tag.ok,
+.badge.active {
+	background: var(--success-bg);
+	border-color: transparent;
+	color: var(--success-text);
+}
+.tag.warn,
+.chip.warn,
+.badge.halted {
+	background: var(--warn-bg);
+	border-color: transparent;
+	color: var(--warn);
+}
+.tag.chip,
+.chip {
+	background: var(--info-bg);
+	border-color: transparent;
+	color: var(--info-text);
+}
+.badge.delisted {
+	background: var(--danger-bg);
+	border-color: transparent;
+	color: var(--danger-text);
+}
+
+/* ===== Shared text helpers ===== */
+.muted {
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+.error {
+	color: var(--danger-text);
+	font-size: 0.875rem;
+}
+.notice {
+	color: var(--success);
+	font-size: 0.875rem;
+}

@@ -14,7 +14,8 @@
 {/if}
 
 <section class="intro">
-	<h1>Welcome to CPanel</h1>
+	<span class="tag">Control panel</span>
+	<h1>Universal trading operations, in <span class="accent-word">one panel</span>.</h1>
 	<p>
 		CPanel is an auxiliary web app for handling universal trading operations. It provides a
 		single control panel to manage accounts, positions, and trading history across exchanges.
@@ -23,56 +24,57 @@
 		The platform is being rebuilt from the ground up — more panels will appear in the top
 		navigation as they come back online.
 	</p>
+	<div class="actions">
+		<a class="btn" href="/accounts">Manage accounts</a>
+		<a class="btn secondary" href="/symbols">Browse symbols</a>
+	</div>
 </section>
 
 <style>
 	.intro {
 		width: 100%;
-		max-width: 60%;
-		margin: 0 auto;
+		max-width: 46rem;
+		margin: 2rem auto;
+	}
+	.tag {
+		margin-bottom: 1.25rem;
 	}
 	h1 {
-		font-size: 1.375rem;
-		font-weight: 600;
-		margin: 0 0 0.75rem;
+		font-size: clamp(2rem, 5vw, 3.25rem);
+		line-height: 1.05;
+		letter-spacing: -0.045em;
+		margin: 0 0 1rem;
+	}
+	.accent-word {
+		background: var(--accent);
+		border-radius: var(--radius-xs);
+		padding: 0 0.35rem;
 	}
 	p {
-		font-size: 0.9375rem;
-		line-height: 1.65;
+		font-size: 1.0625rem;
+		line-height: 1.6;
+		color: var(--text-muted);
 		margin: 0 0 0.75rem;
+		max-width: 34rem;
 	}
-	.muted {
-		color: #57606a;
-		font-size: 0.875rem;
+	.actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		margin-top: 1.75rem;
 	}
 
 	.error {
 		width: 100%;
-		max-width: 60%;
+		max-width: 46rem;
 		box-sizing: border-box;
 		font-size: 0.8125rem;
 		line-height: 1.5;
-		color: #cf222e;
-		background: #ffebe9;
-		border: 1px solid #ff818266;
-		border-radius: 0.5rem;
-		padding: 0.625rem 0.75rem;
+		color: var(--danger-text);
+		background: var(--danger-bg);
+		border: 1px solid transparent;
+		border-radius: var(--radius-sm);
+		padding: 0.7rem 0.9rem;
 		margin: 0 auto 1.25rem;
-	}
-
-	@media (max-width: 48rem) {
-		.intro,
-		.error {
-			max-width: 100%;
-		}
-	}
-
-	@media (prefers-color-scheme: dark) {
-		.muted { color: #8b949e; }
-		.error {
-			color: #ff7b72;
-			background: #490202;
-			border-color: #f8514966;
-		}
 	}
 </style>
