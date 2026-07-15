@@ -63,14 +63,6 @@
 <div class="panel">
 	<div class="badge">{exchange} · {label}</div>
 
-	<div class="filters">
-		<span>tick {symbol.price_tick}</span>
-		<span>step {symbol.qty_step}</span>
-		<span>min {symbol.min_qty}</span>
-		{#if symbol.min_notional}<span>min notional {symbol.min_notional}</span>{/if}
-		{#if symbol.last_price}<span>last {symbol.last_price}</span>{/if}
-	</div>
-
 	<div class="row">
 		<div class="seg">
 			<button class:active={side === 'BUY'} class="buy" on:click={() => (side = 'BUY')}>Buy</button>
@@ -161,21 +153,13 @@
 		padding: 0.15rem 0.55rem;
 		margin-bottom: 0.85rem;
 	}
-	.filters {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.5rem;
-		margin-bottom: 0.85rem;
-		font-size: 0.6875rem;
-		color: var(--text-dim);
-		font-family: var(--mono);
-	}
 	.field {
 		display: flex;
 		flex-direction: column;
 		gap: 0.3rem;
 		margin-bottom: 0.75rem;
 		flex: 1;
+		min-width: 0;
 	}
 	.field span {
 		font-size: 0.6875rem;
@@ -186,6 +170,7 @@
 	}
 	input[type='text'],
 	select {
+		width: 100%;
 		height: 2.2rem;
 		padding: 0 0.6rem;
 		border: 1px solid var(--border);
