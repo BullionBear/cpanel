@@ -3,21 +3,25 @@
 Raw-fetch methods are overridden so no network is involved; the payload
 shapes are exactly what api/fapi/dapi exchangeInfo return.
 """
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
 
+from app.connectors.base import DEFAULT_HISTORY_BACKFILL
 from app.connectors.binance import (
     BinanceConnector,
+    _advance_window,
     _normalize_pem,
     normalize_cm_instrument,
     normalize_futures_balances,
     normalize_positions,
     normalize_spot_balances,
     normalize_spot_instrument,
+    normalize_trade,
     normalize_um_instrument,
 )
-from app.connectors.types import MarketType, WalletType
+from app.connectors.types import MarketType, OrderSide, WalletType
 
 # A syntactically valid Ed25519 PKCS#8 private key (test-only, not a real key).
 ED25519_BODY = "MC4CAQAwBQYDK2VwBCIEINaP1QKxqnkgM63/wvkTeuRg2MKi4iEbgNW9QxR4vzCI"
@@ -315,3 +319,158 @@ async def test_fetch_positions_across_surfaces(connector, monkeypatch):
         "BINANCE_PERP_ETHUSDT",
         "BINANCE_CMARGIN_SOLUSD",
     }
+
+
+# -- history ------------------------------------------------------------------
+
+SPOT_TRADE = {
+    "symbol": "BTCUSDT",
+    "id": 28457,
+    "orderId": 100234,
+    "price": "62000.10",
+    "qty": "0.002",
+    "commission": "0.124",
+    "commissionAsset": "USDT",
+    "time": 1752345600000,
+    "isBuyer": True,
+    "isMaker": False,
+}
+
+UM_TRADE = {
+    "symbol": "ETHUSDT",
+    "id": 6960,
+    "orderId": 8389765,
+    "side": "SELL",
+    "price": "2999.9",
+    "qty": "1",
+    "commission": "1.2",
+    "commissionAsset": "USDT",
+    "time": 1752345700000,
+}
+
+UM_ORDER = {
+    "symbol": "ETHUSDT",
+    "orderId": 8389765,
+    "clientOrderId": "cpanel-abc",
+    "side": "SELL",
+    "type": "LIMIT",
+    "status": "FILLED",
+    "origQty": "1",
+    "executedQty": "1",
+    "price": "2999.9",
+    "time": 1752345600000,
+    "updateTime": 1752345700000,
+}
+
+
+def test_normalize_trade_spot_uses_isbuyer():
+    trade = normalize_trade(SPOT_TRADE, "BINANCE_SPOT_BTCUSDT")
+    assert trade.side == OrderSide.BUY
+    assert trade.native_trade_id == "28457"
+    assert trade.native_order_id == "100234"
+    assert trade.price == Decimal("62000.10")
+    assert trade.fee == Decimal("0.124")
+    assert trade.fee_asset == "USDT"
+    assert trade.traded_at == datetime.fromtimestamp(1752345600, tz=timezone.utc)
+
+
+def test_normalize_trade_futures_uses_side():
+    trade = normalize_trade(UM_TRADE, "BINANCE_PERP_ETHUSDT")
+    assert trade.side == OrderSide.SELL
+    assert trade.qty == Decimal("1")
+
+
+def test_history_stream_keys_one_per_symbol():
+    keys = BinanceConnector().history_stream_keys(
+        ["BINANCE_SPOT_BTCUSDT", "BINANCE_PERP_ETHUSDT"]
+    )
+    assert keys == ["BINANCE_SPOT_BTCUSDT", "BINANCE_PERP_ETHUSDT"]
+
+
+def test_advance_window_full_page_stays_in_window():
+    rows = [{"time": 1_000_500}] * 10
+    assert _advance_window(rows, "time", 1_000_000, 2_000_000, 3_000_000, 10) == "1000500"
+
+
+def test_advance_window_partial_page_jumps_to_window_end():
+    rows = [{"time": 1_000_500}]
+    assert _advance_window(rows, "time", 1_000_000, 2_000_000, 3_000_000, 10) == "2000000"
+
+
+def test_advance_window_caught_up_returns_none():
+    assert _advance_window([], "time", 1_000_000, 3_000_000, 3_000_000, 10) is None
+
+
+def test_advance_window_guards_stuck_timestamp():
+    # A full page whose rows all sit on the window start must still advance.
+    rows = [{"time": 1_000_000}] * 10
+    assert _advance_window(rows, "time", 1_000_000, 2_000_000, 3_000_000, 10) == "1000001"
+
+
+async def test_fetch_trades_windowed_walk(connector, monkeypatch):
+    calls = []
+
+    async def my_trades(credential, market_type, native_symbol, start_ms, end_ms, limit):
+        calls.append((market_type, native_symbol, start_ms, end_ms, limit))
+        return [dict(SPOT_TRADE, time=start_ms + 1000)]
+
+    monkeypatch.setattr(connector, "_fetch_my_trades", my_trades)
+
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    start_ms = now_ms - 2 * 24 * 60 * 60 * 1000
+    page = await connector.fetch_trades(
+        {"api_key": "k", "secret": "s"}, "BINANCE_SPOT_BTCUSDT", str(start_ms)
+    )
+
+    market_type, native_symbol, called_start, called_end, _ = calls[0]
+    assert (market_type, native_symbol) == (MarketType.SPOT, "BTCUSDT")
+    assert called_start == start_ms
+    assert called_end == start_ms + 24 * 60 * 60 * 1000  # 24h window
+    # Partial page mid-window: the cursor jumps to the window end.
+    assert page.next_cursor == str(called_end)
+    assert page.items[0].universal_symbol == "BINANCE_SPOT_BTCUSDT"
+
+
+async def test_fetch_trades_caught_up(connector, monkeypatch):
+    async def my_trades(credential, market_type, native_symbol, start_ms, end_ms, limit):
+        return []
+
+    monkeypatch.setattr(connector, "_fetch_my_trades", my_trades)
+    recent = int(datetime.now(timezone.utc).timestamp() * 1000) - 60_000
+    page = await connector.fetch_trades(
+        {"api_key": "k", "secret": "s"}, "BINANCE_SPOT_BTCUSDT", str(recent)
+    )
+    assert page.items == []
+    assert page.next_cursor is None
+
+
+async def test_fetch_trades_defaults_to_three_day_backfill(connector, monkeypatch):
+    calls = []
+
+    async def my_trades(credential, market_type, native_symbol, start_ms, end_ms, limit):
+        calls.append(start_ms)
+        return []
+
+    monkeypatch.setattr(connector, "_fetch_my_trades", my_trades)
+    before = datetime.now(timezone.utc)
+    await connector.fetch_trades({"api_key": "k", "secret": "s"}, "BINANCE_SPOT_BTCUSDT", None)
+    expected = int((before - DEFAULT_HISTORY_BACKFILL).timestamp() * 1000)
+    assert abs(calls[0] - expected) < 60_000
+
+
+async def test_fetch_orders_history_normalizes(connector, monkeypatch):
+    async def all_orders(credential, market_type, native_symbol, start_ms, end_ms, limit):
+        assert (market_type, native_symbol) == (MarketType.PERP, "ETHUSDT")
+        return [UM_ORDER]
+
+    monkeypatch.setattr(connector, "_fetch_all_orders", all_orders)
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    page = await connector.fetch_orders_history(
+        {"api_key": "k", "secret": "s"},
+        "BINANCE_PERP_ETHUSDT",
+        str(now_ms - 60_000),
+    )
+    order = page.items[0]
+    assert order.universal_symbol == "BINANCE_PERP_ETHUSDT"
+    assert order.native_order_id == "8389765"
+    assert order.status.value == "FILLED"

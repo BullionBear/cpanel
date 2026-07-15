@@ -1,15 +1,19 @@
 """Bybit normalization tests with fixtures shaped like the v5 API docs."""
+import json
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
 
+from app.connectors.base import DEFAULT_HISTORY_BACKFILL
 from app.connectors.bybit import (
     BybitConnector,
     normalize_instrument,
     normalize_positions,
+    normalize_trade,
     normalize_wallet_balances,
 )
-from app.connectors.types import MarketType, WalletType
+from app.connectors.types import MarketType, OrderSide, WalletType
 
 SPOT_BTCUSDT = {
     "symbol": "BTCUSDT",
@@ -242,3 +246,140 @@ async def test_cursor_pagination_walked(monkeypatch):
     assert len(items) == 2
     assert len(calls) == 2
     assert calls[1]["cursor"] == "page2"
+
+
+# -- history ------------------------------------------------------------------
+
+EXECUTION = {
+    "symbol": "ETHUSDT",
+    "orderId": "order-1",
+    "execId": "exec-1",
+    "side": "Sell",
+    "execPrice": "3100.5",
+    "execQty": "0.5",
+    "execFee": "0.093",
+    "feeCurrency": "USDT",
+    "execTime": "1752345600000",
+}
+
+ORDER_ROW = {
+    "symbol": "ETHUSDT",
+    "orderId": "order-1",
+    "orderLinkId": "cpanel-abc",
+    "side": "Sell",
+    "orderType": "Limit",
+    "orderStatus": "Filled",
+    "qty": "0.5",
+    "cumExecQty": "0.5",
+    "price": "3100.5",
+    "createdTime": "1752345500000",
+    "updatedTime": "1752345600000",
+}
+
+
+def test_normalize_trade():
+    trade = normalize_trade(EXECUTION, "BYBIT_PERP_ETHUSDT")
+    assert trade.side == OrderSide.SELL
+    assert trade.native_trade_id == "exec-1"
+    assert trade.native_order_id == "order-1"
+    assert trade.price == Decimal("3100.5")
+    assert trade.fee == Decimal("0.093")
+    assert trade.fee_asset == "USDT"
+    assert trade.traded_at == datetime.fromtimestamp(1752345600, tz=timezone.utc)
+
+
+def test_history_stream_keys_are_categories():
+    assert BybitConnector().history_stream_keys(["ignored"]) == ["spot", "linear", "inverse"]
+
+
+def test_initial_history_cursor_encodes_window_start():
+    start = datetime(2026, 7, 12, tzinfo=timezone.utc)
+    cursor = BybitConnector().initial_history_cursor(start)
+    assert json.loads(cursor) == {"start": int(start.timestamp() * 1000)}
+
+
+async def test_fetch_trades_walks_native_pages_then_window(connector, monkeypatch):
+    calls = []
+
+    async def history_page(credential, method, category, start, end, limit, native):
+        calls.append((method, category, start, end, limit, native))
+        if native is None:
+            return [EXECUTION], "tok-2"
+        return [dict(EXECUTION, execId="exec-2")], None
+
+    monkeypatch.setattr(connector, "_fetch_history_page", history_page)
+    cred = {"api_key": "k", "secret": "s"}
+
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    start_ms = now_ms - 2 * 24 * 60 * 60 * 1000
+    cursor = json.dumps({"start": start_ms})
+
+    # Page 1: venue returns a native token → cursor keeps the window, adds token.
+    page1 = await connector.fetch_trades(cred, "linear", cursor)
+    assert page1.items[0].universal_symbol == "BYBIT_PERP_ETHUSDT"
+    assert json.loads(page1.next_cursor) == {"start": start_ms, "cursor": "tok-2"}
+    assert calls[0][:2] == ("get_executions", "linear")
+    assert calls[0][4] == 100  # executions page cap
+
+    # Page 2: token exhausted → the window slides forward 24h.
+    page2 = await connector.fetch_trades(cred, "linear", page1.next_cursor)
+    assert calls[1][5] == "tok-2"
+    assert json.loads(page2.next_cursor) == {"start": start_ms + 24 * 60 * 60 * 1000}
+
+
+async def test_fetch_trades_caught_up(connector, monkeypatch):
+    async def history_page(credential, method, category, start, end, limit, native):
+        return [], None
+
+    monkeypatch.setattr(connector, "_fetch_history_page", history_page)
+    recent = int(datetime.now(timezone.utc).timestamp() * 1000) - 60_000
+    page = await connector.fetch_trades(
+        {"api_key": "k", "secret": "s"}, "linear", json.dumps({"start": recent})
+    )
+    assert page.items == []
+    assert page.next_cursor is None
+
+
+async def test_fetch_trades_defaults_to_three_day_backfill(connector, monkeypatch):
+    starts = []
+
+    async def history_page(credential, method, category, start, end, limit, native):
+        starts.append(start)
+        return [], None
+
+    monkeypatch.setattr(connector, "_fetch_history_page", history_page)
+    before = datetime.now(timezone.utc)
+    await connector.fetch_trades({"api_key": "k", "secret": "s"}, "linear", None)
+    expected = int((before - DEFAULT_HISTORY_BACKFILL).timestamp() * 1000)
+    assert abs(starts[0] - expected) < 60_000
+
+
+async def test_untracked_symbols_skipped(connector, monkeypatch):
+    async def history_page(credential, method, category, start, end, limit, native):
+        return [EXECUTION, dict(EXECUTION, symbol="ETHUSDT-26SEP26", execId="x")], None
+
+    monkeypatch.setattr(connector, "_fetch_history_page", history_page)
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    page = await connector.fetch_trades(
+        {"api_key": "k", "secret": "s"}, "linear", json.dumps({"start": now_ms - 60_000})
+    )
+    assert [t.native_trade_id for t in page.items] == ["exec-1"]
+
+
+async def test_fetch_orders_history_uses_order_endpoint(connector, monkeypatch):
+    calls = []
+
+    async def history_page(credential, method, category, start, end, limit, native):
+        calls.append((method, limit))
+        return [ORDER_ROW], None
+
+    monkeypatch.setattr(connector, "_fetch_history_page", history_page)
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    page = await connector.fetch_orders_history(
+        {"api_key": "k", "secret": "s"}, "linear", json.dumps({"start": now_ms - 60_000})
+    )
+    assert calls[0] == ("get_order_history", 50)
+    order = page.items[0]
+    assert order.universal_symbol == "BYBIT_PERP_ETHUSDT"
+    assert order.client_order_id == "cpanel-abc"
+    assert order.status.value == "FILLED"

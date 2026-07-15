@@ -32,7 +32,12 @@ from binance_sdk_spot.spot import Spot
 from binance_sdk_sub_account.sub_account import SubAccount
 from binance_sdk_wallet.wallet import Wallet
 
-from app.connectors.base import Capability, Credential, ExchangeConnector
+from app.connectors.base import (
+    DEFAULT_HISTORY_BACKFILL,
+    Capability,
+    Credential,
+    ExchangeConnector,
+)
 from app.connectors.errors import credential_error_reason
 from app.connectors.sdk_util import dump_sdk_model
 from app.connectors.symbols import build_universal_symbol
@@ -47,10 +52,12 @@ from app.connectors.types import (
     OrderSide,
     OrderStatus,
     OrderType,
+    Page,
     PositionSide,
     Position,
     SubaccountInfo,
     TimeInForce,
+    Trade,
     WalletType,
 )
 from app.core.ratelimit import Priority, TokenBucket
@@ -331,6 +338,52 @@ def _epoch_ms(value) -> datetime | None:
         return None
 
 
+def normalize_trade(raw: dict, universal_symbol: str) -> Trade:
+    """A Binance fill dict (spot or futures) → normalized Trade.
+
+    Spot rows carry ``isBuyer``; futures rows carry an explicit ``side``.
+    """
+    if raw.get("side"):
+        side = OrderSide(str(raw["side"]).upper())
+    else:
+        side = OrderSide.BUY if raw.get("isBuyer") else OrderSide.SELL
+    return Trade(
+        universal_symbol=universal_symbol,
+        native_trade_id=str(raw.get("id", "")),
+        native_order_id=str(raw.get("orderId", "")),
+        side=side,
+        price=_dec(raw.get("price", 0) or 0),
+        qty=_dec(raw.get("qty", 0) or 0),
+        fee=_dec(raw.get("commission", 0) or 0),
+        fee_asset=raw.get("commissionAsset") or "",
+        traded_at=_epoch_ms(raw.get("time")),
+    )
+
+
+# History endpoints are windowed by time. 24h satisfies every surface's
+# constraint (spot my_trades/all_orders require < 24h when both bounds are
+# set; futures allow up to 7 days).
+_HISTORY_WINDOW_MS = 24 * 60 * 60 * 1000
+
+# Per-surface page caps (venue maxima; dapi all_orders caps at 100).
+_TRADE_PAGE_LIMIT = {MarketType.SPOT: 1000, MarketType.PERP: 1000, MarketType.CMARGIN: 1000}
+_ORDER_PAGE_LIMIT = {MarketType.SPOT: 1000, MarketType.PERP: 1000, MarketType.CMARGIN: 100}
+
+
+def _advance_window(
+    rows: list[dict], time_key: str, start_ms: int, end_ms: int, now_ms: int, limit: int
+) -> str | None:
+    """Next cursor for a windowed walk: stay in the window while pages are
+    full, otherwise jump to the window end; ``None`` once the window reaches
+    the present (caught up)."""
+    if len(rows) >= limit:
+        last = max(int(r.get(time_key, start_ms) or start_ms) for r in rows)
+        return str(max(last, start_ms + 1))
+    if end_ms < now_ms:
+        return str(end_ms)
+    return None
+
+
 class BinanceConnector(ExchangeConnector):
     exchange = "BINANCE"
     # Registration-only for keys. Binance's API cannot mint/rotate/revoke
@@ -346,6 +399,8 @@ class BinanceConnector(ExchangeConnector):
             Capability.BALANCES,
             Capability.POSITIONS,
             Capability.ORDERS,
+            Capability.TRADE_HISTORY,
+            Capability.ORDER_HISTORY,
             Capability.SUBACCOUNT_LIST,
         }
     )
@@ -619,6 +674,91 @@ class BinanceConnector(ExchangeConnector):
             return None
         raw = dump_sdk_model(resp.data())
         return normalize_order(raw, universal_symbol) if raw else None
+
+    # -- history --------------------------------------------------------------
+    #
+    # Binance shards history per symbol: my_trades / all_orders require one
+    # symbol per query, so each active symbol is its own stream and the
+    # cursor is an epoch-ms timestamp walked forward in 24h windows. Within a
+    # window, a full page advances the cursor to the last row's time (the
+    # overlap re-fetch is harmless — ingestion upserts by native id).
+
+    def history_stream_keys(self, active_symbols: list[str]) -> list[str]:
+        return list(active_symbols)
+
+    async def _fetch_my_trades(
+        self,
+        credential: Credential,
+        market_type: MarketType,
+        native_symbol: str,
+        start_ms: int,
+        end_ms: int,
+        limit: int,
+    ) -> list[dict]:
+        rest = self._rest_for(market_type, credential)
+        method = rest.my_trades if market_type == MarketType.SPOT else rest.account_trade_list
+        resp = await self._call(
+            method, symbol=native_symbol, start_time=start_ms, end_time=end_ms, limit=limit
+        )
+        data = dump_sdk_model(resp.data())
+        return data if isinstance(data, list) else [data]
+
+    async def _fetch_all_orders(
+        self,
+        credential: Credential,
+        market_type: MarketType,
+        native_symbol: str,
+        start_ms: int,
+        end_ms: int,
+        limit: int,
+    ) -> list[dict]:
+        rest = self._rest_for(market_type, credential)
+        resp = await self._call(
+            rest.all_orders, symbol=native_symbol, start_time=start_ms, end_time=end_ms,
+            limit=limit,
+        )
+        data = dump_sdk_model(resp.data())
+        return data if isinstance(data, list) else [data]
+
+    def _history_window(self, cursor: str | None) -> tuple[int, int, int]:
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        if cursor:
+            start_ms = int(cursor)
+        else:
+            start_ms = now_ms - int(DEFAULT_HISTORY_BACKFILL.total_seconds() * 1000)
+        return start_ms, min(start_ms + _HISTORY_WINDOW_MS, now_ms), now_ms
+
+    async def fetch_trades(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        market_type, native_symbol = await self._resolve_symbol(stream_key)
+        start_ms, end_ms, now_ms = self._history_window(cursor)
+        if start_ms >= now_ms:
+            return Page(items=[], next_cursor=None)
+        limit = _TRADE_PAGE_LIMIT[market_type]
+        rows = await self._fetch_my_trades(
+            credential, market_type, native_symbol, start_ms, end_ms, limit
+        )
+        return Page(
+            items=[normalize_trade(raw, stream_key) for raw in rows],
+            next_cursor=_advance_window(rows, "time", start_ms, end_ms, now_ms, limit),
+        )
+
+    async def fetch_orders_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        market_type, native_symbol = await self._resolve_symbol(stream_key)
+        start_ms, end_ms, now_ms = self._history_window(cursor)
+        if start_ms >= now_ms:
+            return Page(items=[], next_cursor=None)
+        limit = _ORDER_PAGE_LIMIT[market_type]
+        rows = await self._fetch_all_orders(
+            credential, market_type, native_symbol, start_ms, end_ms, limit
+        )
+        return Page(
+            items=[normalize_order(raw, stream_key) for raw in rows],
+            next_cursor=_advance_window(rows, "time", start_ms, end_ms, now_ms, limit),
+        )
 
     async def list_subaccounts(self, credential: Credential) -> list[SubaccountInfo]:
         sub = SubAccount(config_rest_api=_auth_config(credential))

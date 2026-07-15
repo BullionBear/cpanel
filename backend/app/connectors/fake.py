@@ -179,6 +179,11 @@ class FakeConnector(ExchangeConnector):
 
     # -- history ----------------------------------------------------------
 
+    def initial_history_cursor(self, start) -> str | None:
+        # Fake cursors are list indexes, not timestamps; a new stream simply
+        # starts at the beginning of the in-memory history.
+        return None
+
     async def fetch_trades(
         self, credential: Credential, stream_key: str, cursor: str | None
     ) -> Page:

@@ -1,0 +1,387 @@
+"""History ingestion: the generic sync worker over connector-owned streams.
+
+The worker knows nothing about any venue's pagination. Per stream it runs the
+loop from ARCHITECTURE.md "History Ingestion": load cursor → fetch a page
+through the connector → upsert → advance the cursor **only after** the rows
+are stored. A crash between fetch and store re-fetches the same page next
+run, and upsert-by-native-id makes that harmless.
+
+Backfill for a freshly connected account is deliberately simple: a stream
+with no ``sync_cursor`` row yet is seeded ``NEW_STREAM_BACKFILL`` (3 days)
+into the past, so the first sync ingests that window before incremental sync
+takes over. There is no separate backward-walking stream — recent history is
+what reconciliation needs, and anything older can be re-seeded by hand.
+
+Stream sets are connector strategy: Bybit returns its fixed account-wide
+streams; Binance returns one stream per *active* symbol, where activity is
+derived from panel orders, previously ingested order history, and snapshotted
+positions (querying every listed instrument would waste the rate budget on
+thousands of empty calls).
+"""
+import logging
+from datetime import datetime, timezone
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.connectors.base import (
+    DEFAULT_HISTORY_BACKFILL,
+    Capability,
+    ExchangeConnector,
+)
+from app.connectors.types import Order as ConnOrder, Trade as ConnTrade
+from app.models.account import Account
+from app.models.history import OrderHistory, SyncCursor, TradeHistory
+from app.models.order import Order
+from app.models.snapshot import PositionSnapshot
+from app.services.accounts import AccountError, decrypt_credential, get_active_credential
+
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "AccountError",
+    "NEW_STREAM_BACKFILL",
+    "DATA_KINDS",
+    "active_symbols",
+    "sync_stream",
+    "sync_account_history",
+    "list_trades",
+    "list_order_history",
+    "list_sync_cursors",
+]
+
+# New accounts (streams without a cursor yet) backfill this far first.
+NEW_STREAM_BACKFILL = DEFAULT_HISTORY_BACKFILL
+
+DATA_KINDS = ("trades", "orders")
+
+# Pages ingested per stream per run. Bounds one scheduler tick; the next run
+# resumes from the stored cursor, so a large backlog just takes several runs.
+MAX_PAGES_PER_RUN = 20
+
+
+# -- stream discovery ----------------------------------------------------------
+
+async def active_symbols(db: AsyncSession, account: Account) -> list[str]:
+    """Symbols this account has shown activity on (for per-symbol venues).
+
+    Union of panel orders, already-ingested order history, and the latest
+    position snapshot. Order history feeding back into the set means a symbol
+    discovered once keeps syncing even after its panel orders age out.
+    """
+    symbols: set[str] = set()
+    for column, condition in (
+        (Order.universal_symbol, Order.account_id == account.id),
+        (OrderHistory.universal_symbol, OrderHistory.account_id == account.id),
+        (PositionSnapshot.universal_symbol, PositionSnapshot.account_id == account.id),
+    ):
+        result = await db.execute(select(column).where(condition).distinct())
+        symbols.update(result.scalars())
+    return sorted(symbols)
+
+
+# -- cursor bookkeeping ---------------------------------------------------------
+
+async def _get_or_create_cursor(
+    db: AsyncSession,
+    connector: ExchangeConnector,
+    account: Account,
+    data_kind: str,
+    stream_key: str,
+) -> SyncCursor:
+    row = (
+        await db.execute(
+            select(SyncCursor).where(
+                SyncCursor.account_id == account.id,
+                SyncCursor.data_kind == data_kind,
+                SyncCursor.stream_key == stream_key,
+            )
+        )
+    ).scalars().first()
+    if row is None:
+        # New stream: seed the cursor NEW_STREAM_BACKFILL into the past so the
+        # first sync backfills recent history. The connector builds the value
+        # because cursor encoding is venue-owned.
+        start = datetime.now(timezone.utc) - NEW_STREAM_BACKFILL
+        row = SyncCursor(
+            account_id=account.id,
+            exchange=account.exchange,
+            data_kind=data_kind,
+            stream_key=stream_key,
+            cursor=connector.initial_history_cursor(start),
+        )
+        db.add(row)
+        await db.flush()
+    return row
+
+
+# -- upserts --------------------------------------------------------------------
+
+async def _upsert_trades(
+    db: AsyncSession, account: Account, trades: list[ConnTrade]
+) -> int:
+    """Insert trades not seen before. Trades are immutable, so no updates."""
+    if not trades:
+        return 0
+    existing: set[tuple[str, str]] = set(
+        (
+            await db.execute(
+                select(TradeHistory.universal_symbol, TradeHistory.native_trade_id).where(
+                    TradeHistory.account_id == account.id,
+                    TradeHistory.native_trade_id.in_({t.native_trade_id for t in trades}),
+                )
+            )
+        ).all()
+    )
+    written = 0
+    for trade in trades:
+        key = (trade.universal_symbol, trade.native_trade_id)
+        if key in existing:
+            continue
+        existing.add(key)
+        db.add(
+            TradeHistory(
+                account_id=account.id,
+                exchange=account.exchange,
+                universal_symbol=trade.universal_symbol,
+                native_trade_id=trade.native_trade_id,
+                native_order_id=trade.native_order_id,
+                side=trade.side.value,
+                price=trade.price,
+                qty=trade.qty,
+                fee=trade.fee,
+                fee_asset=trade.fee_asset,
+                traded_at=trade.traded_at,
+            )
+        )
+        written += 1
+    return written
+
+
+async def _upsert_orders(
+    db: AsyncSession, account: Account, orders: list[ConnOrder]
+) -> int:
+    """Insert unseen orders; advance the state of known ones. Returns changes."""
+    if not orders:
+        return 0
+    rows = (
+        await db.execute(
+            select(OrderHistory).where(
+                OrderHistory.account_id == account.id,
+                OrderHistory.native_order_id.in_({o.native_order_id for o in orders}),
+            )
+        )
+    ).scalars()
+    known = {(r.universal_symbol, r.native_order_id): r for r in rows}
+    changed = 0
+    for order in orders:
+        row = known.get((order.universal_symbol, order.native_order_id))
+        if row is None:
+            row = OrderHistory(
+                account_id=account.id,
+                exchange=account.exchange,
+                universal_symbol=order.universal_symbol,
+                native_order_id=order.native_order_id,
+                client_order_id=order.client_order_id,
+                side=order.side.value,
+                type=order.type.value,
+                status=order.status.value,
+                qty=order.qty,
+                price=order.price,
+                filled_qty=order.filled_qty,
+                placed_at=order.created_at,
+                updated_at=order.updated_at,
+            )
+            db.add(row)
+            known[(order.universal_symbol, order.native_order_id)] = row
+            changed += 1
+        elif row.status != order.status.value or row.filled_qty != order.filled_qty:
+            row.status = order.status.value
+            row.filled_qty = order.filled_qty
+            row.updated_at = order.updated_at or datetime.now(timezone.utc)
+            changed += 1
+    return changed
+
+
+# -- the generic sync worker ----------------------------------------------------
+
+async def sync_stream(
+    db: AsyncSession,
+    connector: ExchangeConnector,
+    account: Account,
+    data_kind: str,
+    stream_key: str,
+) -> int:
+    """Ingest one stream up to MAX_PAGES_PER_RUN pages. Returns rows changed.
+
+    Each page is committed together with its cursor advance; on failure the
+    error is recorded on the cursor row and re-raised for the caller to log.
+    """
+    if data_kind not in DATA_KINDS:
+        raise ValueError(f"Unknown history data kind {data_kind!r}")
+    cursor_row = await _get_or_create_cursor(db, connector, account, data_kind, stream_key)
+    credential = decrypt_credential(await get_active_credential(db, account))
+    fetch = connector.fetch_trades if data_kind == "trades" else connector.fetch_orders_history
+    upsert = _upsert_trades if data_kind == "trades" else _upsert_orders
+
+    total = 0
+    try:
+        for _ in range(MAX_PAGES_PER_RUN):
+            page = await fetch(credential, stream_key, cursor_row.cursor)
+            total += await upsert(db, account, page.items)
+            if page.next_cursor is not None:
+                cursor_row.cursor = page.next_cursor
+            cursor_row.last_synced_at = datetime.now(timezone.utc)
+            cursor_row.last_error = None
+            # Rows and cursor advance land atomically: a crash re-fetches the
+            # same page next run instead of skipping it.
+            await db.commit()
+            if page.next_cursor is None:
+                break
+    except Exception as exc:  # noqa: BLE001 - record on the stream, then surface
+        cursor_row.last_error = str(exc)[:2000]
+        cursor_row.last_synced_at = datetime.now(timezone.utc)
+        await db.commit()
+        raise
+    return total
+
+
+async def sync_account_history(
+    db: AsyncSession, connector: ExchangeConnector, account: Account
+) -> int:
+    """Sync every history stream of one account. Returns rows changed.
+
+    Streams are isolated: one failing stream (recorded on its cursor row) does
+    not stop the others.
+    """
+    kinds = [
+        kind
+        for kind, capability in (
+            ("trades", Capability.TRADE_HISTORY),
+            ("orders", Capability.ORDER_HISTORY),
+        )
+        if connector.supports(capability)
+    ]
+    if not kinds:
+        return 0
+    streams = connector.history_stream_keys(await active_symbols(db, account))
+    total = 0
+    for data_kind in kinds:
+        for stream_key in streams:
+            try:
+                total += await sync_stream(db, connector, account, data_kind, stream_key)
+            except AccountError:
+                raise  # no usable credential — pointless to try other streams
+            except Exception:
+                logger.exception(
+                    "History sync failed for %s account %s stream %s/%s",
+                    account.exchange, account.id, data_kind, stream_key,
+                )
+    return total
+
+
+# -- read paths -------------------------------------------------------------------
+
+def _apply_filters(
+    query,
+    model,
+    *,
+    exchange: str | None,
+    account_id: int | None,
+    universal_symbol: str | None,
+    start: datetime | None,
+    end: datetime | None,
+    time_column,
+):
+    if exchange:
+        query = query.where(model.exchange == exchange.upper())
+    if account_id is not None:
+        query = query.where(model.account_id == account_id)
+    if universal_symbol:
+        query = query.where(model.universal_symbol == universal_symbol)
+    if start is not None:
+        query = query.where(time_column >= start)
+    if end is not None:
+        query = query.where(time_column <= end)
+    return query
+
+
+async def list_trades(
+    db: AsyncSession,
+    *,
+    exchange: str | None = None,
+    account_id: int | None = None,
+    universal_symbol: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[int, list[TradeHistory]]:
+    filters = dict(
+        exchange=exchange, account_id=account_id, universal_symbol=universal_symbol,
+        start=start, end=end, time_column=TradeHistory.traded_at,
+    )
+    total = (
+        await db.execute(
+            _apply_filters(select(func.count(TradeHistory.id)), TradeHistory, **filters)
+        )
+    ).scalar_one()
+    rows = (
+        await db.execute(
+            _apply_filters(select(TradeHistory), TradeHistory, **filters)
+            .order_by(TradeHistory.traded_at.desc().nullslast(), TradeHistory.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    ).scalars()
+    return total, list(rows)
+
+
+async def list_order_history(
+    db: AsyncSession,
+    *,
+    exchange: str | None = None,
+    account_id: int | None = None,
+    universal_symbol: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[int, list[OrderHistory]]:
+    filters = dict(
+        exchange=exchange, account_id=account_id, universal_symbol=universal_symbol,
+        start=start, end=end, time_column=OrderHistory.placed_at,
+    )
+    total = (
+        await db.execute(
+            _apply_filters(select(func.count(OrderHistory.id)), OrderHistory, **filters)
+        )
+    ).scalar_one()
+    rows = (
+        await db.execute(
+            _apply_filters(select(OrderHistory), OrderHistory, **filters)
+            .order_by(OrderHistory.placed_at.desc().nullslast(), OrderHistory.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    ).scalars()
+    return total, list(rows)
+
+
+async def list_sync_cursors(
+    db: AsyncSession,
+    *,
+    exchange: str | None = None,
+    account_id: int | None = None,
+) -> list[tuple[SyncCursor, Account]]:
+    """Cursor rows with their accounts, for the sync-health view."""
+    query = (
+        select(SyncCursor, Account)
+        .join(Account, Account.id == SyncCursor.account_id)
+        .order_by(SyncCursor.exchange, Account.label, SyncCursor.data_kind, SyncCursor.stream_key)
+    )
+    if exchange:
+        query = query.where(SyncCursor.exchange == exchange.upper())
+    if account_id is not None:
+        query = query.where(SyncCursor.account_id == account_id)
+    return [(cursor, account) for cursor, account in (await db.execute(query)).all()]

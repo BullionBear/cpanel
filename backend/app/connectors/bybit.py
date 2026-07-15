@@ -15,13 +15,19 @@ DELIVERY support lands.
 Uses the official ``pybit`` SDK (synchronous, run in a worker thread).
 """
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 
 from pybit.unified_trading import HTTP
 
-from app.connectors.base import Capability, Credential, ExchangeConnector
+from app.connectors.base import (
+    DEFAULT_HISTORY_BACKFILL,
+    Capability,
+    Credential,
+    ExchangeConnector,
+)
 from app.connectors.errors import credential_error_reason
 from app.connectors.symbols import build_universal_symbol
 from app.connectors.types import (
@@ -37,10 +43,12 @@ from app.connectors.types import (
     OrderSide,
     OrderStatus,
     OrderType,
+    Page,
     PositionSide,
     Position,
     SubaccountInfo,
     TimeInForce,
+    Trade,
     WalletType,
 )
 from app.core.ratelimit import Priority, TokenBucket
@@ -255,6 +263,21 @@ def _epoch_ms(value) -> datetime | None:
         return None
 
 
+def normalize_trade(raw: dict, universal_symbol: str) -> Trade:
+    """A Bybit v5 execution dict → normalized Trade."""
+    return Trade(
+        universal_symbol=universal_symbol,
+        native_trade_id=str(raw.get("execId", "")),
+        native_order_id=str(raw.get("orderId", "")),
+        side=OrderSide.BUY if raw.get("side") == "Buy" else OrderSide.SELL,
+        price=_dec(raw.get("execPrice", 0) or 0),
+        qty=_dec(raw.get("execQty", 0) or 0),
+        fee=_dec(raw.get("execFee", 0) or 0),
+        fee_asset=raw.get("feeCurrency") or "",
+        traded_at=_epoch_ms(raw.get("execTime")),
+    )
+
+
 def normalize_order(raw: dict, universal_symbol: str) -> Order:
     """A Bybit order dict → normalized Order."""
     price = _opt_dec(raw.get("price"))
@@ -286,6 +309,8 @@ class BybitConnector(ExchangeConnector):
             Capability.BALANCES,
             Capability.POSITIONS,
             Capability.ORDERS,
+            Capability.TRADE_HISTORY,
+            Capability.ORDER_HISTORY,
             Capability.SUBACCOUNT_LIST,
             Capability.SUBACCOUNT_CREATE,
             Capability.SUBACCOUNT_FREEZE,
@@ -509,6 +534,114 @@ class BybitConnector(ExchangeConnector):
             return None
         items = response.get("result", {}).get("list", [])
         return normalize_order(items[0], universal_symbol) if items else None
+
+    # -- history --------------------------------------------------------------
+    #
+    # Bybit serves account-wide history per v5 category, so each category is
+    # one stream. Endpoints combine a bounded time window with native token
+    # pagination, so the cursor is a JSON pair: the window start (epoch ms)
+    # plus the venue's nextPageCursor within that window. Each fetch makes
+    # exactly one venue call; the window slides forward once its pages are
+    # exhausted, until it reaches the present.
+
+    _HISTORY_WINDOW_MS = 24 * 60 * 60 * 1000
+
+    def history_stream_keys(self, active_symbols: list[str]) -> list[str]:
+        return [category for category, _ in _CATEGORIES]
+
+    def initial_history_cursor(self, start: datetime) -> str | None:
+        return json.dumps({"start": int(start.timestamp() * 1000)})
+
+    def _history_window(self, cursor: str | None) -> tuple[int, int, int, str | None]:
+        """(window start, window end, now, native page token) for one fetch."""
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        native: str | None = None
+        if cursor:
+            decoded = json.loads(cursor)
+            start_ms = int(decoded["start"])
+            native = decoded.get("cursor") or None
+        else:
+            start_ms = now_ms - int(DEFAULT_HISTORY_BACKFILL.total_seconds() * 1000)
+        return start_ms, min(start_ms + self._HISTORY_WINDOW_MS, now_ms), now_ms, native
+
+    @staticmethod
+    def _next_history_cursor(
+        start_ms: int, end_ms: int, now_ms: int, native: str | None
+    ) -> str | None:
+        if native:
+            return json.dumps({"start": start_ms, "cursor": native})
+        if end_ms < now_ms:
+            return json.dumps({"start": end_ms})
+        return None
+
+    async def _fetch_history_page(
+        self,
+        credential: Credential,
+        method_name: str,
+        category: str,
+        start_ms: int,
+        end_ms: int,
+        limit: int,
+        native_cursor: str | None,
+    ) -> tuple[list[dict], str | None]:
+        session = self._auth_session(credential)
+        kwargs: dict = {
+            "category": category,
+            "startTime": start_ms,
+            "endTime": end_ms,
+            "limit": limit,
+        }
+        if native_cursor:
+            kwargs["cursor"] = native_cursor
+        response = await self._call(getattr(session, method_name), **kwargs)
+        result = response.get("result", {})
+        return result.get("list", []), result.get("nextPageCursor") or None
+
+    def _universal_for(self, category: str, native_symbol: str) -> str | None:
+        market_type = dict(_CATEGORIES)[category]
+        return self._native_map.get((market_type, native_symbol))
+
+    async def _history_page(
+        self,
+        credential: Credential,
+        method_name: str,
+        stream_key: str,
+        cursor: str | None,
+        limit: int,
+        normalize,
+    ) -> Page:
+        if not self._native_map:
+            await self.fetch_instruments()
+        start_ms, end_ms, now_ms, native = self._history_window(cursor)
+        if start_ms >= now_ms:
+            return Page(items=[], next_cursor=None)
+        rows, next_native = await self._fetch_history_page(
+            credential, method_name, stream_key, start_ms, end_ms, limit, native
+        )
+        items = []
+        for raw in rows:
+            universal = self._universal_for(stream_key, raw.get("symbol", ""))
+            if universal is None:
+                continue  # dated futures / untracked instruments
+            items.append(normalize(raw, universal))
+        return Page(
+            items=items,
+            next_cursor=self._next_history_cursor(start_ms, end_ms, now_ms, next_native),
+        )
+
+    async def fetch_trades(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        return await self._history_page(
+            credential, "get_executions", stream_key, cursor, 100, normalize_trade
+        )
+
+    async def fetch_orders_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        return await self._history_page(
+            credential, "get_order_history", stream_key, cursor, 50, normalize_order
+        )
 
     async def verify_credential(self, credential: Credential) -> CredentialInfo:
         session = self._auth_session(credential)

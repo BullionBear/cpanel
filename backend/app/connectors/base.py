@@ -10,6 +10,7 @@ behavior stay consistent. Callers check ``supports()`` (or catch
 Credentials are passed per call as an opaque ``credential`` mapping decrypted
 by the caller at the last moment — connectors never store secrets.
 """
+from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
@@ -30,6 +31,11 @@ from app.connectors.types import (
 )
 
 Credential = dict[str, Any]
+
+# How far back a brand-new history stream starts. An account whose stream has
+# no sync_cursor yet backfills this window first; from then on the stored
+# cursor drives incremental sync.
+DEFAULT_HISTORY_BACKFILL = timedelta(days=3)
 
 
 class Capability(StrEnum):
@@ -134,6 +140,17 @@ class ExchangeConnector:
         venues (Binance-style) override this to return one per active symbol.
         """
         return ["account"]
+
+    def initial_history_cursor(self, start: datetime) -> str | None:
+        """Cursor that starts a brand-new stream at ``start``.
+
+        Cursors are opaque to callers, so the sync worker cannot build one
+        itself when it seeds a new stream (a fresh account backfilling
+        ``DEFAULT_HISTORY_BACKFILL`` into the past). Default is an epoch-ms
+        timestamp, which both time-windowed venues understand; connectors
+        with token cursors override this.
+        """
+        return str(int(start.timestamp() * 1000))
 
     # -- accounts and provisioning ----------------------------------------
 
