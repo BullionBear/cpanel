@@ -37,8 +37,10 @@ from app.connectors.types import (
     OrderSide,
     OrderStatus,
     OrderType,
+    PositionSide,
     Position,
     SubaccountInfo,
+    TimeInForce,
     WalletType,
 )
 from app.core.ratelimit import Priority, TokenBucket
@@ -94,6 +96,17 @@ _CATEGORY_OF = {
     MarketType.PERP: "linear",
     MarketType.CMARGIN: "inverse",
 }
+
+# Normalized time-in-force -> Bybit value.
+_TIF = {
+    TimeInForce.GTC: "GTC",
+    TimeInForce.IOC: "IOC",
+    TimeInForce.FOK: "FOK",
+    TimeInForce.POST_ONLY: "PostOnly",
+}
+
+# Normalized position side -> Bybit positionIdx (0 one-way, 1 long, 2 short).
+_POSITION_IDX = {PositionSide.BOTH: 0, PositionSide.LONG: 1, PositionSide.SHORT: 2}
 
 # Bybit native order status -> normalized lifecycle.
 _ORDER_STATUS = {
@@ -385,7 +398,13 @@ class BybitConnector(ExchangeConnector):
         }
         if request.type == OrderType.LIMIT and request.price is not None:
             kwargs["price"] = str(request.price)
-            kwargs["timeInForce"] = "GTC"
+            kwargs["timeInForce"] = _TIF.get(request.time_in_force or TimeInForce.GTC, "GTC")
+        if category != "spot":
+            # reduceOnly / positionIdx apply only to derivatives categories.
+            if request.reduce_only:
+                kwargs["reduceOnly"] = True
+            if request.position_side is not None:
+                kwargs["positionIdx"] = _POSITION_IDX[request.position_side]
         if request.client_order_id:
             kwargs["orderLinkId"] = request.client_order_id
         response = await self._call(session.place_order, **kwargs)

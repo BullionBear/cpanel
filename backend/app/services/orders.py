@@ -28,6 +28,8 @@ from app.connectors.types import (
     OrderSide,
     OrderStatus,
     OrderType,
+    PositionSide,
+    TimeInForce,
 )
 from app.core.config import settings
 from app.models.account import Account
@@ -174,6 +176,9 @@ async def place_order(
     otype: OrderType,
     qty: Decimal,
     price: Decimal | None = None,
+    time_in_force: TimeInForce | None = None,
+    reduce_only: bool = False,
+    position_side: PositionSide | None = None,
 ) -> Order:
     """Validate, guardrail, and place one order idempotently. Returns the row."""
     connector.require(Capability.ORDERS)
@@ -210,6 +215,9 @@ async def place_order(
         qty=qty,
         price=price,
         client_order_id=client_order_id,
+        time_in_force=time_in_force,
+        reduce_only=reduce_only,
+        position_side=position_side,
     )
     try:
         result = await connector.place_order(credential, request)
@@ -288,6 +296,9 @@ async def place_orders(
                 otype=OrderType(req["type"]),
                 qty=Decimal(str(req["qty"])),
                 price=Decimal(str(req["price"])) if req.get("price") is not None else None,
+                time_in_force=TimeInForce(req["time_in_force"]) if req.get("time_in_force") else None,
+                reduce_only=bool(req.get("reduce_only", False)),
+                position_side=PositionSide(req["position_side"]) if req.get("position_side") else None,
             )
             outcomes.append({"ok": True, "order_id": row.id, "status": row.status})
         except (OrderError, AccountError) as exc:

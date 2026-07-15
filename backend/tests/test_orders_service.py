@@ -126,6 +126,30 @@ async def test_placement_rejected_when_unrecoverable(db, connector):
     assert row.reject_reason
 
 
+async def test_extra_options_reach_connector(db, connector):
+    """Post-only / reduce-only / position-side flow through to the connector."""
+    from app.connectors.types import PositionSide, TimeInForce
+
+    account = await _setup(db, connector)
+
+    class _Capturing(FakeConnector):
+        captured = None
+
+        async def place_order(self, credential, request):
+            _Capturing.captured = request
+            return await super().place_order(credential, request)
+
+    cap = _Capturing()
+    await svc.place_order(
+        db, cap, account, "FAKE_PERP_ETHUSDT",
+        OrderSide.SELL, OrderType.LIMIT, qty=Decimal("0.01"), price=Decimal("3000"),
+        time_in_force=TimeInForce.POST_ONLY, reduce_only=True, position_side=PositionSide.SHORT,
+    )
+    assert cap.captured.time_in_force == TimeInForce.POST_ONLY
+    assert cap.captured.reduce_only is True
+    assert cap.captured.position_side == PositionSide.SHORT
+
+
 async def test_cancel_order(db, connector):
     account = await _setup(db, connector)
     row = await svc.place_order(

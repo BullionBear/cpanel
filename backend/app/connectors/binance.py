@@ -47,8 +47,10 @@ from app.connectors.types import (
     OrderSide,
     OrderStatus,
     OrderType,
+    PositionSide,
     Position,
     SubaccountInfo,
+    TimeInForce,
     WalletType,
 )
 from app.core.ratelimit import Priority, TokenBucket
@@ -527,6 +529,7 @@ class BinanceConnector(ExchangeConnector):
     async def place_order(self, credential: Credential, request: OrderRequest) -> Order:
         market_type, native_symbol = await self._resolve_symbol(request.universal_symbol)
         rest = self._rest_for(market_type, credential)
+        is_spot = market_type == MarketType.SPOT
         kwargs: dict = {
             "symbol": native_symbol,
             "side": request.side.value,
@@ -534,9 +537,27 @@ class BinanceConnector(ExchangeConnector):
             "quantity": float(request.qty),
         }
         if request.type == OrderType.LIMIT:
-            kwargs["time_in_force"] = "GTC"
             if request.price is not None:
                 kwargs["price"] = float(request.price)
+            post_only = request.time_in_force == TimeInForce.POST_ONLY
+            if is_spot:
+                # Spot post-only is a distinct order type, not a TIF.
+                if post_only:
+                    kwargs["type"] = "LIMIT_MAKER"
+                    kwargs.pop("time_in_force", None)
+                else:
+                    kwargs["time_in_force"] = (request.time_in_force or TimeInForce.GTC).value
+            else:
+                # Futures express post-only through the GTX time-in-force.
+                kwargs["time_in_force"] = (
+                    "GTX" if post_only else (request.time_in_force or TimeInForce.GTC).value
+                )
+        if not is_spot:
+            # Perp/coin-margined extras; ignored on spot.
+            if request.reduce_only:
+                kwargs["reduce_only"] = "true"
+            if request.position_side is not None:
+                kwargs["position_side"] = request.position_side.value
         if request.client_order_id:
             kwargs["new_client_order_id"] = request.client_order_id
         resp = await self._call(rest.new_order, **kwargs)

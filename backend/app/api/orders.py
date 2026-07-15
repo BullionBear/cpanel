@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.connectors.base import ExchangeConnector, NotSupported
 from app.connectors.registry import connectors
-from app.connectors.types import OrderSide, OrderType
+from app.connectors.types import OrderSide, OrderType, PositionSide, TimeInForce
 from app.core.audit import Actor, audit, current_actor
 from app.core.db import get_db
 from app.models.account import Account
@@ -55,6 +55,10 @@ class OrderLeg(BaseModel):
     type: str
     qty: Decimal
     price: Decimal | None = None
+    # Exchange/category-specific options (see connector best-fit mapping).
+    time_in_force: str | None = None
+    reduce_only: bool = False
+    position_side: str | None = None
 
 
 class PlaceOrderIn(OrderLeg):
@@ -98,6 +102,24 @@ def _type(value: str) -> OrderType:
         return OrderType(value.upper())
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid order type {value!r}")
+
+
+def _tif(value: str | None) -> TimeInForce | None:
+    if not value:
+        return None
+    try:
+        return TimeInForce(value.upper())
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid time in force {value!r}")
+
+
+def _position_side(value: str | None) -> PositionSide | None:
+    if not value:
+        return None
+    try:
+        return PositionSide(value.upper())
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid position side {value!r}")
 
 
 def _map_order_error(exc: Exception) -> HTTPException:
@@ -155,6 +177,9 @@ async def place_order(
                 otype=_type(body.type),
                 qty=body.qty,
                 price=body.price,
+                time_in_force=_tif(body.time_in_force),
+                reduce_only=body.reduce_only,
+                position_side=_position_side(body.position_side),
             )
         except (svc.OrderError, AccountError, NotSupported) as exc:
             raise _map_order_error(exc)

@@ -4,32 +4,28 @@
 	import { fetchOverview, type OverviewItem } from '$lib/portfolio';
 	import {
 		fetchOrders,
-		placeOrder,
 		cancelOrder,
 		cancelOrders,
 		syncAccountOrders,
 		searchSymbols,
+		categoryOf,
 		OPEN_STATES,
 		type Order,
 		type SymbolInfo
 	} from '$lib/orders';
+	import { resolvePanel } from '$lib/orderTickets/registry';
+	import OrderPanel from '$lib/orderTickets/OrderPanel.svelte';
 
 	let overview: OverviewItem[] = [];
 	let orders: Order[] = [];
 	let loading = true;
 	let error = '';
 
-	// Ticket state
+	// Ticket state (account + instrument picker; the panel owns order fields)
 	let accountId: number | null = null;
 	let symbolQuery = '';
 	let symbolResults: SymbolInfo[] = [];
 	let selectedSymbol: SymbolInfo | null = null;
-	let side: 'BUY' | 'SELL' = 'BUY';
-	let otype: 'LIMIT' | 'MARKET' = 'LIMIT';
-	let qtyInput = '';
-	let priceInput = '';
-	let placing = false;
-	let placeMsg = '';
 
 	// Open-orders list state
 	let openOnly = true;
@@ -41,45 +37,11 @@
 		const a = overview.find((o) => o.account_id === id);
 		return a ? `${a.exchange} · ${a.label}` : `#${id}`;
 	};
-	$: validation = validate(selectedSymbol, otype, qtyInput, priceInput);
-
-	interface Validation {
-		ok: boolean;
-		errors: string[];
-		notional: number | null;
-	}
-
-	function stepDecimals(step: string): number {
-		const i = step.indexOf('.');
-		return i < 0 ? 0 : step.length - i - 1;
-	}
-
-	function validate(
-		sym: SymbolInfo | null,
-		type: string,
-		qtyRaw: string,
-		priceRaw: string
-	): Validation {
-		const errors: string[] = [];
-		if (!sym) return { ok: false, errors: ['Select an instrument'], notional: null };
-		const qty = Number(qtyRaw);
-		if (!qtyRaw || !Number.isFinite(qty) || qty <= 0) errors.push('Enter a positive quantity');
-		const minQty = Number(sym.min_qty);
-		if (qty > 0 && qty < minQty) errors.push(`Below min quantity ${sym.min_qty}`);
-		const maxQty = sym.max_qty !== null ? Number(sym.max_qty) : null;
-		if (maxQty !== null && qty > maxQty) errors.push(`Above max quantity ${sym.max_qty}`);
-
-		let price: number | null = null;
-		if (type === 'LIMIT') {
-			price = Number(priceRaw);
-			if (!priceRaw || !Number.isFinite(price) || price <= 0) errors.push('Enter a positive price');
-		}
-		const ref = price ?? (sym.last_price !== null ? Number(sym.last_price) : null);
-		const notional = ref !== null && qty > 0 ? ref * qty : null;
-		if (sym.min_notional !== null && notional !== null && notional < Number(sym.min_notional))
-			errors.push(`Below min notional ${sym.min_notional}`);
-		return { ok: errors.length === 0, errors, notional };
-	}
+	// Resolve the best-fit panel from the account's exchange and the instrument's category.
+	$: panel =
+		account && selectedSymbol
+			? resolvePanel(account.exchange, categoryOf(selectedSymbol.market_type))
+			: null;
 
 	function money(v: string | number | null): string {
 		if (v === null) return '—';
@@ -131,6 +93,14 @@
 		}
 	}
 
+	// Instrument search is scoped to the selected account's exchange, so switching
+	// accounts clears the current pick.
+	function onAccountChange() {
+		selectedSymbol = null;
+		symbolQuery = '';
+		symbolResults = [];
+	}
+
 	let searchTimer: ReturnType<typeof setTimeout> | undefined;
 	function onSymbolInput() {
 		selectedSymbol = null;
@@ -154,30 +124,6 @@
 		selectedSymbol = s;
 		symbolQuery = s.universal_symbol;
 		symbolResults = [];
-	}
-
-	async function submit() {
-		if (accountId === null || !selectedSymbol || !validation.ok) return;
-		placing = true;
-		placeMsg = '';
-		try {
-			const order = await placeOrder({
-				account_id: accountId,
-				universal_symbol: selectedSymbol.universal_symbol,
-				side,
-				type: otype,
-				qty: qtyInput,
-				price: otype === 'LIMIT' ? priceInput : null
-			});
-			placeMsg = `Placed ${order.side} ${order.qty} ${order.universal_symbol} — ${order.status}`;
-			qtyInput = '';
-			priceInput = '';
-			await refreshOrders();
-		} catch (e) {
-			placeMsg = e instanceof ApiError ? e.message : 'Order failed.';
-		} finally {
-			placing = false;
-		}
 	}
 
 	async function cancelOne(o: Order) {
@@ -225,8 +171,6 @@
 		selected = next;
 	}
 
-	$: cancellable = orders.filter(isOpen);
-
 	onMount(loadAll);
 </script>
 
@@ -246,13 +190,13 @@
 		<div class="notice">Loading…</div>
 	{:else}
 		<div class="layout">
-			<!-- Order ticket -->
+			<!-- Order ticket: shared account + instrument picker, exchange/category-specific panel -->
 			<section class="ticket">
 				<h2>New order</h2>
 
 				<label class="field">
 					<span>Account</span>
-					<select bind:value={accountId}>
+					<select bind:value={accountId} on:change={onAccountChange}>
 						{#each overview as a}
 							<option value={a.account_id}>{a.exchange} · {a.label}</option>
 						{/each}
@@ -282,61 +226,25 @@
 					</ul>
 				{/if}
 
-				{#if selectedSymbol}
-					<div class="filters">
-						<span>tick {selectedSymbol.price_tick}</span>
-						<span>step {selectedSymbol.qty_step}</span>
-						<span>min {selectedSymbol.min_qty}</span>
-						{#if selectedSymbol.min_notional}<span>min notional {selectedSymbol.min_notional}</span>{/if}
-						{#if selectedSymbol.last_price}<span>last {selectedSymbol.last_price}</span>{/if}
-					</div>
+				{#if selectedSymbol && account && panel}
+					{#if panel.supported}
+						{#key `${account.account_id}:${selectedSymbol.universal_symbol}`}
+							<OrderPanel
+								exchange={account.exchange}
+								label={panel.label}
+								spec={panel.spec}
+								symbol={selectedSymbol}
+								accountId={account.account_id}
+								on:placed={refreshOrders}
+							/>
+						{/key}
+					{:else}
+						<div class="unsupported">
+							<strong>{panel.label}</strong>
+							<p>{panel.note}</p>
+						</div>
+					{/if}
 				{/if}
-
-				<div class="row">
-					<div class="seg">
-						<button class:active={side === 'BUY'} class="buy" on:click={() => (side = 'BUY')}>Buy</button>
-						<button class:active={side === 'SELL'} class="sell" on:click={() => (side = 'SELL')}>Sell</button>
-					</div>
-					<div class="seg">
-						<button class:active={otype === 'LIMIT'} on:click={() => (otype = 'LIMIT')}>Limit</button>
-						<button class:active={otype === 'MARKET'} on:click={() => (otype = 'MARKET')}>Market</button>
-					</div>
-				</div>
-
-				<div class="row">
-					<label class="field">
-						<span>Quantity</span>
-						<input type="text" inputmode="decimal" bind:value={qtyInput} placeholder="0.0" />
-					</label>
-					<label class="field">
-						<span>Price</span>
-						<input
-							type="text"
-							inputmode="decimal"
-							bind:value={priceInput}
-							placeholder={otype === 'MARKET' ? 'market' : '0.0'}
-							disabled={otype === 'MARKET'}
-						/>
-					</label>
-				</div>
-
-				{#if validation.notional !== null}
-					<div class="notional">≈ {money(validation.notional)} notional</div>
-				{/if}
-				{#if selectedSymbol && !validation.ok}
-					<ul class="errors">
-						{#each validation.errors as e}<li>{e}</li>{/each}
-					</ul>
-				{/if}
-
-				<button
-					class="btn place {side === 'SELL' ? 'sell' : 'buy'}"
-					on:click={submit}
-					disabled={placing || !validation.ok || accountId === null}
-				>
-					{placing ? 'Placing…' : `${side === 'BUY' ? 'Buy' : 'Sell'} ${selectedSymbol?.base_asset ?? ''}`}
-				</button>
-				{#if placeMsg}<div class="place-msg">{placeMsg}</div>{/if}
 			</section>
 
 			<!-- Open orders -->
@@ -345,11 +253,7 @@
 					<h2>{openOnly ? 'Open orders' : 'Recent orders'}</h2>
 					<div class="orders-actions">
 						<label class="toggle">
-							<input
-								type="checkbox"
-								bind:checked={openOnly}
-								on:change={refreshOrders}
-							/>
+							<input type="checkbox" bind:checked={openOnly} on:change={refreshOrders} />
 							Open only
 						</label>
 						<button
@@ -478,7 +382,6 @@
 		flex-direction: column;
 		gap: 0.3rem;
 		margin-bottom: 0.75rem;
-		flex: 1;
 	}
 	.field span {
 		font-size: 0.6875rem;
@@ -498,9 +401,6 @@
 		font-size: 0.875rem;
 		color: var(--text);
 		box-sizing: border-box;
-	}
-	input:disabled {
-		opacity: 0.5;
 	}
 
 	.results {
@@ -532,66 +432,21 @@
 		background: var(--border-light);
 	}
 
-	.filters {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.5rem;
-		margin-bottom: 0.85rem;
-		font-size: 0.6875rem;
-		color: var(--text-dim);
-		font-family: var(--mono);
-	}
-
-	.row {
-		display: flex;
-		gap: 0.6rem;
-	}
-	.seg {
-		display: flex;
-		flex: 1;
-		margin-bottom: 0.75rem;
-		border: 1px solid var(--border);
+	.unsupported {
+		border: 1px dashed var(--border);
 		border-radius: var(--radius-xs);
-		overflow: hidden;
-	}
-	.seg button {
-		flex: 1;
-		height: 2.2rem;
-		border: none;
-		background: none;
-		font-family: inherit;
-		font-size: 0.8125rem;
-		font-weight: 600;
+		padding: 1rem;
 		color: var(--text-muted);
-		cursor: pointer;
 	}
-	.seg button + button {
-		border-left: 1px solid var(--border);
-	}
-	.seg button.active {
-		background: var(--accent);
+	.unsupported strong {
+		display: block;
 		color: var(--text);
+		margin-bottom: 0.35rem;
 	}
-	.seg button.buy.active {
-		background: #d5f2e0;
-		color: #157347;
-	}
-	.seg button.sell.active {
-		background: #f7d9dd;
-		color: #b02a37;
-	}
-
-	.notional {
-		font-family: var(--mono);
+	.unsupported p {
+		margin: 0;
 		font-size: 0.8125rem;
-		color: var(--text-muted);
-		margin-bottom: 0.5rem;
-	}
-	.errors {
-		margin: 0 0 0.75rem;
-		padding-left: 1.1rem;
-		color: #b02a37;
-		font-size: 0.75rem;
+		line-height: 1.5;
 	}
 
 	.btn {
@@ -618,25 +473,6 @@
 	}
 	.btn.danger {
 		color: #b02a37;
-	}
-	.btn.place {
-		width: 100%;
-		margin-top: 0.25rem;
-	}
-	.btn.place.buy {
-		background: #157347;
-		color: #fff;
-		border-color: #157347;
-	}
-	.btn.place.sell {
-		background: #b02a37;
-		color: #fff;
-		border-color: #b02a37;
-	}
-	.place-msg {
-		margin-top: 0.6rem;
-		font-size: 0.75rem;
-		color: var(--text-muted);
 	}
 
 	.orders-head {

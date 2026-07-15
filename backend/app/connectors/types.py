@@ -28,6 +28,24 @@ class OrderType(StrEnum):
     MARKET = "MARKET"
 
 
+class TimeInForce(StrEnum):
+    """Normalized time-in-force. POST_ONLY is a maker-only instruction that each
+    connector maps to its venue's mechanism (Binance ``LIMIT_MAKER``/``GTX``,
+    Bybit ``PostOnly``)."""
+    GTC = "GTC"
+    IOC = "IOC"
+    FOK = "FOK"
+    POST_ONLY = "POST_ONLY"
+
+
+class PositionSide(StrEnum):
+    """Derivatives position the order applies to. BOTH is one-way mode; LONG /
+    SHORT are hedge-mode sides (Binance ``positionSide``, Bybit ``positionIdx``)."""
+    BOTH = "BOTH"
+    LONG = "LONG"
+    SHORT = "SHORT"
+
+
 class OrderStatus(StrEnum):
     SUBMITTING = "SUBMITTING"
     OPEN = "OPEN"
@@ -104,6 +122,11 @@ class OrderRequest:
     qty: Decimal
     price: Decimal | None = None   # required for LIMIT
     client_order_id: str | None = None
+    # Exchange/category-specific options; connectors apply what their venue and
+    # market support and ignore the rest (spot ignores reduce_only/position_side).
+    time_in_force: TimeInForce | None = None
+    reduce_only: bool = False
+    position_side: PositionSide | None = None
 
 
 @dataclass(frozen=True)
