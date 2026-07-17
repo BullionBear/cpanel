@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { ApiError } from '$lib/api';
-	import { fetchOverview, type OverviewItem } from '$lib/portfolio';
+	import { fetchHoldings, fetchOverview, type Holdings, type OverviewItem } from '$lib/portfolio';
 	import { fetchCapabilities } from '$lib/accounts';
 	import {
 		createTransfer,
@@ -56,6 +56,12 @@
 	let wConfirmed = false;
 	let wPreview: WithdrawPreview | null = null;
 	let wPreviewing = false;
+
+	// -- selected-account balances (from the latest snapshot) --
+	let holdings: Holdings | null = null;
+	let holdingsLoading = false;
+	let holdingsFor: number | null = null;
+	const holdingsCache = new Map<number, Holdings>();
 
 	// -- deposit state --
 	let dAccountId = '';
@@ -146,6 +152,50 @@
 		mode = next;
 		formError = '';
 		formNotice = '';
+	}
+
+	// The account whose balances to show: the source account of the active tab.
+	$: balanceAccountId = mode === 'transfer' ? fromId : mode === 'withdraw' ? wFromId : dAccountId;
+	$: balanceAccount = accounts.find((a) => String(a.account_id) === balanceAccountId) ?? null;
+	$: loadHoldings(balanceAccount);
+
+	async function loadHoldings(account: OverviewItem | null) {
+		if (!account) {
+			holdings = null;
+			holdingsFor = null;
+			return;
+		}
+		if (holdingsFor === account.account_id) return;
+		holdingsFor = account.account_id;
+		const cached = holdingsCache.get(account.account_id);
+		if (cached) {
+			holdings = cached;
+			return;
+		}
+		holdings = null;
+		holdingsLoading = true;
+		try {
+			const h = await fetchHoldings(account.exchange, account.label);
+			holdingsCache.set(account.account_id, h);
+			if (holdingsFor === account.account_id) holdings = h;
+		} catch {
+			if (holdingsFor === account.account_id) holdings = null;
+		} finally {
+			holdingsLoading = false;
+		}
+	}
+
+	/** Clicking a balance row fills the active tab's asset field. */
+	function useAsset(assetName: string) {
+		if (mode === 'transfer') {
+			asset = assetName;
+			resetPreview();
+		} else if (mode === 'withdraw') {
+			wAsset = assetName;
+			resetWithdrawPreview();
+		} else {
+			dAsset = assetName;
+		}
 	}
 
 	function resetWithdrawPreview() {
@@ -623,6 +673,55 @@
 			</div>
 		{/if}
 		{/if}
+
+		{#if balanceAccount}
+			<div class="balances">
+				<div class="balances-head">
+					<span class="balances-title">
+						Balances · {balanceAccount.exchange} · {balanceAccount.label}
+					</span>
+					{#if holdings?.taken_at}
+						<span class="balances-meta">snapshot {ts(holdings.taken_at)}</span>
+					{/if}
+				</div>
+				{#if holdingsLoading}
+					<div class="balances-empty">Loading balances…</div>
+				{:else if !holdings || holdings.balances.length === 0}
+					<div class="balances-empty">No snapshot balances for this account yet.</div>
+				{:else}
+					<div class="balances-scroll">
+					<table>
+						<thead>
+							<tr>
+								<th>Wallet</th>
+								<th>Asset</th>
+								<th class="right">Free</th>
+								<th class="right">Locked</th>
+								<th class="right">Total</th>
+								<th class="right">Value ({holdings.quote_asset})</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each holdings.balances as b (b.wallet + b.asset)}
+								<tr
+									class="balance-row"
+									title="Use {b.asset}"
+									on:click={() => useAsset(b.asset)}
+								>
+									<td>{b.wallet}</td>
+									<td class="mono strong">{b.asset}</td>
+									<td class="mono right">{num(b.free)}</td>
+									<td class="mono right">{num(b.locked)}</td>
+									<td class="mono right">{num(b.total)}</td>
+									<td class="mono right">{b.value_quote === null ? '—' : num(b.value_quote)}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+					</div>
+				{/if}
+			</div>
+		{/if}
 	</div>
 
 	{#if listError}
@@ -804,6 +903,48 @@
 	}
 	.form-grid label.wide {
 		grid-column: span 2;
+	}
+
+	.balances {
+		margin-top: 1.1rem;
+		padding-top: 0.9rem;
+		border-top: 1px solid var(--border-light);
+	}
+	.balances-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 0.75rem;
+		margin-bottom: 0.4rem;
+	}
+	.balances-title {
+		font-size: 0.6875rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--text-dim);
+	}
+	.balances-meta {
+		font-size: 0.75rem;
+		color: var(--text-muted);
+	}
+	.balances-empty {
+		font-size: 0.8125rem;
+		color: var(--text-muted);
+		padding: 0.35rem 0;
+	}
+	.balances-scroll {
+		max-height: 14rem;
+		overflow-y: auto;
+	}
+	.balance-row {
+		cursor: pointer;
+	}
+	.balance-row:hover {
+		background: var(--border-light);
+	}
+	.strong {
+		font-weight: 600;
 	}
 
 	.deposit-address {
