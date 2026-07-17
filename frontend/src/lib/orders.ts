@@ -85,12 +85,22 @@ export function validateLeg(
 	sym: SymbolInfo | null,
 	type: string,
 	qtyRaw: string,
-	priceRaw: string
+	priceRaw: string,
+	opts: { quoteQty?: boolean } = {}
 ): Validation {
 	const errors: string[] = [];
 	if (!sym) return { ok: false, errors: ['Select an instrument'], notional: null };
 	const qty = Number(qtyRaw);
 	if (!qtyRaw || !Number.isFinite(qty) || qty <= 0) errors.push('Enter a positive quantity');
+
+	// Quote-denominated market buys: qty is already the notional spend.
+	if (opts.quoteQty) {
+		const notional = qty > 0 ? qty : null;
+		if (sym.min_notional !== null && notional !== null && notional < Number(sym.min_notional))
+			errors.push(`Below min notional ${sym.min_notional}`);
+		return { ok: errors.length === 0, errors, notional };
+	}
+
 	const minQty = Number(sym.min_qty);
 	if (qty > 0 && qty < minQty) errors.push(`Below min quantity ${sym.min_qty}`);
 	const maxQty = sym.max_qty !== null ? Number(sym.max_qty) : null;

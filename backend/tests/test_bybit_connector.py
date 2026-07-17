@@ -21,7 +21,9 @@ from app.connectors.bybit import (
 from app.connectors.types import (
     DepositStatus,
     MarketType,
+    OrderRequest,
     OrderSide,
+    OrderType,
     WalletType,
     WithdrawalStatus,
 )
@@ -153,6 +155,54 @@ async def test_reference_prices(connector):
         "BYBIT_PERP_ETHUSDT": Decimal("3301"),
         "BYBIT_CMARGIN_BTCUSD": Decimal("62601"),
     }
+
+
+async def test_place_spot_market_order_sets_base_market_unit(connector, monkeypatch):
+    calls = []
+
+    async def call(func, **kwargs):
+        calls.append((func.__name__, kwargs))
+        return {"result": {"orderId": "1", "orderLinkId": "cpanel-abc"}}
+
+    monkeypatch.setattr(connector, "_call", call)
+    request = OrderRequest(
+        universal_symbol="BYBIT_SPOT_BTCUSDT",
+        side=OrderSide.BUY,
+        type=OrderType.MARKET,
+        qty=Decimal("0.25"),
+        client_order_id="cpanel-abc",
+    )
+    order = await connector.place_order({"api_key": "k", "secret": "s"}, request)
+    name, kwargs = calls[0]
+    assert name == "place_order"
+    assert kwargs["category"] == "spot"
+    assert kwargs["orderType"] == "Market"
+    assert kwargs["qty"] == "0.25"
+    assert kwargs["marketUnit"] == "baseCoin"
+    assert order.qty == Decimal("0.25")
+
+
+async def test_place_spot_limit_order_omits_market_unit(connector, monkeypatch):
+    calls = []
+
+    async def call(func, **kwargs):
+        calls.append((func.__name__, kwargs))
+        return {"result": {"orderId": "2", "orderLinkId": "cpanel-def"}}
+
+    monkeypatch.setattr(connector, "_call", call)
+    request = OrderRequest(
+        universal_symbol="BYBIT_SPOT_BTCUSDT",
+        side=OrderSide.BUY,
+        type=OrderType.LIMIT,
+        qty=Decimal("0.01"),
+        price=Decimal("60000"),
+        client_order_id="cpanel-def",
+    )
+    await connector.place_order({"api_key": "k", "secret": "s"}, request)
+    name, kwargs = calls[0]
+    assert name == "place_order"
+    assert "marketUnit" not in kwargs
+    assert kwargs["price"] == "60000"
 
 
 # -- balances / positions ----------------------------------------------------

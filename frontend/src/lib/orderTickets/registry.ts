@@ -17,6 +17,8 @@ export interface PanelSpec {
 	positionModes: PosMode[];
 	/** Quantity is denominated in contracts rather than the base asset. */
 	contracts: boolean;
+	/** Market-buy qty is quote-denominated (venues with no base-qty market buy). */
+	marketBuyQuote?: boolean;
 	/** Short venue-specific note surfaced in the panel. */
 	hint?: string;
 }
@@ -82,7 +84,8 @@ const SPEC = {
 		reduceOnly: false,
 		positionModes: [],
 		contracts: false,
-		hint: 'Post-only routes as poc. Market buys convert qty to a quote amount at the last price.'
+		marketBuyQuote: true,
+		hint: 'Post-only routes as poc. Market buys are sized in the quote asset.'
 	},
 	gateioPerp: {
 		orderTypes: ['LIMIT', 'MARKET'],

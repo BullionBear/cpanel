@@ -13,6 +13,12 @@ The linear and inverse categories also contain dated futures
 DELIVERY support lands.
 
 Uses the official ``pybit`` SDK (synchronous, run in a worker thread).
+
+Venue quirks:
+
+- **Spot market qty unit**: Bybit defaults market-buy ``qty`` to quote coin
+  and market-sell ``qty`` to base coin. The panel always sizes in base, so
+  ``place_order`` sets ``marketUnit=baseCoin`` for every spot market order.
 """
 import asyncio
 import json
@@ -561,14 +567,18 @@ class BybitConnector(ExchangeConnector):
     async def place_order(self, credential: Credential, request: OrderRequest) -> Order:
         category, native_symbol = await self._resolve_symbol(request.universal_symbol)
         session = self._auth_session(credential)
+        is_market = request.type == OrderType.MARKET
         kwargs: dict = {
             "category": category,
             "symbol": native_symbol,
             "side": "Buy" if request.side == OrderSide.BUY else "Sell",
-            "orderType": "Market" if request.type == OrderType.MARKET else "Limit",
+            "orderType": "Market" if is_market else "Limit",
             "qty": str(request.qty),
         }
-        if request.type == OrderType.LIMIT and request.price is not None:
+        if is_market and category == "spot":
+            # Default is quoteCoin for market buys; keep panel qty in base.
+            kwargs["marketUnit"] = "baseCoin"
+        if not is_market and request.price is not None:
             kwargs["price"] = str(request.price)
             kwargs["timeInForce"] = _TIF.get(request.time_in_force or TimeInForce.GTC, "GTC")
         if category != "spot":

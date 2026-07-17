@@ -24,8 +24,9 @@
 
 	const POS_LABEL: Record<PosMode, string> = { BOTH: 'One-way', LONG: 'Long', SHORT: 'Short' };
 
-	$: validation = validateLeg(symbol, otype, qtyInput, priceInput);
-	$: qtyUnit = spec.contracts ? 'cont' : symbol.base_asset;
+	$: quoteQty = Boolean(spec.marketBuyQuote && otype === 'MARKET' && side === 'BUY');
+	$: validation = validateLeg(symbol, otype, qtyInput, priceInput, { quoteQty });
+	$: qtyUnit = spec.contracts ? 'cont' : quoteQty ? symbol.quote_asset : symbol.base_asset;
 
 	function money(v: number | null): string {
 		if (v === null) return '—';
@@ -119,7 +120,7 @@
 		</label>
 	{/if}
 
-	{#if validation.notional !== null}
+	{#if validation.notional !== null && !quoteQty}
 		<div class="notional">≈ {money(validation.notional)} notional</div>
 	{/if}
 	{#if !validation.ok}

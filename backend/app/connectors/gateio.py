@@ -20,10 +20,10 @@ Design decisions and venue quirks:
   (USDT → the usdt account, BTC → the btc account).
 - **Client order ids** ride the ``text`` field and must be prefixed
   ``t-`` on the wire; the prefix is stripped when normalizing back.
-- **Spot market buys** are quote-denominated on Gate. ``place_order``
-  converts the panel's base qty using the pair's last price, and
-  ``normalize_spot_order`` reads qty/filled from ``filled_amount`` (the
-  base fill) for such orders.
+- **Spot market buys** are quote-denominated on Gate (no base-qty option).
+  The panel therefore sizes market buys in the quote asset; ``place_order``
+  passes ``qty`` through as ``amount``, and ``normalize_spot_order`` keeps
+  qty/filled in quote (``amount`` / ``filled_total``).
 - **Futures order size** is a signed contract count (positive buy,
   negative sell); market orders are ``price="0"`` with ``tif=ioc``.
   One-way position mode is assumed — ``position_side`` is ignored.
@@ -411,16 +411,18 @@ def normalize_positions(
 def normalize_spot_order(raw: dict, universal_symbol: str) -> Order:
     """A Gate spot order dict → normalized Order.
 
-    Market buys are quote-denominated on Gate, so qty/filled come from
-    ``filled_amount`` (the base fill) for them.
+    Market buys are quote-denominated on Gate, so qty/filled stay in quote
+    (``amount`` / ``filled_total``); everything else is base-denominated.
     """
     is_market = raw.get("type") == "market"
     is_buy = raw.get("side") == "buy"
+    qty = _dec(raw.get("amount", 0) or 0)
     if is_market and is_buy:
-        qty = _dec(raw.get("filled_amount", 0) or 0)
-        filled = qty
+        filled = _dec(raw.get("filled_total", 0) or 0)
+        left = _opt_dec(raw.get("left"))
+        if filled == 0 and left is not None and qty > 0:
+            filled = qty - left
     else:
-        qty = _dec(raw.get("amount", 0) or 0)
         filled = _dec(raw.get("filled_amount", raw.get("filled_total", 0)) or 0)
         left = _opt_dec(raw.get("left"))
         if left is not None and qty > 0:
@@ -861,15 +863,6 @@ class GateIOConnector(ExchangeConnector):
             raise ValueError(f"Unknown instrument {universal_symbol!r} for Gate.io")
         return pair
 
-    async def _spot_last_price(self, credential: Credential, native_symbol: str) -> Decimal:
-        rows = dump_gate_model(
-            await self._call(self._spot(credential).list_tickers, currency_pair=native_symbol)
-        )
-        last = rows[0].get("last") if rows else None
-        if not last:
-            raise ValueError(f"No reference price for {native_symbol} on Gate.io")
-        return _dec(last)
-
     async def place_order(self, credential: Credential, request: OrderRequest) -> Order:
         market_type, native_symbol = await self._resolve_symbol(request.universal_symbol)
         if market_type == MarketType.SPOT:
@@ -882,12 +875,8 @@ class GateIOConnector(ExchangeConnector):
         self, credential: Credential, request: OrderRequest, native_symbol: str
     ) -> Order:
         is_market = request.type == OrderType.MARKET
-        if is_market and request.side == OrderSide.BUY:
-            # Gate quotes market buys in the quote currency.
-            last = await self._spot_last_price(credential, native_symbol)
-            amount = str(request.qty * last)
-        else:
-            amount = str(request.qty)
+        # Market buys are quote-denominated on Gate; the panel sends quote qty.
+        amount = str(request.qty)
         if is_market:
             tif = _TIF.get(request.time_in_force or TimeInForce.IOC, "ioc")
             if tif not in ("ioc", "fok"):
@@ -909,23 +898,7 @@ class GateIOConnector(ExchangeConnector):
         raw = dump_gate_model(
             await self._call(self._spot(credential).create_order, order)
         )
-        normalized = normalize_spot_order(raw, request.universal_symbol)
-        if is_market and request.side == OrderSide.BUY and normalized.filled_qty == 0:
-            # Not yet filled: echo the requested base qty rather than 0.
-            return Order(
-                universal_symbol=normalized.universal_symbol,
-                native_order_id=normalized.native_order_id,
-                client_order_id=normalized.client_order_id or request.client_order_id,
-                side=normalized.side,
-                type=normalized.type,
-                status=normalized.status,
-                qty=request.qty,
-                filled_qty=Decimal("0"),
-                price=None,
-                created_at=normalized.created_at,
-                updated_at=normalized.updated_at,
-            )
-        return normalized
+        return normalize_spot_order(raw, request.universal_symbol)
 
     async def _place_futures_order(
         self, credential: Credential, request: OrderRequest, settle: str, native_symbol: str

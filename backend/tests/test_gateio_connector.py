@@ -337,16 +337,16 @@ def test_normalize_spot_order_statuses():
     assert cancelled.status == OrderStatus.CANCELLED
 
 
-def test_normalize_spot_market_buy_uses_base_fill():
+def test_normalize_spot_market_buy_keeps_quote_qty():
     # Market buys are quote-denominated: amount=65 USDT, filled 0.001 BTC.
     raw = {
         **SPOT_ORDER, "type": "market", "amount": "65", "price": "0",
-        "left": "0", "filled_amount": "0.001",
+        "left": "0", "filled_amount": "0.001", "filled_total": "65",
     }
     order = normalize_spot_order(raw, "GATEIO_SPOT_BTCUSDT")
     assert order.type == OrderType.MARKET
-    assert order.qty == Decimal("0.001")
-    assert order.filled_qty == Decimal("0.001")
+    assert order.qty == Decimal("65")
+    assert order.filled_qty == Decimal("65")
     assert order.price is None
 
 
@@ -392,34 +392,32 @@ def test_normalize_futures_order_states():
     assert market.type == OrderType.MARKET and market.price is None
 
 
-async def test_place_spot_market_buy_converts_to_quote(connector, monkeypatch):
+async def test_place_spot_market_buy_passes_quote_qty(connector, monkeypatch):
     calls = []
-
-    async def last_price(cred, native):
-        return Decimal("65000")
 
     async def call(func, *args, **kwargs):
         calls.append((func.__name__, args))
-        return {**SPOT_ORDER, "type": "market", "status": "open",
-                "amount": "65", "left": "65", "filled_amount": "0"}
+        return {**SPOT_ORDER, "type": "market", "status": "closed",
+                "amount": "65", "left": "0", "filled_amount": "0.001",
+                "filled_total": "65", "price": "0"}
 
-    monkeypatch.setattr(connector, "_spot_last_price", last_price)
     monkeypatch.setattr(connector, "_call", call)
     request = OrderRequest(
         universal_symbol="GATEIO_SPOT_BTCUSDT",
         side=OrderSide.BUY,
         type=OrderType.MARKET,
-        qty=Decimal("0.001"),
+        qty=Decimal("65"),
         client_order_id="cpanel-abc",
     )
     order = await connector.place_order({"api_key": "k", "secret": "s"}, request)
     name, args = calls[0]
     assert name == "create_order"
     body = args[0]
-    assert body.amount == "65.000"                     # 0.001 * 65000, quote units
+    assert body.amount == "65"                         # quote units, no conversion
     assert body.time_in_force == "ioc"
     assert body.text == "t-cpanel-abc"
-    assert order.qty == Decimal("0.001")               # echoes the base request qty
+    assert order.qty == Decimal("65")
+    assert order.filled_qty == Decimal("65")
 
 
 async def test_place_futures_order_signed_contracts(connector, monkeypatch):
