@@ -74,6 +74,9 @@ class ExchangeCapabilities(BaseModel):
     api_key_create: bool
     api_key_modify: bool
     api_key_revoke: bool
+    transfers: bool
+    withdrawals: bool
+    deposits: bool
     # True when the venue exposes no provisioning at all (registration-only,
     # e.g. Binance): the operator brings keys/subaccounts made on the venue.
     registration_only: bool
@@ -243,6 +246,9 @@ async def exchange_capabilities():
                 api_key_create=c.supports(Capability.API_KEY_CREATE),
                 api_key_modify=c.supports(Capability.API_KEY_MODIFY),
                 api_key_revoke=c.supports(Capability.API_KEY_REVOKE),
+                transfers=c.supports(Capability.TRANSFERS),
+                withdrawals=c.supports(Capability.WITHDRAWALS),
+                deposits=c.supports(Capability.DEPOSITS),
                 registration_only=not provisioning,
                 wallets=[w.value for w in c.wallets],
             )

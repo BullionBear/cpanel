@@ -225,7 +225,7 @@ class FakeConnector(ExchangeConnector):
             is_master=True,
             read_only=False,
             can_trade=True,
-            can_withdraw=False,
+            can_withdraw=True,
             permissions={"note": "fake"} if valid else None,
         )
 

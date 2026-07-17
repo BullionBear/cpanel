@@ -93,8 +93,38 @@ export interface DepositRow {
 	credited_at: string | null;
 }
 
+export interface AssetNetworkOption {
+	network: string;
+	withdraw_enabled: boolean;
+	deposit_enabled: boolean;
+	withdraw_min: string;
+	withdraw_fee: string;
+}
+
+export interface AvailableNetworks {
+	asset: string;
+	networks: AssetNetworkOption[];
+	suggested_network: string | null;
+}
+
 export const fetchTransfers = (params: Record<string, string> = {}) =>
 	apiGet<TransferRow[]>('/transfers', params);
+
+/** Venue-derived network options for withdraw / deposit / cross-venue moves. */
+export const fetchAvailableNetworks = (params: {
+	asset: string;
+	from_account_id?: number;
+	to_account_id?: number;
+}) => {
+	const query: Record<string, string> = { asset: params.asset };
+	if (params.from_account_id != null) {
+		query.from_account_id = String(params.from_account_id);
+	}
+	if (params.to_account_id != null) {
+		query.to_account_id = String(params.to_account_id);
+	}
+	return apiGet<AvailableNetworks>('/transfers/networks', query);
+};
 
 export const fetchTransfer = (id: number) => apiGet<TransferRow>(`/transfers/${id}`);
 

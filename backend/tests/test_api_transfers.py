@@ -223,6 +223,38 @@ async def test_deposit_address_and_recent(client):
     assert deposits.json()[0]["status"] == "CREDITED"
 
 
+async def test_available_networks(client):
+    missing = await client.get("/transfers/networks", params={"asset": "USDT"})
+    assert missing.status_code == 422
+
+    source = await client.get(
+        "/transfers/networks",
+        params={"from_account_id": client.ids["main"], "asset": "USDT"},
+    )
+    assert source.status_code == 200, source.text
+    body = source.json()
+    assert body["suggested_network"] == "TESTNET"
+    assert body["networks"][0]["withdraw_enabled"] is True
+
+    crossed = await client.get(
+        "/transfers/networks",
+        params={
+            "from_account_id": client.ids["main"],
+            "to_account_id": client.ids["dest"],
+            "asset": "USDT",
+        },
+    )
+    assert crossed.status_code == 200, crossed.text
+    assert crossed.json()["suggested_network"] == "TESTNET"
+
+    deposit = await client.get(
+        "/transfers/networks",
+        params={"to_account_id": client.ids["dest"], "asset": "USDT"},
+    )
+    assert deposit.status_code == 200, deposit.text
+    assert deposit.json()["suggested_network"] == "TESTNET"
+
+
 async def test_validation_maps_to_422(client):
     resp = await client.post(
         "/transfers",

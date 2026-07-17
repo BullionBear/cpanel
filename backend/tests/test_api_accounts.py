@@ -292,6 +292,9 @@ async def test_capabilities_include_new_flags(client):
     assert fake_caps["subaccount_freeze"] is True
     assert fake_caps["api_key_modify"] is True
     assert fake_caps["registration_only"] is False
+    assert fake_caps["transfers"] is True
+    assert fake_caps["withdrawals"] is True
+    assert fake_caps["deposits"] is True
 
 
 async def test_actions_are_audited(client, session_factory):

@@ -2,17 +2,25 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { ApiError } from '$lib/api';
 	import { fetchHoldings, fetchOverview, type Holdings, type OverviewItem } from '$lib/portfolio';
-	import { fetchCapabilities } from '$lib/accounts';
+	import {
+		fetchCapabilities,
+		fetchTree,
+		type AccountInfo,
+		type AccountNode,
+		type ExchangeCapabilities
+	} from '$lib/accounts';
 	import {
 		createTransfer,
 		createWithdrawal,
 		failTransfer,
+		fetchAvailableNetworks,
 		fetchDepositAddress,
 		fetchRecentDeposits,
 		fetchTransfers,
 		previewTransfer,
 		previewWithdrawal,
 		retryTransfer,
+		type AssetNetworkOption,
 		type DepositAddress,
 		type DepositRow,
 		type TransferPreview,
@@ -75,6 +83,16 @@
 	// Wallet structure differs per exchange (Binance: SPOT/FUNDING/FUTURES,
 	// Bybit: UNIFIED/FUNDING), served by the capabilities endpoint.
 	let walletsByExchange: Record<string, string[]> = {};
+	let exchangeCaps: Record<string, ExchangeCapabilities> = {};
+	/** Accounts whose active credential can withdraw (venue-verified). */
+	let withdrawableIds = new Set<number>();
+
+	// Venue-derived network options for the active tab.
+	let networkOptions: AssetNetworkOption[] = [];
+	let networksLoading = false;
+	let networksError = '';
+	let networksKey = '';
+	let networkFetchTimer: ReturnType<typeof setTimeout> | undefined;
 
 	$: fromAccount = accounts.find((a) => String(a.account_id) === fromId);
 	$: toAccount = accounts.find((a) => String(a.account_id) === toId);
@@ -82,9 +100,140 @@
 	$: cross = !!fromAccount && !!toAccount && fromAccount.exchange !== toAccount.exchange;
 	$: sameAccount = !!fromAccount && !!toAccount && fromAccount.account_id === toAccount.account_id;
 
+	$: withdrawAccounts = accounts.filter(
+		(a) => withdrawableIds.has(a.account_id) && exchangeCaps[a.exchange]?.withdrawals
+	);
+	$: depositAccounts = accounts.filter((a) => exchangeCaps[a.exchange]?.deposits);
+
 	function resetPreview() {
 		preview = null;
 		confirmed = false;
+	}
+
+	function flattenAccounts(nodes: AccountNode[]): AccountInfo[] {
+		const out: AccountInfo[] = [];
+		for (const node of nodes) {
+			out.push(node);
+			out.push(...node.children);
+		}
+		return out;
+	}
+
+	function networkLabel(n: AssetNetworkOption): string {
+		return `${n.network} · fee ${n.withdraw_fee} · min ${n.withdraw_min}`;
+	}
+
+	function applySuggestedNetwork(
+		suggested: string | null,
+		current: string,
+		assign: (value: string) => void
+	) {
+		if (suggested && (!current || !networkOptions.some((n) => n.network === current))) {
+			assign(suggested);
+			return;
+		}
+		if (current && !networkOptions.some((n) => n.network === current)) {
+			assign('');
+		}
+	}
+
+	async function loadNetworks(
+		key: string,
+		params: { asset: string; from_account_id?: number; to_account_id?: number },
+		onSuggest: (suggested: string | null) => void
+	) {
+		networksKey = key;
+		networksError = '';
+		if (!params.asset.trim() || (params.from_account_id == null && params.to_account_id == null)) {
+			networkOptions = [];
+			return;
+		}
+		networksLoading = true;
+		try {
+			const result = await fetchAvailableNetworks({
+				...params,
+				asset: params.asset.trim()
+			});
+			if (networksKey !== key) return;
+			networkOptions = result.networks;
+			onSuggest(result.suggested_network);
+			if (result.networks.length === 0) {
+				networksError = 'No enabled networks for this asset on the selected account(s).';
+			}
+		} catch (e) {
+			if (networksKey !== key) return;
+			networkOptions = [];
+			networksError = e instanceof ApiError ? e.message : 'Could not load networks';
+		} finally {
+			if (networksKey === key) networksLoading = false;
+		}
+	}
+
+	function scheduleNetworkLoad() {
+		clearTimeout(networkFetchTimer);
+		networkFetchTimer = setTimeout(() => {
+			if (mode === 'withdraw' && wFromId && wAsset.trim()) {
+				loadNetworks(
+					`w:${wFromId}:${wAsset.trim().toUpperCase()}`,
+					{ from_account_id: Number(wFromId), asset: wAsset },
+					(suggested) => {
+						const before = wNetwork;
+						applySuggestedNetwork(suggested, wNetwork, (v) => (wNetwork = v));
+						if (wNetwork !== before) resetWithdrawPreview();
+					}
+				);
+			} else if (mode === 'transfer' && cross && fromId && toId && asset.trim()) {
+				loadNetworks(
+					`c:${fromId}:${toId}:${asset.trim().toUpperCase()}`,
+					{
+						from_account_id: Number(fromId),
+						to_account_id: Number(toId),
+						asset
+					},
+					(suggested) => {
+						const before = network;
+						applySuggestedNetwork(suggested, network, (v) => (network = v));
+						if (network !== before) resetPreview();
+					}
+				);
+			} else if (mode === 'deposit' && dAccountId && dAsset.trim()) {
+				loadNetworks(
+					`d:${dAccountId}:${dAsset.trim().toUpperCase()}`,
+					{ to_account_id: Number(dAccountId), asset: dAsset },
+					(suggested) => {
+						applySuggestedNetwork(suggested, dNetwork, (v) => (dNetwork = v));
+						dAddress = null;
+						dLoaded = false;
+					}
+				);
+			} else {
+				networksKey = '';
+				networkOptions = [];
+				networksError = '';
+				networksLoading = false;
+			}
+		}, 250);
+	}
+
+	$: {
+		mode;
+		wFromId;
+		wAsset;
+		fromId;
+		toId;
+		asset;
+		dAccountId;
+		dAsset;
+		cross;
+		scheduleNetworkLoad();
+	}
+
+	// Sole withdrawable account → preselect on the withdraw tab.
+	$: if (mode === 'withdraw' && !wFromId && withdrawAccounts.length === 1) {
+		wFromId = String(withdrawAccounts[0].account_id);
+	}
+	$: if (mode === 'deposit' && !dAccountId && depositAccounts.length === 1) {
+		dAccountId = String(depositAccounts[0].account_id);
 	}
 
 	async function loadTransfers() {
@@ -152,6 +301,9 @@
 		mode = next;
 		formError = '';
 		formNotice = '';
+		networksKey = '';
+		networkOptions = [];
+		networksError = '';
 	}
 
 	// The account whose balances to show: the source account of the active tab.
@@ -335,8 +487,22 @@
 		try {
 			const caps = await fetchCapabilities();
 			walletsByExchange = Object.fromEntries(caps.map((c) => [c.exchange, c.wallets]));
+			exchangeCaps = Object.fromEntries(caps.map((c) => [c.exchange, c]));
 		} catch {
 			walletsByExchange = {};
+			exchangeCaps = {};
+		}
+		try {
+			const tree = await fetchTree();
+			withdrawableIds = new Set(
+				flattenAccounts(tree)
+					.filter((a) =>
+						a.credentials.some((c) => c.status === 'active' && c.can_withdraw === true)
+					)
+					.map((a) => a.id)
+			);
+		} catch {
+			withdrawableIds = new Set();
 		}
 		await loadTransfers();
 		loading = false;
@@ -346,7 +512,10 @@
 		}, 10_000);
 	});
 
-	onDestroy(() => clearInterval(pollTimer));
+	onDestroy(() => {
+		clearInterval(pollTimer);
+		clearTimeout(networkFetchTimer);
+	});
 </script>
 
 <svelte:head>
@@ -427,19 +596,26 @@
 			{:else}
 				<label>
 					<span>Network</span>
-					<input
-						type="text"
-						bind:value={network}
-						on:input={resetPreview}
-						placeholder="TRX, ETH, BSC…"
-					/>
+					<select bind:value={network} on:change={resetPreview} disabled={networksLoading}>
+						<option value="">
+							{networksLoading
+								? 'Loading networks…'
+								: networkOptions.length
+									? 'Select network…'
+									: 'No networks available'}
+						</option>
+						{#each networkOptions as n (n.network)}
+							<option value={n.network}>{networkLabel(n)}</option>
+						{/each}
+					</select>
+					{#if networksError}<span class="field-hint error">{networksError}</span>{/if}
 				</label>
 			{/if}
 		</div>
 
 		{#if cross}
 			<div class="cross-flow">
-				<span class="badge cross-badge">cross-exchange · irreversible</span>
+				<span class="badge cross-badge">cross-exchange · irreversible · on-chain withdrawal</span>
 				<button
 					class="btn small"
 					on:click={runPreview}
@@ -494,12 +670,15 @@
 				<span>From account</span>
 				<select bind:value={wFromId} on:change={resetWithdrawPreview}>
 					<option value="">Select…</option>
-					{#each accounts as account (account.account_id)}
+					{#each withdrawAccounts as account (account.account_id)}
 						<option value={String(account.account_id)}>
 							{account.exchange} · {account.label}
 						</option>
 					{/each}
 				</select>
+				{#if withdrawAccounts.length === 0}
+					<span class="field-hint">No accounts with a withdrawal-enabled key.</span>
+				{/if}
 			</label>
 			<label>
 				<span>Asset</span>
@@ -511,12 +690,23 @@
 			</label>
 			<label>
 				<span>Network</span>
-				<input
-					type="text"
+				<select
 					bind:value={wNetwork}
-					on:input={resetWithdrawPreview}
-					placeholder="TRX, ETH, BSC…"
-				/>
+					on:change={resetWithdrawPreview}
+					disabled={networksLoading || !wFromId}
+				>
+					<option value="">
+						{networksLoading
+							? 'Loading networks…'
+							: networkOptions.length
+								? 'Select network…'
+								: 'No networks available'}
+					</option>
+					{#each networkOptions as n (n.network)}
+						<option value={n.network}>{networkLabel(n)}</option>
+					{/each}
+				</select>
+				{#if networksError}<span class="field-hint error">{networksError}</span>{/if}
 			</label>
 			<label class="wide">
 				<span>Destination address</span>
@@ -582,9 +772,15 @@
 		<div class="form-grid">
 			<label>
 				<span>Account</span>
-				<select bind:value={dAccountId} on:change={() => { dAddress = null; dLoaded = false; }}>
+				<select
+					bind:value={dAccountId}
+					on:change={() => {
+						dAddress = null;
+						dLoaded = false;
+					}}
+				>
 					<option value="">Select…</option>
-					{#each accounts as account (account.account_id)}
+					{#each depositAccounts as account (account.account_id)}
 						<option value={String(account.account_id)}>
 							{account.exchange} · {account.label}
 						</option>
@@ -597,7 +793,19 @@
 			</label>
 			<label>
 				<span>Network</span>
-				<input type="text" bind:value={dNetwork} placeholder="TRX, ETH, BSC…" />
+				<select bind:value={dNetwork} disabled={networksLoading || !dAccountId}>
+					<option value="">
+						{networksLoading
+							? 'Loading networks…'
+							: networkOptions.length
+								? 'Select network…'
+								: 'No networks available'}
+					</option>
+					{#each networkOptions as n (n.network)}
+						<option value={n.network}>{networkLabel(n)}</option>
+					{/each}
+				</select>
+				{#if networksError}<span class="field-hint error">{networksError}</span>{/if}
 			</label>
 		</div>
 
@@ -1009,6 +1217,15 @@
 		color: var(--text-muted);
 	}
 	.form-msg.error {
+		color: var(--danger);
+	}
+	.field-hint {
+		display: block;
+		margin-top: 0.25rem;
+		font-size: 0.75rem;
+		color: var(--text-muted);
+	}
+	.field-hint.error {
 		color: var(--danger);
 	}
 

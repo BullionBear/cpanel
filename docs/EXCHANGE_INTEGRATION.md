@@ -100,13 +100,19 @@ This decides the connector's history strategy, so nail it down precisely:
 
 ### 1.7 Transfers, withdrawals, deposits
 
+Keep these separate: **transfer is intra-exchange only**. Moving funds off a
+venue (to another exchange or an external address) is **withdrawal**, not
+transfer. The panel may orchestrate a withdraw→deposit sequence when the
+destination is another registered account, but the connector never has a
+cross-exchange `transfer`.
+
 - Intra-exchange transfer endpoints: wallet↔wallet on one account, and
   main↔sub universal transfers. What identifies the counterparty — email, uid?
   Does an omitted side mean "the credential's own account"?
 - Is the transfer answer synchronous (confirmed on response) or does it need
   status polling?
 - Asset/network catalog: per-chain withdraw/deposit enablement, minimums,
-  fees (backs `fetch_asset_networks` and cross-exchange validation).
+  fees (backs `fetch_asset_networks` and withdrawal validation).
 - Deposit address lookup — including for subaccounts via the master key.
 - Withdrawal submit + status lifecycle → map to `WithdrawalStatus`
   (`PENDING`/`SENT`/`COMPLETED`/`FAILED`); deposit records → `DepositStatus`.
@@ -235,9 +241,12 @@ points.
 
 ### Step 6 — Money movement (`TRANSFERS`, `WITHDRAWALS`, `DEPOSITS`)
 
-- `transfer` with the wallet-leg maps and main↔sub semantics.
+- `transfer` for **intra-exchange** moves only (wallet-leg maps and main↔sub
+  semantics). Do not implement or declare anything cross-venue here.
 - `fetch_asset_networks`, `fetch_deposit_address` (master-for-sub included),
-  `withdraw`, `fetch_withdrawal`, `fetch_deposits`.
+  `withdraw`, `fetch_withdrawal`, `fetch_deposits` — these are what get funds
+  off / onto the venue (including when the panel later matches a deposit on
+  another exchange).
 - The transfer state machine (`services/transfers.py`), the progress job, and
   the Transfers UI need **no changes** — they only consume the interface.
 
@@ -292,13 +301,16 @@ code edits, where possible) and run through the panel UI:
 Testnets do not cover withdrawals/deposits realistically. With a real account
 holding a token amount of funds and `TRANSFER_MAX_VALUE` set low:
 
-1. `POST /transfers/preview` for a cross-exchange move — validation output
-   sane (networks, minimums, fees).
-2. One small cross-exchange transfer end to end: watch the step records
-   (`resolve_address → validate → submit_withdrawal → await_withdrawal →
-   await_deposit`) advance and the deposit match on the receiving venue.
-3. One small external withdrawal with `confirm=true`; verify fee/tx recorded.
-4. Leave the scheduler running for a day and check `job_run` for rate-limit
+1. `POST /transfers/withdraw/preview` — validation output sane (networks,
+   minimums, fees). Optionally preview a panel-orchestrated move into another
+   registered account (`POST /transfers/preview`); that path is still a
+   withdrawal on this venue, not a transfer.
+2. One small withdrawal end to end with `confirm=true`; verify fee/tx
+   recorded. If the destination is another panel account, watch the step
+   records (`resolve_address → validate → submit_withdrawal →
+   await_withdrawal → await_deposit`) and the deposit match on the receiving
+   venue.
+3. Leave the scheduler running for a day and check `job_run` for rate-limit
    errors; adjust the token bucket if the venue complains.
 
 ### 4.4 Sign-off checklist

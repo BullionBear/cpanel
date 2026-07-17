@@ -71,6 +71,7 @@ __all__ = [
     "create_withdrawal",
     "preview_cross_transfer",
     "preview_withdrawal",
+    "list_available_networks",
     "get_deposit_address",
     "list_recent_deposits",
     "advance_transfer",
@@ -243,6 +244,99 @@ def _source_network_check(
             f"({src_net.withdraw_min} {asset})"
         )
     return src_net, problems
+
+
+def _serialize_network(
+    network, *, deposit_enabled: bool | None = None
+) -> dict:
+    return {
+        "network": network.network,
+        "withdraw_enabled": network.withdraw_enabled,
+        "deposit_enabled": (
+            network.deposit_enabled if deposit_enabled is None else deposit_enabled
+        ),
+        "withdraw_min": str(network.withdraw_min),
+        "withdraw_fee": str(network.withdraw_fee),
+    }
+
+
+def _suggest_network(networks: list[dict]) -> str | None:
+    """Sole option, otherwise the cheapest withdraw fee."""
+    if not networks:
+        return None
+    if len(networks) == 1:
+        return networks[0]["network"]
+    return min(networks, key=lambda n: Decimal(n["withdraw_fee"]))["network"]
+
+
+async def list_available_networks(
+    db: AsyncSession,
+    asset: str,
+    *,
+    from_account: Account | None = None,
+    source_connector: ExchangeConnector | None = None,
+    to_account: Account | None = None,
+    dest_connector: ExchangeConnector | None = None,
+) -> dict:
+    """Derive selectable networks for withdrawal and/or deposit.
+
+    - Source only: withdraw-enabled chains on ``from_account``.
+    - Destination only: deposit-enabled chains on ``to_account``.
+    - Both: intersection (withdraw on source ∧ deposit on dest), matching
+      venue network codes exactly.
+
+    ``suggested_network`` is the only option, or the lowest-fee option among
+    several — never auto-submitted; the operator still confirms.
+    """
+    asset = asset.upper()
+    if from_account is None and to_account is None:
+        raise TransferValidationError("from_account_id or to_account_id is required")
+
+    source_nets: list = []
+    if from_account is not None:
+        if source_connector is None:
+            raise TransferValidationError("source connector is required")
+        source_connector.require(Capability.WITHDRAWALS)
+        src_cred = await _own_credential(db, from_account)
+        source_nets = await source_connector.fetch_asset_networks(src_cred, asset)
+
+    dest_nets: list = []
+    if to_account is not None:
+        if dest_connector is None:
+            raise TransferValidationError("destination connector is required")
+        dest_connector.require(Capability.DEPOSITS)
+        dest_cred, _ = await _deposit_call_params(db, to_account)
+        dest_nets = await dest_connector.fetch_asset_networks(dest_cred, asset)
+
+    if from_account is not None and to_account is not None:
+        dest_by_net = {n.network.upper(): n for n in dest_nets}
+        networks = []
+        for src in source_nets:
+            if not src.withdraw_enabled:
+                continue
+            dest = dest_by_net.get(src.network.upper())
+            if dest is None or not dest.deposit_enabled:
+                continue
+            networks.append(_serialize_network(src, deposit_enabled=True))
+    elif from_account is not None:
+        networks = [
+            _serialize_network(n)
+            for n in source_nets
+            if n.withdraw_enabled
+        ]
+    else:
+        networks = [
+            _serialize_network(n)
+            for n in dest_nets
+            if n.deposit_enabled
+        ]
+
+    networks.sort(key=lambda n: (Decimal(n["withdraw_fee"]), n["network"]))
+    return {
+        "asset": asset,
+        "networks": networks,
+        "suggested_network": _suggest_network(networks),
+    }
 
 
 # -- creation -----------------------------------------------------------------

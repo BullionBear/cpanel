@@ -40,6 +40,9 @@ export interface ExchangeCapabilities {
 	api_key_create: boolean;
 	api_key_modify: boolean;
 	api_key_revoke: boolean;
+	transfers: boolean;
+	withdrawals: boolean;
+	deposits: boolean;
 	registration_only: boolean;
 }
 

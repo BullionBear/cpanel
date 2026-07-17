@@ -231,14 +231,14 @@ class ExchangeConnector:
         """
         raise NotSupported(self.exchange, Capability.TRANSFERS)
 
-    # -- withdrawals / deposits (cross-exchange transfers) ----------------
+    # -- withdrawals / deposits (on-chain; not transfer) -------------------
 
     async def fetch_asset_networks(
         self, credential: Credential, asset: str
     ) -> list[AssetNetwork]:
         """Chains the asset can move over, with per-chain withdraw/deposit
-        status, minimums, and fees — used to validate a cross-exchange
-        transfer on both sides before any money moves."""
+        status, minimums, and fees — used to validate a withdrawal (and any
+        matching deposit on another venue) before money moves."""
         raise NotSupported(self.exchange, Capability.WITHDRAWALS)
 
     async def fetch_deposit_address(

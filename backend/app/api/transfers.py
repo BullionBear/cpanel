@@ -150,6 +150,20 @@ class DepositOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AssetNetworkOut(BaseModel):
+    network: str
+    withdraw_enabled: bool
+    deposit_enabled: bool
+    withdraw_min: str
+    withdraw_fee: str
+
+
+class AvailableNetworksOut(BaseModel):
+    asset: str
+    networks: list[AssetNetworkOut]
+    suggested_network: str | None
+
+
 # -- helpers ------------------------------------------------------------------
 
 async def _account(db: AsyncSession, account_id: int) -> Account:
@@ -196,6 +210,45 @@ async def list_transfers(
 
 
 # NOTE: fixed paths must be registered before /{transfer_id}.
+
+@router.get("/networks", response_model=AvailableNetworksOut)
+async def available_networks(
+    asset: str,
+    from_account_id: int | None = None,
+    to_account_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """List selectable networks derived from the venue(s).
+
+    - ``from_account_id`` only: withdraw-enabled chains on the source.
+    - ``to_account_id`` only: deposit-enabled chains on the destination.
+    - Both: intersection (withdraw on source ∧ deposit on dest).
+
+    ``suggested_network`` is the sole option or the cheapest fee — the
+    operator still confirms before anything moves.
+    """
+    if from_account_id is None and to_account_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="from_account_id or to_account_id is required",
+        )
+    from_account = await _account(db, from_account_id) if from_account_id else None
+    to_account = await _account(db, to_account_id) if to_account_id else None
+    try:
+        result = await svc.list_available_networks(
+            db,
+            asset,
+            from_account=from_account,
+            source_connector=(
+                _connector(from_account.exchange) if from_account else None
+            ),
+            to_account=to_account,
+            dest_connector=_connector(to_account.exchange) if to_account else None,
+        )
+    except (NotSupported, svc.TransferError, AccountError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return AvailableNetworksOut(**result)
+
 
 @router.get("/deposit-address", response_model=DepositAddressOut)
 async def deposit_address(

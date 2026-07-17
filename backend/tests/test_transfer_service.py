@@ -22,6 +22,7 @@ from app.services.transfers import (
     flag_stuck_transfers,
     get_deposit_address,
     get_transfer,
+    list_available_networks,
     list_recent_deposits,
     preview_cross_transfer,
     preview_withdrawal,
@@ -345,6 +346,107 @@ async def test_preview_withdrawal_source_side(db, fake, main_account):
     )
     assert bad["ok"] is False
     assert fake.withdrawals == {}
+
+
+async def test_list_available_networks_suggests_cheapest(db, fake, main_account):
+    fake.networks["USDT"] = [
+        AssetNetwork(
+            network="ETH",
+            deposit_enabled=True,
+            withdraw_enabled=True,
+            withdraw_min=Decimal("1"),
+            withdraw_fee=Decimal("5"),
+        ),
+        AssetNetwork(
+            network="TRX",
+            deposit_enabled=True,
+            withdraw_enabled=True,
+            withdraw_min=Decimal("1"),
+            withdraw_fee=Decimal("1"),
+        ),
+        AssetNetwork(
+            network="OFF",
+            deposit_enabled=True,
+            withdraw_enabled=False,
+            withdraw_min=Decimal("1"),
+            withdraw_fee=Decimal("0.1"),
+        ),
+    ]
+    result = await list_available_networks(
+        db, "usdt", from_account=main_account, source_connector=fake
+    )
+    assert [n["network"] for n in result["networks"]] == ["TRX", "ETH"]
+    assert result["suggested_network"] == "TRX"
+
+
+async def test_list_available_networks_intersects_dest(db, fake, main_account, cross):
+    fake2, dest, _ = cross
+    fake.networks["USDT"] = [
+        AssetNetwork(
+            network="TRX",
+            deposit_enabled=True,
+            withdraw_enabled=True,
+            withdraw_min=Decimal("1"),
+            withdraw_fee=Decimal("1"),
+        ),
+        AssetNetwork(
+            network="ETH",
+            deposit_enabled=True,
+            withdraw_enabled=True,
+            withdraw_min=Decimal("1"),
+            withdraw_fee=Decimal("2"),
+        ),
+    ]
+    fake2.networks["USDT"] = [
+        AssetNetwork(
+            network="ETH",
+            deposit_enabled=True,
+            withdraw_enabled=True,
+            withdraw_min=Decimal("1"),
+            withdraw_fee=Decimal("2"),
+        ),
+        AssetNetwork(
+            network="TRX",
+            deposit_enabled=False,
+            withdraw_enabled=True,
+            withdraw_min=Decimal("1"),
+            withdraw_fee=Decimal("1"),
+        ),
+    ]
+    result = await list_available_networks(
+        db,
+        "USDT",
+        from_account=main_account,
+        source_connector=fake,
+        to_account=dest,
+        dest_connector=fake2,
+    )
+    assert [n["network"] for n in result["networks"]] == ["ETH"]
+    assert result["suggested_network"] == "ETH"
+
+
+async def test_list_available_networks_deposit_only(db, fake, main_account):
+    fake.networks["USDT"] = [
+        AssetNetwork(
+            network="TRX",
+            deposit_enabled=True,
+            withdraw_enabled=False,
+            withdraw_min=Decimal("1"),
+            withdraw_fee=Decimal("1"),
+        ),
+        AssetNetwork(
+            network="ETH",
+            deposit_enabled=False,
+            withdraw_enabled=True,
+            withdraw_min=Decimal("1"),
+            withdraw_fee=Decimal("2"),
+        ),
+    ]
+    result = await list_available_networks(
+        db, "USDT", to_account=main_account, dest_connector=fake
+    )
+    assert [n["network"] for n in result["networks"]] == ["TRX"]
+    assert result["suggested_network"] == "TRX"
 
 
 async def test_deposit_address_and_recent_deposits(db, fake, main_account):
