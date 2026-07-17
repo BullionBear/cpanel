@@ -25,14 +25,8 @@ from binance_common.configuration import ConfigurationRestAPI
 from binance_sdk_derivatives_trading_coin_futures.derivatives_trading_coin_futures import (
     DerivativesTradingCoinFutures,
 )
-from binance_sdk_derivatives_trading_coin_futures.rest_api.models.enums import (
-    GetIncomeHistoryIncomeTypeEnum as CmIncomeType,
-)
 from binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futures import (
     DerivativesTradingUsdsFutures,
-)
-from binance_sdk_derivatives_trading_usds_futures.rest_api.models.enums import (
-    GetIncomeHistoryIncomeTypeEnum as UmIncomeType,
 )
 from binance_sdk_spot.spot import Spot
 from binance_sdk_sub_account.sub_account import SubAccount
@@ -1235,17 +1229,17 @@ class BinanceConnector(ExchangeConnector):
             rest = DerivativesTradingUsdsFutures(
                 config_rest_api=_auth_config(credential)
             ).rest_api
-            income_type = UmIncomeType.FUNDING_FEE
         elif stream_key == "cm":
             rest = DerivativesTradingCoinFutures(
                 config_rest_api=_auth_config(credential)
             ).rest_api
-            income_type = CmIncomeType.FUNDING_FEE
         else:
             raise ValueError(f"Unknown Binance funding stream {stream_key!r}")
+        # Plain string — older SDKs expose an IncomeType enum, newer ones
+        # take str; both accept the wire value.
         resp = await self._call(
             rest.get_income_history,
-            income_type=income_type,
+            income_type="FUNDING_FEE",
             start_time=start_ms,
             end_time=end_ms,
             limit=limit,

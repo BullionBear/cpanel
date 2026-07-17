@@ -595,6 +595,35 @@ def test_funding_history_stream_keys():
     assert BinanceConnector().funding_history_stream_keys() == ["um", "cm"]
 
 
+async def test_fetch_cm_funding_accepts_raw_dict_rows(connector, monkeypatch):
+    """COIN-M income history often arrives as plain dicts (SDK validation
+    fallback); dump_sdk_model must not require model_dump on each row."""
+    connector._native_map = {
+        (MarketType.CMARGIN, "BTCUSD_PERP"): "BINANCE_CMARGIN_BTCUSD",
+    }
+
+    async def income(credential, stream_key, start_ms, end_ms, limit):
+        assert stream_key == "cm"
+        return [
+            {
+                "symbol": "BTCUSD_PERP",
+                "incomeType": "FUNDING_FEE",
+                "income": "-0.00001",
+                "asset": "BTC",
+                "time": start_ms + 1,
+                "tranId": 42,
+            }
+        ]
+
+    monkeypatch.setattr(connector, "_fetch_income_history", income)
+    page = await connector.fetch_funding_fees_history(
+        {"api_key": "k", "secret": "s", "scheme": "HMAC"}, "cm", None
+    )
+    assert len(page.items) == 1
+    assert page.items[0].native_id == "cm:42"
+    assert page.items[0].universal_symbol == "BINANCE_CMARGIN_BTCUSD"
+
+
 def test_normalize_withdrawal_created_at_from_apply_time():
     withdrawal = normalize_withdrawal(
         {"id": "w1", "coin": "USDT", "amount": "100", "status": 6,

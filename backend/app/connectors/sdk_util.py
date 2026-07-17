@@ -27,7 +27,18 @@ def unwrap(node: Any) -> Any:
 
 
 def dump_sdk_model(model: Any) -> Any:
-    """Dump a Binance SDK pydantic model to a plain dict/list in API shape."""
+    """Dump a Binance SDK pydantic model to a plain dict/list in API shape.
+
+    The official clients sometimes fall back to the raw JSON payload when
+    pydantic validation fails (see binance_common.utils.send_request), so
+    ``data()`` may already be a dict/list of dicts — accept those too.
+    """
+    if model is None:
+        return None
     if isinstance(model, list):
         return [dump_sdk_model(m) for m in model]
-    return unwrap(model.model_dump(by_alias=True, exclude_none=True))
+    if isinstance(model, dict):
+        return unwrap(model)
+    if hasattr(model, "model_dump"):
+        return unwrap(model.model_dump(by_alias=True, exclude_none=True))
+    return model
