@@ -60,6 +60,7 @@ class Capability(StrEnum):
     TRANSFERS = "transfers"
     WITHDRAWALS = "withdrawals"
     DEPOSITS = "deposits"
+    FUNDING_HISTORY = "funding_history"
 
 
 class NotSupported(Exception):
@@ -307,5 +308,26 @@ class ExchangeConnector:
         Deposit and withdrawal endpoints are account-wide on every venue we
         support, so the default is a single ``account`` stream. Per-asset
         sharding can override this later if a venue requires it.
+        """
+        return ["account"]
+
+    # -- funding fee history (cursor-based, like deposits/withdrawals) --------
+
+    async def fetch_funding_fees_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        """Next page of perpetual funding settlements for one stream.
+
+        Streams are typically per derivatives surface (Binance um/cm, Bybit
+        linear/inverse, Gate settle), not per symbol — funding endpoints are
+        account-wide within a surface.
+        """
+        raise NotSupported(self.exchange, Capability.FUNDING_HISTORY)
+
+    def funding_history_stream_keys(self) -> list[str]:
+        """Streams to sync for funding-fee history.
+
+        Default is a single ``account`` stream (used by the fake connector).
+        Live venues override with their derivatives surfaces.
         """
         return ["account"]

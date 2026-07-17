@@ -10,6 +10,7 @@ from app.connectors.fake import FakeConnector
 from app.connectors.types import OrderRequest, OrderSide, OrderType
 from app.models.history import (
     DepositHistory,
+    FundingFeeHistory,
     OrderHistory,
     SyncCursor,
     TradeHistory,
@@ -154,16 +155,16 @@ async def test_sync_account_history_covers_both_kinds(db, connector):
     await _fill_orders(connector, 2)
 
     changed = await svc.sync_account_history(db, connector, account)
-    assert changed == 4  # 2 trades + 2 orders (no fund rows seeded)
+    assert changed == 4  # 2 trades + 2 orders (no fund/funding rows seeded)
 
     assert len((await db.execute(select(TradeHistory))).scalars().all()) == 2
     assert len((await db.execute(select(OrderHistory))).scalars().all()) == 2
-    # Deposit/withdrawal streams still sync (empty) and leave cursor rows.
+    # Deposit/withdrawal/funding streams still sync (empty) and leave cursor rows.
     kinds = {
         row.data_kind
         for row in (await db.execute(select(SyncCursor))).scalars().all()
     }
-    assert kinds == {"trades", "orders", "deposits", "withdrawals"}
+    assert kinds == {"trades", "orders", "deposits", "withdrawals", "funding"}
 
 
 async def test_sync_deposits_and_withdrawals_from_venue(db, connector):
@@ -203,6 +204,36 @@ async def test_sync_deposits_and_withdrawals_from_venue(db, connector):
     total, listed = await svc.list_withdrawals(db, account_id=account.id)
     assert total == 1
     assert listed[0].status == "COMPLETED"
+
+
+async def test_sync_funding_fees_from_venue(db, connector):
+    """Funding settlements are ingested from the exchange income/transaction log."""
+    account = await _account_with_key(db, connector)
+    connector.credit_funding_fee(
+        "FAKE_PERP_ETHUSDT",
+        "USDT",
+        Decimal("-1.25"),
+        funding_rate=Decimal("0.0001"),
+    )
+    connector.credit_funding_fee(
+        "FAKE_PERP_ETHUSDT",
+        "USDT",
+        Decimal("0.5"),
+        funding_rate=Decimal("-0.00005"),
+    )
+
+    assert await svc.sync_stream(db, connector, account, "funding", "account") == 2
+    assert await svc.sync_stream(db, connector, account, "funding", "account") == 0
+    rows = (await db.execute(select(FundingFeeHistory))).scalars().all()
+    assert len(rows) == 2
+    assert {r.universal_symbol for r in rows} == {"FAKE_PERP_ETHUSDT"}
+    assert sum(r.amount for r in rows) == Decimal("-0.75")
+
+    total, listed = await svc.list_funding_fees(
+        db, account_id=account.id, universal_symbol="FAKE_PERP_ETHUSDT"
+    )
+    assert total == 2
+    assert listed[0].funding_rate is not None
 
 
 async def test_stream_failure_recorded_on_cursor(db):

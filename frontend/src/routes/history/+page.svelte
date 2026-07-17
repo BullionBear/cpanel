@@ -6,17 +6,19 @@
 		fetchOrderHistory,
 		fetchDepositHistory,
 		fetchWithdrawalHistory,
+		fetchFundingFeeHistory,
 		fetchStreams,
 		syncAccountHistory,
 		type TradeRow,
 		type OrderHistoryRow,
 		type DepositHistoryRow,
 		type WithdrawalHistoryRow,
+		type FundingFeeHistoryRow,
 		type StreamHealth
 	} from '$lib/history';
 	import { fetchOverview, type OverviewItem } from '$lib/portfolio';
 
-	type Tab = 'trades' | 'orders' | 'deposits' | 'withdrawals' | 'streams';
+	type Tab = 'trades' | 'orders' | 'deposits' | 'withdrawals' | 'funding' | 'streams';
 
 	const PAGE_SIZE = 50;
 
@@ -36,6 +38,7 @@
 	let orders: OrderHistoryRow[] = [];
 	let deposits: DepositHistoryRow[] = [];
 	let withdrawals: WithdrawalHistoryRow[] = [];
+	let fundingFees: FundingFeeHistoryRow[] = [];
 	let streams: StreamHealth[] = [];
 	let total = 0;
 	let loading = false;
@@ -56,6 +59,9 @@
 		if (exchange) params.exchange = exchange;
 		if (accountId) params.account_id = accountId;
 		if (isFundTab(tab)) {
+			if (asset.trim()) params.asset = asset.trim();
+		} else if (tab === 'funding') {
+			if (symbol.trim()) params.universal_symbol = symbol.trim();
 			if (asset.trim()) params.asset = asset.trim();
 		} else if (symbol.trim()) {
 			params.universal_symbol = symbol.trim();
@@ -85,6 +91,10 @@
 				const page = await fetchWithdrawalHistory(filterParams());
 				withdrawals = page.items;
 				total = page.total;
+			} else if (tab === 'funding') {
+				const page = await fetchFundingFeeHistory(filterParams());
+				fundingFees = page.items;
+				total = page.total;
 			} else {
 				const params: Record<string, string> = {};
 				if (exchange) params.exchange = exchange;
@@ -97,6 +107,7 @@
 			orders = [];
 			deposits = [];
 			withdrawals = [];
+			fundingFees = [];
 			streams = [];
 			total = 0;
 			error =
@@ -208,6 +219,9 @@
 		>
 			Withdrawals
 		</button>
+		<button class="tab" class:active={tab === 'funding'} on:click={() => switchTab('funding')}>
+			Funding
+		</button>
 		<button class="tab" class:active={tab === 'streams'} on:click={() => switchTab('streams')}>
 			Sync health
 		</button>
@@ -230,6 +244,21 @@
 		</select>
 		{#if tab !== 'streams'}
 			{#if isFundTab(tab)}
+				<input
+					class="symbol"
+					type="search"
+					placeholder="Asset…"
+					bind:value={asset}
+					on:input={onFilterInput}
+				/>
+			{:else if tab === 'funding'}
+				<input
+					class="symbol"
+					type="search"
+					placeholder="Universal symbol…"
+					bind:value={symbol}
+					on:input={onFilterInput}
+				/>
 				<input
 					class="symbol"
 					type="search"
@@ -422,6 +451,42 @@
 								<td class="mono" title={w.address || ''}>{shortHash(w.address)}</td>
 								<td class="mono" title={w.tx_id || ''}>{shortHash(w.tx_id)}</td>
 								<td class="mono">{w.native_withdrawal_id}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	{:else if tab === 'funding'}
+		{#if fundingFees.length === 0}
+			<div class="notice">
+				No funding fee history ingested yet. Sync pulls perpetual funding settlements from the
+				exchange.
+			</div>
+		{:else}
+			<div class="table-wrap" class:dim={loading}>
+				<table>
+					<thead>
+						<tr>
+							<th>Settled</th>
+							<th>Account</th>
+							<th>Symbol</th>
+							<th>Asset</th>
+							<th class="right">Amount</th>
+							<th class="right">Rate</th>
+							<th>Funding ID</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each fundingFees as f (f.id)}
+							<tr>
+								<td class="mono">{ts(f.settled_at)}</td>
+								<td>{accountLabel(f.account_id)}</td>
+								<td class="mono strong">{f.universal_symbol}</td>
+								<td class="mono">{f.asset}</td>
+								<td class="mono right">{num(f.amount)}</td>
+								<td class="mono right">{num(f.funding_rate)}</td>
+								<td class="mono">{f.native_funding_id}</td>
 							</tr>
 						{/each}
 					</tbody>

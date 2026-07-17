@@ -74,10 +74,14 @@ async def test_sync_then_explore(client):
         CRED, "USDT", Decimal("10"), address="TExternal", network="TRX"
     )
     fake.complete_withdrawal(wd.native_id, tx_id="0xw", fee=Decimal("0.5"))
+    fake.credit_funding_fee(
+        "FAKE_PERP_ETHUSDT", "USDT", Decimal("-0.75"), funding_rate=Decimal("0.0001")
+    )
 
     resp = await client.post(f"/history/sync/{client.account_id}")
     assert resp.status_code == 200
-    assert resp.json()["ingested"] == 4  # 1 trade + 1 order + 1 deposit + 1 withdrawal
+    # 1 trade + 1 order + 1 deposit + 1 withdrawal + 1 funding
+    assert resp.json()["ingested"] == 5
 
     trades = (await client.get("/history/trades")).json()
     assert trades["total"] == 1
@@ -99,11 +103,23 @@ async def test_sync_then_explore(client):
     assert withdrawals["items"][0]["status"] == "COMPLETED"
     assert Decimal(withdrawals["items"][0]["fee"]) == Decimal("0.5")
 
+    funding = (await client.get("/history/funding")).json()
+    assert funding["total"] == 1
+    assert funding["items"][0]["universal_symbol"] == "FAKE_PERP_ETHUSDT"
+    assert Decimal(funding["items"][0]["amount"]) == Decimal("-0.75")
+    assert Decimal(funding["items"][0]["funding_rate"]) == Decimal("0.0001")
+
     # Filters narrow, unknown values exclude.
     assert (await client.get("/history/trades", params={"exchange": "FAKE"})).json()["total"] == 1
     assert (await client.get("/history/trades", params={"universal_symbol": "NOPE"})).json()["total"] == 0
     assert (await client.get("/history/deposits", params={"asset": "USDT"})).json()["total"] == 1
     assert (await client.get("/history/deposits", params={"asset": "BTC"})).json()["total"] == 0
+    assert (
+        await client.get("/history/funding", params={"universal_symbol": "FAKE_PERP_ETHUSDT"})
+    ).json()["total"] == 1
+    assert (
+        await client.get("/history/funding", params={"universal_symbol": "NOPE"})
+    ).json()["total"] == 0
 
 
 async def test_stream_health_listed(client):
@@ -114,6 +130,7 @@ async def test_stream_health_listed(client):
         ("orders", "account"),
         ("deposits", "account"),
         ("withdrawals", "account"),
+        ("funding", "account"),
     }
     for stream in streams:
         assert stream["account_id"] == client.account_id

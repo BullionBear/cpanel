@@ -268,3 +268,19 @@ class Deposit:
     tx_id: str | None = None
     credited_at: datetime | None = None
     created_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class FundingFee:
+    """One perpetual funding settlement as reported by the venue.
+
+    ``amount`` is signed in the settlement asset: positive means the account
+    received funding, negative means it paid. ``funding_rate`` is optional —
+    some venues only return the cash amount.
+    """
+    universal_symbol: str
+    native_id: str
+    asset: str
+    amount: Decimal
+    funding_rate: Decimal | None = None
+    settled_at: datetime | None = None

@@ -17,6 +17,7 @@ from app.connectors.binance import (
     normalize_cm_instrument,
     normalize_deposit,
     normalize_funding_balances,
+    normalize_funding_fee,
     normalize_futures_balances,
     normalize_positions,
     normalize_spot_balances,
@@ -568,6 +569,30 @@ def test_normalize_deposit_credited():
     assert deposit.amount == Decimal("99")
     assert deposit.credited_at is not None
     assert deposit.created_at is not None
+
+
+def test_normalize_funding_fee():
+    fee = normalize_funding_fee(
+        {
+            "symbol": "BTCUSDT",
+            "incomeType": "FUNDING_FEE",
+            "income": "-0.375",
+            "asset": "USDT",
+            "time": 1_700_000_000_000,
+            "tranId": 9689322392,
+        },
+        "BINANCE_PERP_BTCUSDT",
+        stream_key="um",
+    )
+    assert fee.universal_symbol == "BINANCE_PERP_BTCUSDT"
+    assert fee.native_id == "um:9689322392"
+    assert fee.amount == Decimal("-0.375")
+    assert fee.asset == "USDT"
+    assert fee.settled_at is not None
+
+
+def test_funding_history_stream_keys():
+    assert BinanceConnector().funding_history_stream_keys() == ["um", "cm"]
 
 
 def test_normalize_withdrawal_created_at_from_apply_time():

@@ -1,10 +1,10 @@
 """History explorer endpoints.
 
 Reads serve the locally ingested history tables (trades, orders, deposits,
-withdrawals) — never a live venue call. Rows are filled by syncing venue
-history endpoints. ``/history/streams`` exposes per-stream sync health from
-the cursor table; the on-demand sync trigger is audited like every other
-state-changing operation.
+withdrawals, funding fees) — never a live venue call. Rows are filled by
+syncing venue history endpoints. ``/history/streams`` exposes per-stream
+sync health from the cursor table; the on-demand sync trigger is audited
+like every other state-changing operation.
 """
 from datetime import datetime
 from decimal import Decimal
@@ -100,6 +100,21 @@ class WithdrawalHistoryOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class FundingFeeHistoryOut(BaseModel):
+    id: int
+    account_id: int
+    exchange: str
+    universal_symbol: str
+    native_funding_id: str
+    asset: str
+    amount: Decimal
+    funding_rate: Decimal | None
+    settled_at: datetime | None
+    ingested_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class TradePage(BaseModel):
     total: int
     items: list[TradeOut]
@@ -118,6 +133,11 @@ class DepositHistoryPage(BaseModel):
 class WithdrawalHistoryPage(BaseModel):
     total: int
     items: list[WithdrawalHistoryOut]
+
+
+class FundingFeeHistoryPage(BaseModel):
+    total: int
+    items: list[FundingFeeHistoryOut]
 
 
 class StreamOut(BaseModel):
@@ -248,6 +268,34 @@ async def list_withdrawals(
     )
     return WithdrawalHistoryPage(
         total=total, items=[WithdrawalHistoryOut.model_validate(r) for r in rows]
+    )
+
+
+@router.get("/funding", response_model=FundingFeeHistoryPage)
+async def list_funding_fees(
+    exchange: str | None = None,
+    account_id: int | None = None,
+    universal_symbol: str | None = None,
+    asset: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    total, rows = await svc.list_funding_fees(
+        db,
+        exchange=exchange,
+        account_id=account_id,
+        universal_symbol=universal_symbol,
+        asset=asset,
+        start=start,
+        end=end,
+        limit=limit,
+        offset=offset,
+    )
+    return FundingFeeHistoryPage(
+        total=total, items=[FundingFeeHistoryOut.model_validate(r) for r in rows]
     )
 
 

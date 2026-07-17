@@ -76,6 +76,7 @@ from app.connectors.types import (
     Deposit,
     DepositAddress,
     DepositStatus,
+    FundingFee,
     Instrument,
     InstrumentFilters,
     KeyScheme,
@@ -568,6 +569,24 @@ def normalize_withdrawal_record(raw: dict) -> Withdrawal:
     )
 
 
+def normalize_funding_fee(
+    raw: dict, universal_symbol: str, *, settle: str
+) -> FundingFee:
+    """A futures account_book row (type=fund) → FundingFee.
+
+    Gate's ``change`` is the signed settlement amount in the settle currency.
+    ``id`` is unique per settle account, so prefix with the settle stream.
+    """
+    return FundingFee(
+        universal_symbol=universal_symbol,
+        native_id=f"{settle}:{raw.get('id') or ''}",
+        asset=settle.upper(),
+        amount=_dec(raw.get("change", 0) or 0),
+        funding_rate=None,
+        settled_at=_epoch_s(raw.get("time")),
+    )
+
+
 def normalize_deposit_record(raw: dict) -> Deposit:
     """A /wallet/deposits row → normalized Deposit."""
     status = _DEPOSIT_STATUS.get(str(raw.get("status") or "").upper(), DepositStatus.PENDING)
@@ -615,6 +634,7 @@ class GateIOConnector(ExchangeConnector):
             Capability.TRANSFERS,
             Capability.WITHDRAWALS,
             Capability.DEPOSITS,
+            Capability.FUNDING_HISTORY,
         }
     )
     # Gate's classic account: the spot account doubles as the funding wallet
@@ -1585,3 +1605,65 @@ class GateIOConnector(ExchangeConnector):
         self, credential: Credential, stream_key: str, cursor: str | None
     ) -> Page:
         return await self._fund_history_page(credential, cursor, kind="withdrawals")
+
+    # -- funding fee history --------------------------------------------------
+
+    def funding_history_stream_keys(self) -> list[str]:
+        return [settle for settle, _ in _SETTLES]
+
+    async def _fetch_funding_rows(
+        self,
+        credential: Credential,
+        settle: str,
+        start_s: int,
+        end_s: int,
+        limit: int,
+        offset: int,
+    ) -> list[dict]:
+        try:
+            return dump_gate_model(
+                await self._call(
+                    self._futures(credential).list_futures_account_book,
+                    settle,
+                    type="fund",
+                    _from=start_s,
+                    to=end_s,
+                    limit=limit,
+                    offset=offset,
+                )
+            )
+        except GateApiException as exc:
+            if exc.label in _EMPTY_ACCOUNT_LABELS:
+                return []
+            raise
+
+    async def fetch_funding_fees_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        market_type = dict(_SETTLES).get(stream_key)
+        if market_type is None:
+            raise ValueError(f"Unknown Gate.io funding stream {stream_key!r}")
+        if not self._native_map:
+            await self.fetch_instruments()
+        start_ms, end_ms, now_ms, skip = self._history_window(cursor)
+        if start_ms >= now_ms:
+            return Page(items=[], next_cursor=None)
+        limit = self._FUND_HISTORY_LIMIT
+        start_s, end_s = start_ms // 1000, end_ms // 1000
+        rows = await self._fetch_funding_rows(
+            credential, stream_key, start_s, end_s, limit, skip
+        )
+        items: list[FundingFee] = []
+        for raw in rows:
+            universal = self._native_map.get((market_type, raw.get("contract", "")))
+            if universal is None:
+                continue
+            items.append(
+                normalize_funding_fee(raw, universal, settle=stream_key)
+            )
+        return Page(
+            items=items,
+            next_cursor=self._next_history_cursor(
+                start_ms, end_ms, now_ms, skip, len(rows), limit
+            ),
+        )
