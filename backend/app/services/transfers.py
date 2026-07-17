@@ -265,6 +265,15 @@ async def create_intra_transfer(
         raise TransferValidationError(
             "Accounts are on different exchanges; use a cross-exchange transfer"
         )
+    # Wallet structure differs per venue (Binance: SPOT/FUNDING/FUTURES,
+    # Bybit: UNIFIED/FUNDING) — reject wallets the exchange does not have.
+    for wallet in (from_wallet, to_wallet):
+        if wallet is not None and wallet not in connector.wallets:
+            supported = ", ".join(w.value for w in connector.wallets)
+            raise TransferValidationError(
+                f"{from_account.exchange} has no {wallet.value} wallet"
+                f" (available: {supported})"
+            )
     if from_account.id == to_account.id and (
         from_wallet is None or to_wallet is None or from_wallet == to_wallet
     ):

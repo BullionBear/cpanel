@@ -2,8 +2,8 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { ApiError } from '$lib/api';
 	import { fetchOverview, type OverviewItem } from '$lib/portfolio';
+	import { fetchCapabilities } from '$lib/accounts';
 	import {
-		WALLETS,
 		createTransfer,
 		createWithdrawal,
 		failTransfer,
@@ -66,8 +66,13 @@
 	let dLoading = false;
 	let dLoaded = false;
 
+	// Wallet structure differs per exchange (Binance: SPOT/FUNDING/FUTURES,
+	// Bybit: UNIFIED/FUNDING), served by the capabilities endpoint.
+	let walletsByExchange: Record<string, string[]> = {};
+
 	$: fromAccount = accounts.find((a) => String(a.account_id) === fromId);
 	$: toAccount = accounts.find((a) => String(a.account_id) === toId);
+	$: intraWallets = fromAccount ? (walletsByExchange[fromAccount.exchange] ?? []) : [];
 	$: cross = !!fromAccount && !!toAccount && fromAccount.exchange !== toAccount.exchange;
 	$: sameAccount = !!fromAccount && !!toAccount && fromAccount.account_id === toAccount.account_id;
 
@@ -264,12 +269,24 @@
 
 	$: hasLive = transfers.some((t) => t.status === 'in_progress');
 
+	// Selecting an account on another exchange invalidates a picked wallet.
+	$: {
+		if (fromWallet && !intraWallets.includes(fromWallet)) fromWallet = '';
+		if (toWallet && !intraWallets.includes(toWallet)) toWallet = '';
+	}
+
 	onMount(async () => {
 		loading = true;
 		try {
 			accounts = await fetchOverview();
 		} catch {
 			accounts = [];
+		}
+		try {
+			const caps = await fetchCapabilities();
+			walletsByExchange = Object.fromEntries(caps.map((c) => [c.exchange, c.wallets]));
+		} catch {
+			walletsByExchange = {};
 		}
 		await loadTransfers();
 		loading = false;
@@ -343,7 +360,7 @@
 					<span>From wallet {sameAccount ? '(required)' : '(optional)'}</span>
 					<select bind:value={fromWallet}>
 						<option value="">Default</option>
-						{#each WALLETS as wallet}
+						{#each intraWallets as wallet}
 							<option value={wallet}>{wallet}</option>
 						{/each}
 					</select>
@@ -352,7 +369,7 @@
 					<span>To wallet {sameAccount ? '(required)' : '(optional)'}</span>
 					<select bind:value={toWallet}>
 						<option value="">Default</option>
-						{#each WALLETS as wallet}
+						{#each intraWallets as wallet}
 							<option value={wallet}>{wallet}</option>
 						{/each}
 					</select>

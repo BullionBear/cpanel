@@ -71,6 +71,7 @@ _DEFAULT_INSTRUMENTS = [
 class FakeConnector(ExchangeConnector):
     exchange = "FAKE"
     capabilities = frozenset(Capability)
+    wallets = (WalletType.SPOT, WalletType.FUNDING, WalletType.FUTURES)
 
     def __init__(self):
         self._ids = itertools.count(1)

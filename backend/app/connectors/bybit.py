@@ -144,9 +144,7 @@ _PERP_CONTRACT_TYPES = {"LinearPerpetual", "InversePerpetual"}
 # spot, margin, and derivatives collateral in one UNIFIED wallet; FUND is the
 # separate funding wallet (also where on-chain withdrawals draw from).
 _WALLET_ACCOUNT_TYPE = {
-    WalletType.SPOT: "UNIFIED",
-    WalletType.MARGIN: "UNIFIED",
-    WalletType.DERIVATIVES: "UNIFIED",
+    WalletType.UNIFIED: "UNIFIED",
     WalletType.FUNDING: "FUND",
 }
 
@@ -236,7 +234,7 @@ def normalize_wallet_balances(coins: list[dict]) -> list[Balance]:
 
     Bybit's Unified Trading Account holds spot and derivatives collateral
     together; there is no separate spot/derivatives split over the API, so
-    every coin is reported under the DERIVATIVES wallet. ``walletBalance`` is
+    every coin is reported under the UNIFIED wallet. ``walletBalance`` is
     the coin total and ``locked`` the amount reserved by open orders/margin.
     """
     balances: list[Balance] = []
@@ -249,10 +247,35 @@ def normalize_wallet_balances(coins: list[dict]) -> list[Balance]:
             locked = total
         balances.append(
             Balance(
-                wallet=WalletType.DERIVATIVES,
+                wallet=WalletType.UNIFIED,
                 asset=coin["coin"],
                 free=total - locked,
                 locked=locked,
+            )
+        )
+    return balances
+
+
+def normalize_fund_balances(rows: list[dict]) -> list[Balance]:
+    """FUND coins-balance rows → normalized FUNDING balances (zeros dropped).
+
+    ``transferBalance`` is what can move; the rest of ``walletBalance`` is
+    committed (e.g. a pending withdrawal), so it counts as locked.
+    """
+    balances: list[Balance] = []
+    for row in rows:
+        total = _dec(row.get("walletBalance", 0) or 0)
+        free = _dec(row.get("transferBalance", 0) or 0)
+        if total == 0:
+            continue
+        if free > total:
+            free = total
+        balances.append(
+            Balance(
+                wallet=WalletType.FUNDING,
+                asset=row["coin"],
+                free=free,
+                locked=total - free,
             )
         )
     return balances
@@ -411,6 +434,9 @@ class BybitConnector(ExchangeConnector):
             Capability.DEPOSITS,
         }
     )
+    # A Unified Trading Account has exactly two wallets: UNIFIED (spot +
+    # margin + derivatives collateral together) and FUNDING.
+    wallets = (WalletType.UNIFIED, WalletType.FUNDING)
 
     # settle coins queried for linear (USDT/USDC) positions; inverse settles
     # in the base coin, queried with no settle filter.
@@ -479,8 +505,16 @@ class BybitConnector(ExchangeConnector):
         response = await self._call(session.get_positions, **kwargs)
         return response.get("result", {}).get("list", [])
 
+    async def _fetch_fund_coins(self, credential: Credential) -> list[dict]:
+        session = self._auth_session(credential)
+        response = await self._call(session.get_coins_balance, accountType="FUND")
+        return response.get("result", {}).get("balance", [])
+
     async def fetch_balances(self, credential: Credential) -> list[Balance]:
-        return normalize_wallet_balances(await self._fetch_wallet_coins(credential))
+        return [
+            *normalize_wallet_balances(await self._fetch_wallet_coins(credential)),
+            *normalize_fund_balances(await self._fetch_fund_coins(credential)),
+        ]
 
     async def fetch_positions(self, credential: Credential) -> list[Position]:
         if not self._native_map:
@@ -887,8 +921,10 @@ class BybitConnector(ExchangeConnector):
         to_subaccount: str | None = None,
     ) -> TransferResult:
         session = self._auth_session(credential)
-        src = _WALLET_ACCOUNT_TYPE[from_wallet or WalletType.DERIVATIVES]
-        dst = _WALLET_ACCOUNT_TYPE[to_wallet or WalletType.DERIVATIVES]
+        src = _WALLET_ACCOUNT_TYPE.get(from_wallet or WalletType.UNIFIED)
+        dst = _WALLET_ACCOUNT_TYPE.get(to_wallet or WalletType.UNIFIED)
+        if src is None or dst is None:
+            raise ValueError("Bybit wallets are UNIFIED and FUNDING")
         transfer_id = str(uuid.uuid4())
         if from_subaccount or to_subaccount:
             # Universal transfer needs both member ids; a None side is the

@@ -147,7 +147,7 @@ async def test_provisioning(connector):
 async def test_transfer(connector):
     result = await connector.transfer(
         CRED, "USDT", Decimal("100"),
-        from_wallet=WalletType.SPOT, to_wallet=WalletType.DERIVATIVES,
+        from_wallet=WalletType.SPOT, to_wallet=WalletType.FUTURES,
     )
     assert result.status == "confirmed"
     assert connector.transfers[0]["asset"] == "USDT"

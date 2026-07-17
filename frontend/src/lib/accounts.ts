@@ -32,6 +32,8 @@ export interface AccountNode extends AccountInfo {
 
 export interface ExchangeCapabilities {
 	exchange: string;
+	/** The venue's wallet structure, in display order. */
+	wallets: string[];
 	subaccount_list: boolean;
 	subaccount_create: boolean;
 	subaccount_freeze: boolean;

@@ -77,6 +77,9 @@ class ExchangeCapabilities(BaseModel):
     # True when the venue exposes no provisioning at all (registration-only,
     # e.g. Binance): the operator brings keys/subaccounts made on the venue.
     registration_only: bool
+    # The venue's wallet structure, in display order (e.g. Binance
+    # SPOT/FUNDING/FUTURES, Bybit UNIFIED/FUNDING).
+    wallets: list[str] = []
 
 
 class AccountCreate(BaseModel):
@@ -241,6 +244,7 @@ async def exchange_capabilities():
                 api_key_modify=c.supports(Capability.API_KEY_MODIFY),
                 api_key_revoke=c.supports(Capability.API_KEY_REVOKE),
                 registration_only=not provisioning,
+                wallets=[w.value for w in c.wallets],
             )
         )
     return result

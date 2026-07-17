@@ -74,6 +74,9 @@ class ExchangeConnector:
 
     exchange: str = ""
     capabilities: frozenset[Capability] = frozenset()
+    # The venue's wallet structure — which WalletType values exist on this
+    # exchange (order = display order). Empty means "no wallet distinction".
+    wallets: tuple[WalletType, ...] = ()
 
     def supports(self, capability: Capability) -> bool:
         return capability in self.capabilities

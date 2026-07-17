@@ -10,6 +10,7 @@ from app.connectors.bybit import (
     BybitConnector,
     normalize_asset_networks,
     normalize_deposit_record,
+    normalize_fund_balances,
     normalize_instrument,
     normalize_positions,
     normalize_trade,
@@ -189,10 +190,23 @@ def test_normalize_wallet_balances_drops_zero_and_splits_locked():
     balances = normalize_wallet_balances(WALLET_COINS)
     assert {b.asset for b in balances} == {"USDT", "BTC"}
     usdt = next(b for b in balances if b.asset == "USDT")
-    assert usdt.wallet == WalletType.DERIVATIVES
+    assert usdt.wallet == WalletType.UNIFIED
     assert usdt.locked == Decimal("500")
     assert usdt.free == Decimal("9500")
     assert usdt.total == Decimal("10000")
+
+
+def test_normalize_fund_balances_locks_committed_amounts():
+    balances = normalize_fund_balances(
+        [
+            {"coin": "USDT", "walletBalance": "100", "transferBalance": "80"},
+            {"coin": "BTC", "walletBalance": "0", "transferBalance": "0"},
+        ]
+    )
+    assert len(balances) == 1
+    assert balances[0].wallet == WalletType.FUNDING
+    assert balances[0].free == Decimal("80")
+    assert balances[0].locked == Decimal("20")
 
 
 def test_normalize_positions_linear_and_inverse():
@@ -219,9 +233,14 @@ async def test_fetch_balances(connector, monkeypatch):
     async def wallet_coins(cred):
         return WALLET_COINS
 
+    async def fund_coins(cred):
+        return [{"coin": "USDT", "walletBalance": "50", "transferBalance": "50"}]
+
     monkeypatch.setattr(connector, "_fetch_wallet_coins", wallet_coins)
+    monkeypatch.setattr(connector, "_fetch_fund_coins", fund_coins)
     balances = await connector.fetch_balances({"api_key": "k", "secret": "s"})
     assert {b.asset for b in balances} == {"USDT", "BTC"}
+    assert {b.wallet for b in balances} == {WalletType.UNIFIED, WalletType.FUNDING}
 
 
 async def test_fetch_positions(connector, monkeypatch):
@@ -470,7 +489,7 @@ async def test_internal_transfer_between_wallets(monkeypatch):
     monkeypatch.setattr(c, "_call", call)
     result = await c.transfer(
         {"api_key": "k", "secret": "s"}, "USDT", Decimal("100"),
-        from_wallet=WalletType.FUNDING, to_wallet=WalletType.DERIVATIVES,
+        from_wallet=WalletType.FUNDING, to_wallet=WalletType.UNIFIED,
     )
     name, kwargs = calls[0]
     assert name == "create_internal_transfer"
@@ -486,7 +505,17 @@ async def test_internal_transfer_same_wallet_rejected():
     with pytest.raises(ValueError):
         await c.transfer(
             {"api_key": "k", "secret": "s"}, "USDT", Decimal("1"),
-            from_wallet=WalletType.SPOT, to_wallet=WalletType.DERIVATIVES,
+            from_wallet=WalletType.UNIFIED, to_wallet=WalletType.UNIFIED,
+        )
+
+
+async def test_transfer_rejects_foreign_wallet_type():
+    # Bybit's UTA has no SPOT wallet — only UNIFIED and FUNDING exist.
+    c = BybitConnector()
+    with pytest.raises(ValueError):
+        await c.transfer(
+            {"api_key": "k", "secret": "s"}, "USDT", Decimal("1"),
+            from_wallet=WalletType.SPOT, to_wallet=WalletType.UNIFIED,
         )
 
 

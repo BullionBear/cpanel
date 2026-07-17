@@ -64,12 +64,22 @@
 		return topSlices(items);
 	}
 
+	// Slices sorted by value descending. The smallest slices are merged into a
+	// single "Other" class while their combined value stays under 5% of the
+	// total (merging one slice alone would just rename it, so skip that).
 	function topSlices(items: Slice[]): Slice[] {
 		items.sort((a, b) => b.value - a.value);
-		const TOP = 8;
-		if (items.length <= TOP + 1) return items;
-		const rest = items.slice(TOP).reduce((s, i) => s + i.value, 0);
-		return [...items.slice(0, TOP), { label: 'Other', value: rest }];
+		const total = items.reduce((s, i) => s + i.value, 0);
+		if (total <= 0) return items;
+		let rest = 0;
+		let cut = items.length;
+		for (let i = items.length - 1; i >= 0; i--) {
+			if (rest + items[i].value >= total * 0.05) break;
+			rest += items[i].value;
+			cut = i;
+		}
+		if (items.length - cut < 2) return items;
+		return [...items.slice(0, cut), { label: 'Other', value: rest }];
 	}
 
 	function buildPoints(hist: HistoryPoint[]): Point[] {

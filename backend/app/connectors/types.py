@@ -56,10 +56,13 @@ class OrderStatus(StrEnum):
 
 
 class WalletType(StrEnum):
+    """Venue wallet vocabulary. Wallet structure differs per exchange, so each
+    connector declares which of these it actually has (``wallets`` attribute):
+    Binance uses SPOT/FUNDING/FUTURES, Bybit's UTA has only UNIFIED/FUNDING."""
     SPOT = "SPOT"
-    MARGIN = "MARGIN"
-    DERIVATIVES = "DERIVATIVES"
     FUNDING = "FUNDING"
+    FUTURES = "FUTURES"
+    UNIFIED = "UNIFIED"
 
 
 class KeyScheme(StrEnum):

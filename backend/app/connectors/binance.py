@@ -235,7 +235,7 @@ def normalize_spot_balances(rows: list[dict]) -> list[Balance]:
 
 
 def normalize_futures_balances(rows: list[dict]) -> list[Balance]:
-    """USD-M/COIN-M account-balance rows → normalized DERIVATIVES balances.
+    """USD-M/COIN-M account-balance rows → normalized FUTURES balances.
 
     ``balance`` is the wallet total; ``availableBalance`` is what is free of
     margin, so the margin currently posted is the difference.
@@ -251,11 +251,33 @@ def normalize_futures_balances(rows: list[dict]) -> list[Balance]:
             locked = Decimal("0")
         balances.append(
             Balance(
-                wallet=WalletType.DERIVATIVES,
+                wallet=WalletType.FUTURES,
                 asset=row["asset"],
                 free=total - locked,
                 locked=locked,
             )
+        )
+    return balances
+
+
+def normalize_funding_balances(rows: list[dict]) -> list[Balance]:
+    """Funding-wallet asset rows → normalized FUNDING balances (zeros dropped).
+
+    ``freeze`` and ``withdrawing`` amounts are committed elsewhere, so they
+    count as locked alongside ``locked`` itself.
+    """
+    balances: list[Balance] = []
+    for row in rows:
+        free = _dec(row.get("free", 0))
+        locked = (
+            _dec(row.get("locked", 0))
+            + _dec(row.get("freeze", 0))
+            + _dec(row.get("withdrawing", 0))
+        )
+        if free == 0 and locked == 0:
+            continue
+        balances.append(
+            Balance(wallet=WalletType.FUNDING, asset=row["asset"], free=free, locked=locked)
         )
     return balances
 
@@ -373,17 +395,15 @@ def normalize_trade(raw: dict, universal_symbol: str) -> Trade:
 # (built as FROM_TO, e.g. MAIN_UMFUTURE for spot -> USD-M futures).
 _UNIVERSAL_TRANSFER_LEG = {
     WalletType.SPOT: "MAIN",
-    WalletType.MARGIN: "MARGIN",
-    WalletType.DERIVATIVES: "UMFUTURE",
     WalletType.FUNDING: "FUNDING",
+    WalletType.FUTURES: "UMFUTURE",
 }
 
 # Wallet type -> sub-account universal-transfer accountType (no FUNDING leg
 # on this endpoint).
 _SUB_TRANSFER_WALLET = {
     WalletType.SPOT: "SPOT",
-    WalletType.MARGIN: "MARGIN",
-    WalletType.DERIVATIVES: "USDT_FUTURE",
+    WalletType.FUTURES: "USDT_FUTURE",
 }
 
 # Withdraw-history ``status`` int -> normalized lifecycle. 6 = Completed
@@ -504,6 +524,9 @@ class BinanceConnector(ExchangeConnector):
             Capability.DEPOSITS,
         }
     )
+    # Binance has more wallets (Margin, Earn, Trading Bots, …) but the panel
+    # supports the three that matter for moving and holding funds.
+    wallets = (WalletType.SPOT, WalletType.FUNDING, WalletType.FUTURES)
 
     def __init__(self, bucket: TokenBucket | None = None):
         self._bucket = bucket
@@ -642,9 +665,16 @@ class BinanceConnector(ExchangeConnector):
         data = dump_sdk_model(resp.data())
         return data if isinstance(data, list) else [data]
 
+    async def _fetch_funding_balances(self, credential: Credential) -> list[dict]:
+        wallet = Wallet(config_rest_api=_auth_config(credential))
+        resp = await self._call(wallet.rest_api.funding_wallet)
+        data = dump_sdk_model(resp.data())
+        return data if isinstance(data, list) else [data]
+
     async def fetch_balances(self, credential: Credential) -> list[Balance]:
         return [
             *normalize_spot_balances(await self._fetch_spot_balances(credential)),
+            *normalize_funding_balances(await self._fetch_funding_balances(credential)),
             *normalize_futures_balances(await self._fetch_um_balances(credential)),
             *normalize_futures_balances(await self._fetch_cm_balances(credential)),
         ]
@@ -938,7 +968,7 @@ class BinanceConnector(ExchangeConnector):
             dst = _SUB_TRANSFER_WALLET.get(to_wallet or WalletType.SPOT)
             if src is None or dst is None:
                 raise ValueError(
-                    "Binance main↔sub transfers support only SPOT/MARGIN/DERIVATIVES wallets"
+                    "Binance main↔sub transfers support only SPOT and FUTURES wallets"
                 )
             data = await self._submit_sub_transfer(
                 credential, asset, float(amount), src, dst,

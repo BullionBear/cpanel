@@ -93,8 +93,6 @@ export interface DepositRow {
 	credited_at: string | null;
 }
 
-export const WALLETS = ['SPOT', 'MARGIN', 'DERIVATIVES', 'FUNDING'] as const;
-
 export const fetchTransfers = (params: Record<string, string> = {}) =>
 	apiGet<TransferRow[]>('/transfers', params);
 

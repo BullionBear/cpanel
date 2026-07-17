@@ -16,6 +16,7 @@ from app.connectors.binance import (
     normalize_asset_networks,
     normalize_cm_instrument,
     normalize_deposit,
+    normalize_funding_balances,
     normalize_futures_balances,
     normalize_positions,
     normalize_spot_balances,
@@ -265,10 +266,23 @@ def test_normalize_spot_balances_drops_zero():
 
 def test_normalize_futures_balances_splits_available_and_margin():
     balances = normalize_futures_balances(UM_BALANCES)
-    assert balances[0].wallet == WalletType.DERIVATIVES
+    assert balances[0].wallet == WalletType.FUTURES
     assert balances[0].free == Decimal("4000")
     assert balances[0].locked == Decimal("1000")
     assert balances[0].total == Decimal("5000")
+
+
+def test_normalize_funding_balances_locks_frozen_and_withdrawing():
+    balances = normalize_funding_balances(
+        [
+            {"asset": "USDT", "free": "70", "locked": "10", "freeze": "15", "withdrawing": "5"},
+            {"asset": "BTC", "free": "0", "locked": "0"},
+        ]
+    )
+    assert len(balances) == 1
+    assert balances[0].wallet == WalletType.FUNDING
+    assert balances[0].free == Decimal("70")
+    assert balances[0].locked == Decimal("30")
 
 
 def test_normalize_positions_maps_and_skips_zero():
@@ -296,6 +310,9 @@ async def test_fetch_balances_merges_wallets(connector, monkeypatch):
     async def spot_balances(cred):
         return SPOT_BALANCES
 
+    async def funding_balances(cred):
+        return [{"asset": "USDT", "free": "42", "locked": "0"}]
+
     async def um_balances(cred):
         return UM_BALANCES
 
@@ -303,14 +320,17 @@ async def test_fetch_balances_merges_wallets(connector, monkeypatch):
         return CM_BALANCES
 
     monkeypatch.setattr(connector, "_fetch_spot_balances", spot_balances)
+    monkeypatch.setattr(connector, "_fetch_funding_balances", funding_balances)
     monkeypatch.setattr(connector, "_fetch_um_balances", um_balances)
     monkeypatch.setattr(connector, "_fetch_cm_balances", cm_balances)
 
     balances = await connector.fetch_balances({"api_key": "k", "secret": "s"})
     spot = [b for b in balances if b.wallet == WalletType.SPOT]
-    deriv = [b for b in balances if b.wallet == WalletType.DERIVATIVES]
+    funding = [b for b in balances if b.wallet == WalletType.FUNDING]
+    futures = [b for b in balances if b.wallet == WalletType.FUTURES]
     assert {b.asset for b in spot} == {"BTC", "USDT"}
-    assert {b.asset for b in deriv} == {"USDT", "BTC"}
+    assert {b.asset for b in funding} == {"USDT"}
+    assert {b.asset for b in futures} == {"USDT", "BTC"}
 
 
 async def test_fetch_positions_across_surfaces(connector, monkeypatch):
@@ -560,7 +580,7 @@ async def test_transfer_wallet_to_wallet_builds_type(monkeypatch):
     monkeypatch.setattr(c, "_submit_universal_transfer", submit)
     result = await c.transfer(
         {}, "USDT", Decimal("100"),
-        from_wallet=WalletType.SPOT, to_wallet=WalletType.DERIVATIVES,
+        from_wallet=WalletType.SPOT, to_wallet=WalletType.FUTURES,
     )
     assert calls == [("MAIN_UMFUTURE", "USDT", 100.0)]
     assert result.native_transfer_id == "13526853623"
