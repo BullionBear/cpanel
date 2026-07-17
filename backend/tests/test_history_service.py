@@ -8,7 +8,13 @@ from sqlalchemy import select
 from app.connectors.base import ExchangeConnector
 from app.connectors.fake import FakeConnector
 from app.connectors.types import OrderRequest, OrderSide, OrderType
-from app.models.history import OrderHistory, SyncCursor, TradeHistory
+from app.models.history import (
+    DepositHistory,
+    OrderHistory,
+    SyncCursor,
+    TradeHistory,
+    WithdrawalHistory,
+)
 from app.services import accounts as accounts_svc
 from app.services import history as svc
 
@@ -148,10 +154,55 @@ async def test_sync_account_history_covers_both_kinds(db, connector):
     await _fill_orders(connector, 2)
 
     changed = await svc.sync_account_history(db, connector, account)
-    assert changed == 4  # 2 trades + 2 orders
+    assert changed == 4  # 2 trades + 2 orders (no fund rows seeded)
 
     assert len((await db.execute(select(TradeHistory))).scalars().all()) == 2
     assert len((await db.execute(select(OrderHistory))).scalars().all()) == 2
+    # Deposit/withdrawal streams still sync (empty) and leave cursor rows.
+    kinds = {
+        row.data_kind
+        for row in (await db.execute(select(SyncCursor))).scalars().all()
+    }
+    assert kinds == {"trades", "orders", "deposits", "withdrawals"}
+
+
+async def test_sync_deposits_and_withdrawals_from_venue(db, connector):
+    """Fund history is ingested from the exchange, not panel transfer rows."""
+    account = await _account_with_key(db, connector)
+    connector.credit_deposit("USDT", Decimal("100"), tx_id="0xd1")
+    connector.credit_deposit("BTC", Decimal("0.5"), tx_id="0xd2")
+    wd = await connector.withdraw(
+        {"api_key": "k", "secret": "s"},
+        "USDT",
+        Decimal("40"),
+        address="TAddr",
+        network="TRX",
+    )
+
+    assert await svc.sync_stream(db, connector, account, "deposits", "account") == 2
+    assert await svc.sync_stream(db, connector, account, "deposits", "account") == 0
+    deposits = (await db.execute(select(DepositHistory))).scalars().all()
+    assert len(deposits) == 2
+    assert {d.asset for d in deposits} == {"USDT", "BTC"}
+
+    assert await svc.sync_stream(db, connector, account, "withdrawals", "account") == 1
+    row = (await db.execute(select(WithdrawalHistory))).scalars().one()
+    assert row.status == "PENDING"
+    assert row.native_withdrawal_id == wd.native_id
+
+    connector.complete_withdrawal(wd.native_id, tx_id="0xw", fee=Decimal("0.5"))
+    assert await svc.sync_stream(db, connector, account, "withdrawals", "account") == 1
+    row = (await db.execute(select(WithdrawalHistory))).scalars().one()
+    assert row.status == "COMPLETED"
+    assert row.tx_id == "0xw"
+    assert row.fee == Decimal("0.5")
+
+    total, listed = await svc.list_deposits(db, asset="USDT")
+    assert total == 1
+    assert listed[0].amount == Decimal("100")
+    total, listed = await svc.list_withdrawals(db, account_id=account.id)
+    assert total == 1
+    assert listed[0].status == "COMPLETED"
 
 
 async def test_stream_failure_recorded_on_cursor(db):

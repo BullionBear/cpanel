@@ -255,6 +255,7 @@ class Withdrawal:
     network: str | None = None
     tx_id: str | None = None
     fee: Decimal | None = None
+    created_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -266,3 +267,4 @@ class Deposit:
     network: str | None = None
     tx_id: str | None = None
     credited_at: datetime | None = None
+    created_at: datetime | None = None

@@ -4,24 +4,29 @@
 	import {
 		fetchTrades,
 		fetchOrderHistory,
+		fetchDepositHistory,
+		fetchWithdrawalHistory,
 		fetchStreams,
 		syncAccountHistory,
 		type TradeRow,
 		type OrderHistoryRow,
+		type DepositHistoryRow,
+		type WithdrawalHistoryRow,
 		type StreamHealth
 	} from '$lib/history';
 	import { fetchOverview, type OverviewItem } from '$lib/portfolio';
 
-	type Tab = 'trades' | 'orders' | 'streams';
+	type Tab = 'trades' | 'orders' | 'deposits' | 'withdrawals' | 'streams';
 
 	const PAGE_SIZE = 50;
 
 	let tab: Tab = 'trades';
 
-	// Filters (shared by trades and orders)
+	// Filters (shared by history tabs)
 	let exchange = '';
 	let accountId = '';
 	let symbol = '';
+	let asset = '';
 	let startTime = '';
 	let endTime = '';
 	let offset = 0;
@@ -29,13 +34,19 @@
 	let accounts: OverviewItem[] = [];
 	let trades: TradeRow[] = [];
 	let orders: OrderHistoryRow[] = [];
+	let deposits: DepositHistoryRow[] = [];
+	let withdrawals: WithdrawalHistoryRow[] = [];
 	let streams: StreamHealth[] = [];
 	let total = 0;
 	let loading = false;
 	let error = '';
 	let syncing = false;
 	let syncMessage = '';
-	let symbolTimer: ReturnType<typeof setTimeout> | undefined;
+	let filterTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function isFundTab(t: Tab): boolean {
+		return t === 'deposits' || t === 'withdrawals';
+	}
 
 	function filterParams(): Record<string, string> {
 		const params: Record<string, string> = {
@@ -44,7 +55,11 @@
 		};
 		if (exchange) params.exchange = exchange;
 		if (accountId) params.account_id = accountId;
-		if (symbol.trim()) params.universal_symbol = symbol.trim();
+		if (isFundTab(tab)) {
+			if (asset.trim()) params.asset = asset.trim();
+		} else if (symbol.trim()) {
+			params.universal_symbol = symbol.trim();
+		}
 		if (startTime) params.start = new Date(startTime).toISOString();
 		if (endTime) params.end = new Date(endTime).toISOString();
 		return params;
@@ -62,6 +77,14 @@
 				const page = await fetchOrderHistory(filterParams());
 				orders = page.items;
 				total = page.total;
+			} else if (tab === 'deposits') {
+				const page = await fetchDepositHistory(filterParams());
+				deposits = page.items;
+				total = page.total;
+			} else if (tab === 'withdrawals') {
+				const page = await fetchWithdrawalHistory(filterParams());
+				withdrawals = page.items;
+				total = page.total;
 			} else {
 				const params: Record<string, string> = {};
 				if (exchange) params.exchange = exchange;
@@ -72,6 +95,8 @@
 		} catch (e) {
 			trades = [];
 			orders = [];
+			deposits = [];
+			withdrawals = [];
 			streams = [];
 			total = 0;
 			error =
@@ -88,9 +113,9 @@
 		load();
 	}
 
-	function onSymbolInput() {
-		clearTimeout(symbolTimer);
-		symbolTimer = setTimeout(applyFilters, 300);
+	function onFilterInput() {
+		clearTimeout(filterTimer);
+		filterTimer = setTimeout(applyFilters, 300);
 	}
 
 	function switchTab(next: Tab) {
@@ -141,6 +166,11 @@
 		return account ? `${account.exchange} · ${account.label}` : `#${id}`;
 	}
 
+	function shortHash(value: string | null): string {
+		if (!value) return '—';
+		return value.length > 16 ? `${value.slice(0, 10)}…${value.slice(-4)}` : value;
+	}
+
 	onMount(async () => {
 		try {
 			accounts = await fetchOverview();
@@ -168,6 +198,16 @@
 		<button class="tab" class:active={tab === 'orders'} on:click={() => switchTab('orders')}>
 			Orders
 		</button>
+		<button class="tab" class:active={tab === 'deposits'} on:click={() => switchTab('deposits')}>
+			Deposits
+		</button>
+		<button
+			class="tab"
+			class:active={tab === 'withdrawals'}
+			on:click={() => switchTab('withdrawals')}
+		>
+			Withdrawals
+		</button>
 		<button class="tab" class:active={tab === 'streams'} on:click={() => switchTab('streams')}>
 			Sync health
 		</button>
@@ -189,13 +229,23 @@
 			{/each}
 		</select>
 		{#if tab !== 'streams'}
-			<input
-				class="symbol"
-				type="search"
-				placeholder="Universal symbol…"
-				bind:value={symbol}
-				on:input={onSymbolInput}
-			/>
+			{#if isFundTab(tab)}
+				<input
+					class="symbol"
+					type="search"
+					placeholder="Asset…"
+					bind:value={asset}
+					on:input={onFilterInput}
+				/>
+			{:else}
+				<input
+					class="symbol"
+					type="search"
+					placeholder="Universal symbol…"
+					bind:value={symbol}
+					on:input={onFilterInput}
+				/>
+			{/if}
 			<input type="datetime-local" bind:value={startTime} on:change={applyFilters} />
 			<span class="muted">to</span>
 			<input type="datetime-local" bind:value={endTime} on:change={applyFilters} />
@@ -294,6 +344,90 @@
 				</table>
 			</div>
 		{/if}
+	{:else if tab === 'deposits'}
+		{#if deposits.length === 0}
+			<div class="notice">
+				No deposit history ingested yet. Sync pulls deposit records from the exchange.
+			</div>
+		{:else}
+			<div class="table-wrap" class:dim={loading}>
+				<table>
+					<thead>
+						<tr>
+							<th>Time</th>
+							<th>Account</th>
+							<th>Asset</th>
+							<th class="right">Amount</th>
+							<th>Status</th>
+							<th>Network</th>
+							<th>Tx</th>
+							<th>Deposit ID</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each deposits as d (d.id)}
+							<tr>
+								<td class="mono">{ts(d.created_at || d.credited_at)}</td>
+								<td>{accountLabel(d.account_id)}</td>
+								<td class="mono strong">{d.asset}</td>
+								<td class="mono right">{num(d.amount)}</td>
+								<td><span class="badge">{d.status}</span></td>
+								<td class="mono">{d.network || '—'}</td>
+								<td class="mono" title={d.tx_id || ''}>{shortHash(d.tx_id)}</td>
+								<td class="mono">{d.native_deposit_id}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	{:else if tab === 'withdrawals'}
+		{#if withdrawals.length === 0}
+			<div class="notice">
+				No withdrawal history ingested yet. Sync pulls withdrawal records from the exchange.
+			</div>
+		{:else}
+			<div class="table-wrap" class:dim={loading}>
+				<table>
+					<thead>
+						<tr>
+							<th>Time</th>
+							<th>Account</th>
+							<th>Asset</th>
+							<th class="right">Amount</th>
+							<th>Status</th>
+							<th>Network</th>
+							<th class="right">Fee</th>
+							<th>Address</th>
+							<th>Tx</th>
+							<th>Withdrawal ID</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each withdrawals as w (w.id)}
+							<tr>
+								<td class="mono">{ts(w.created_at)}</td>
+								<td>{accountLabel(w.account_id)}</td>
+								<td class="mono strong">{w.asset}</td>
+								<td class="mono right">{num(w.amount)}</td>
+								<td><span class="badge">{w.status}</span></td>
+								<td class="mono">{w.network || '—'}</td>
+								<td class="mono right">
+									{#if w.fee !== null}
+										{num(w.fee)}{w.fee_asset ? ` ${w.fee_asset}` : ''}
+									{:else}
+										—
+									{/if}
+								</td>
+								<td class="mono" title={w.address || ''}>{shortHash(w.address)}</td>
+								<td class="mono" title={w.tx_id || ''}>{shortHash(w.tx_id)}</td>
+								<td class="mono">{w.native_withdrawal_id}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
 	{:else if streams.length === 0}
 		<div class="notice">
 			No sync streams yet — they appear after the first history sync of an account.
@@ -368,6 +502,7 @@
 		display: flex;
 		gap: 0.25rem;
 		margin-bottom: 1rem;
+		flex-wrap: wrap;
 	}
 	.tab {
 		height: 2.125rem;

@@ -446,12 +446,26 @@ def normalize_asset_networks(coin_row: dict) -> list[AssetNetwork]:
     return networks
 
 
+def _binance_wall_time(value) -> datetime | None:
+    """Binance deposit times are epoch-ms; withdraw ``applyTime`` is a UTC string."""
+    parsed = _epoch_ms(value)
+    if parsed is not None:
+        return parsed
+    if isinstance(value, str) and value:
+        try:
+            return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
 def normalize_withdrawal(raw: dict) -> Withdrawal:
     """A withdraw-history row → normalized Withdrawal."""
     status = _WITHDRAWAL_STATUS.get(int(raw.get("status", 0)), WithdrawalStatus.PENDING)
     tx_id = raw.get("txId") or None
     if status == WithdrawalStatus.PENDING and tx_id:
         status = WithdrawalStatus.SENT
+    created_at = _binance_wall_time(raw.get("applyTime") or raw.get("completeTime"))
     return Withdrawal(
         native_id=str(raw.get("id", "")),
         asset=raw.get("coin") or "",
@@ -461,19 +475,23 @@ def normalize_withdrawal(raw: dict) -> Withdrawal:
         network=(raw.get("network") or None) and str(raw["network"]).upper(),
         tx_id=tx_id,
         fee=_opt_dec(raw.get("transactionFee")),
+        created_at=created_at,
     )
 
 
 def normalize_deposit(raw: dict) -> Deposit:
     """A deposit-history row → normalized Deposit."""
+    created_at = _epoch_ms(raw.get("insertTime"))
+    status = _DEPOSIT_STATUS.get(int(raw.get("status", 0)), DepositStatus.PENDING)
     return Deposit(
         native_id=str(raw.get("id") or raw.get("txId") or ""),
         asset=raw.get("coin") or "",
         amount=_dec(raw.get("amount", 0) or 0),
-        status=_DEPOSIT_STATUS.get(int(raw.get("status", 0)), DepositStatus.PENDING),
+        status=status,
         network=(raw.get("network") or None) and str(raw["network"]).upper(),
         tx_id=raw.get("txId") or None,
-        credited_at=_epoch_ms(raw.get("insertTime")),
+        credited_at=created_at if status == DepositStatus.CREDITED else None,
+        created_at=created_at,
     )
 
 
@@ -1060,9 +1078,20 @@ class BinanceConnector(ExchangeConnector):
             network=network.upper(),
         )
 
-    async def _fetch_withdraw_history(self, credential: Credential) -> list[dict]:
+    async def _fetch_withdraw_history(
+        self,
+        credential: Credential,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        kwargs: dict = {"limit": limit}
+        if start_ms is not None:
+            kwargs["start_time"] = start_ms
+        if end_ms is not None:
+            kwargs["end_time"] = end_ms
         wallet = Wallet(config_rest_api=_auth_config(credential))
-        resp = await self._call(wallet.rest_api.withdraw_history, limit=100)
+        resp = await self._call(wallet.rest_api.withdraw_history, **kwargs)
         data = dump_sdk_model(resp.data())
         return data if isinstance(data, list) else [data]
 
@@ -1080,12 +1109,16 @@ class BinanceConnector(ExchangeConnector):
         asset: str | None,
         start_ms: int | None,
         subaccount: str | None,
+        end_ms: int | None = None,
+        limit: int = 100,
     ) -> list[dict]:
-        kwargs: dict = {"limit": 100}
+        kwargs: dict = {"limit": limit}
         if asset:
             kwargs["coin"] = asset
         if start_ms is not None:
             kwargs["start_time"] = start_ms
+        if end_ms is not None:
+            kwargs["end_time"] = end_ms
         if subaccount:
             sub = SubAccount(config_rest_api=_auth_config(credential))
             resp = await self._call(
@@ -1107,6 +1140,50 @@ class BinanceConnector(ExchangeConnector):
         start_ms = int(since.timestamp() * 1000) if since else None
         rows = await self._fetch_deposit_history(credential, asset, start_ms, subaccount)
         return [normalize_deposit(raw) for raw in rows]
+
+    _FUND_HISTORY_LIMIT = 100
+
+    @staticmethod
+    def _withdrawal_time_ms(raw: dict) -> int:
+        """Numeric ms for window advancement (applyTime is often a wall string)."""
+        created = _binance_wall_time(raw.get("applyTime") or raw.get("completeTime"))
+        if created is None:
+            return 0
+        return int(created.timestamp() * 1000)
+
+    async def fetch_deposits_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        start_ms, end_ms, now_ms = self._history_window(cursor)
+        if start_ms >= now_ms:
+            return Page(items=[], next_cursor=None)
+        limit = self._FUND_HISTORY_LIMIT
+        rows = await self._fetch_deposit_history(
+            credential, None, start_ms, None, end_ms=end_ms, limit=limit
+        )
+        return Page(
+            items=[normalize_deposit(raw) for raw in rows],
+            next_cursor=_advance_window(
+                rows, "insertTime", start_ms, end_ms, now_ms, limit
+            ),
+        )
+
+    async def fetch_withdrawals_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        start_ms, end_ms, now_ms = self._history_window(cursor)
+        if start_ms >= now_ms:
+            return Page(items=[], next_cursor=None)
+        limit = self._FUND_HISTORY_LIMIT
+        rows = await self._fetch_withdraw_history(
+            credential, start_ms=start_ms, end_ms=end_ms, limit=limit
+        )
+        # applyTime is a string; inject a numeric key so window advance works.
+        stamped = [{**raw, "_t": self._withdrawal_time_ms(raw)} for raw in rows]
+        return Page(
+            items=[normalize_withdrawal(raw) for raw in rows],
+            next_cursor=_advance_window(stamped, "_t", start_ms, end_ms, now_ms, limit),
+        )
 
     # -- reference prices -----------------------------------------------------
 

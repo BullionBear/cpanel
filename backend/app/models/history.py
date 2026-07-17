@@ -1,15 +1,21 @@
-"""History ingestion: trade/order history and per-stream sync cursors.
+"""History ingestion: trade/order/deposit/withdrawal history and sync cursors.
 
 ``trade_history`` and ``order_history`` are written by **upsert** keyed by
 ``(account, universal_symbol, native id)`` — venue ids are only guaranteed
 unique per symbol on some exchanges (Binance), so the symbol is part of the
-key. Re-fetching an overlapping window can never create duplicates, which is
+key. ``deposit_history`` / ``withdrawal_history`` are keyed by
+``(account, native id)`` — fund movements are account-wide, not per symbol.
+Re-fetching an overlapping window can never create duplicates, which is
 what makes every sync job idempotent (ARCHITECTURE.md "History Ingestion").
+
+All four tables are filled from **venue history endpoints**, not from
+panel-orchestrated transfer rows.
 
 ``sync_cursor`` records ingestion progress per ``(account, data kind,
 stream key)``. The stream key exists because venues shard their history
-endpoints differently: Binance queries per symbol (one stream per active
-symbol), Bybit per account-wide category. The cursor value is opaque here —
+endpoints differently: Binance queries trades/orders per symbol (one stream
+per active symbol), Bybit per account-wide category; deposit/withdrawal
+streams are account-wide on every venue. The cursor value is opaque here —
 the connector defines its meaning (a timestamp, a trade id, or a native
 pagination token). A stream with no cursor row yet is *new*: the sync worker
 seeds it three days in the past so a freshly connected account backfills its
@@ -113,6 +119,83 @@ class OrderHistory(Base):
     )
 
 
+class DepositHistory(Base):
+    """On-chain deposits as reported by the venue's deposit-history endpoint.
+
+    Sourced from the exchange, not from panel transfer orchestration — covers
+    deposits that arrive outside the panel as well as those matched mid-transfer.
+    """
+
+    __tablename__ = "deposit_history"
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id", "native_deposit_id",
+            name="uq_deposit_history_account_native",
+        ),
+        Index("ix_deposit_history_account_created", "account_id", "created_at"),
+        Index("ix_deposit_history_account_asset", "account_id", "asset"),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPk, primary_key=True, autoincrement=True)
+
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("account.id"), nullable=False, index=True
+    )
+    exchange: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+
+    native_deposit_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    asset: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    amount: Mapped[Decimal] = mapped_column(Num, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    network: Mapped[str | None] = mapped_column(String(32))
+    tx_id: Mapped[str | None] = mapped_column(String(128))
+
+    credited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class WithdrawalHistory(Base):
+    """On-chain withdrawals as reported by the venue's withdrawal-history endpoint.
+
+    Sourced from the exchange — includes withdrawals submitted outside the panel.
+    """
+
+    __tablename__ = "withdrawal_history"
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id", "native_withdrawal_id",
+            name="uq_withdrawal_history_account_native",
+        ),
+        Index("ix_withdrawal_history_account_created", "account_id", "created_at"),
+        Index("ix_withdrawal_history_account_asset", "account_id", "asset"),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPk, primary_key=True, autoincrement=True)
+
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("account.id"), nullable=False, index=True
+    )
+    exchange: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+
+    native_withdrawal_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    asset: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    amount: Mapped[Decimal] = mapped_column(Num, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    address: Mapped[str | None] = mapped_column(Text)
+    network: Mapped[str | None] = mapped_column(String(32))
+    tx_id: Mapped[str | None] = mapped_column(String(128))
+    fee: Mapped[Decimal | None] = mapped_column(Num)
+    fee_asset: Mapped[str | None] = mapped_column(String(32))
+
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class SyncCursor(Base):
     __tablename__ = "sync_cursor"
     __table_args__ = (
@@ -128,7 +211,8 @@ class SyncCursor(Base):
         ForeignKey("account.id"), nullable=False, index=True
     )
     exchange: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    data_kind: Mapped[str] = mapped_column(String(16), nullable=False)  # trades | orders
+    # trades | orders | deposits | withdrawals
+    data_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     stream_key: Mapped[str] = mapped_column(String(80), nullable=False)
 
     # Opaque; the connector defines its meaning. Advanced only after the

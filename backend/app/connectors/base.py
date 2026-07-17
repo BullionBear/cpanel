@@ -282,3 +282,30 @@ class ExchangeConnector:
         cross-exchange transfer. Same ``subaccount`` convention as
         ``fetch_deposit_address``."""
         raise NotSupported(self.exchange, Capability.DEPOSITS)
+
+    # -- deposit / withdrawal history (cursor-based, like trades/orders) ------
+
+    async def fetch_deposits_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        """Next page of venue deposit history for one stream.
+
+        Distinct from ``fetch_deposits`` (a live peek for transfer matching):
+        this feeds the history ingest worker and must be cursor-paginated.
+        """
+        raise NotSupported(self.exchange, Capability.DEPOSITS)
+
+    async def fetch_withdrawals_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        """Next page of venue withdrawal history for one stream."""
+        raise NotSupported(self.exchange, Capability.WITHDRAWALS)
+
+    def fund_history_stream_keys(self) -> list[str]:
+        """Streams to sync for deposit/withdrawal history.
+
+        Deposit and withdrawal endpoints are account-wide on every venue we
+        support, so the default is a single ``account`` stream. Per-asset
+        sharding can override this later if a venue requires it.
+        """
+        return ["account"]
