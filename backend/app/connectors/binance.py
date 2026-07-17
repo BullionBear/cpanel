@@ -42,8 +42,12 @@ from app.connectors.errors import credential_error_reason
 from app.connectors.sdk_util import dump_sdk_model
 from app.connectors.symbols import build_universal_symbol
 from app.connectors.types import (
+    AssetNetwork,
     Balance,
     CredentialInfo,
+    Deposit,
+    DepositAddress,
+    DepositStatus,
     Instrument,
     InstrumentFilters,
     MarketType,
@@ -58,7 +62,10 @@ from app.connectors.types import (
     SubaccountInfo,
     TimeInForce,
     Trade,
+    TransferResult,
     WalletType,
+    Withdrawal,
+    WithdrawalStatus,
 )
 from app.core.ratelimit import Priority, TokenBucket
 
@@ -360,6 +367,96 @@ def normalize_trade(raw: dict, universal_symbol: str) -> Trade:
     )
 
 
+# -- transfers / withdrawals / deposits ---------------------------------------
+
+# Wallet type -> leg code of the user_universal_transfer ``type`` parameter
+# (built as FROM_TO, e.g. MAIN_UMFUTURE for spot -> USD-M futures).
+_UNIVERSAL_TRANSFER_LEG = {
+    WalletType.SPOT: "MAIN",
+    WalletType.MARGIN: "MARGIN",
+    WalletType.DERIVATIVES: "UMFUTURE",
+    WalletType.FUNDING: "FUNDING",
+}
+
+# Wallet type -> sub-account universal-transfer accountType (no FUNDING leg
+# on this endpoint).
+_SUB_TRANSFER_WALLET = {
+    WalletType.SPOT: "SPOT",
+    WalletType.MARGIN: "MARGIN",
+    WalletType.DERIVATIVES: "USDT_FUTURE",
+}
+
+# Withdraw-history ``status`` int -> normalized lifecycle. 6 = Completed
+# means the venue sent it on-chain.
+_WITHDRAWAL_STATUS = {
+    0: WithdrawalStatus.PENDING,   # email sent
+    1: WithdrawalStatus.FAILED,    # cancelled
+    2: WithdrawalStatus.PENDING,   # awaiting approval
+    3: WithdrawalStatus.FAILED,    # rejected
+    4: WithdrawalStatus.PENDING,   # processing
+    5: WithdrawalStatus.FAILED,    # failure
+    6: WithdrawalStatus.COMPLETED,
+}
+
+# Deposit-history ``status`` int: 0 pending, 1 success, 6 credited but cannot
+# withdraw (still credited for our purposes), 7 wrong deposit, 8 waiting user
+# confirm.
+_DEPOSIT_STATUS = {
+    0: DepositStatus.PENDING,
+    1: DepositStatus.CREDITED,
+    6: DepositStatus.CREDITED,
+    7: DepositStatus.FAILED,
+    8: DepositStatus.PENDING,
+}
+
+
+def normalize_asset_networks(coin_row: dict) -> list[AssetNetwork]:
+    """One all_coins_information row → the asset's chains."""
+    networks: list[AssetNetwork] = []
+    for net in coin_row.get("networkList", []):
+        networks.append(
+            AssetNetwork(
+                network=str(net.get("network", "")).upper(),
+                deposit_enabled=bool(net.get("depositEnable")),
+                withdraw_enabled=bool(net.get("withdrawEnable")),
+                withdraw_min=_dec(net.get("withdrawMin", 0) or 0),
+                withdraw_fee=_dec(net.get("withdrawFee", 0) or 0),
+            )
+        )
+    return networks
+
+
+def normalize_withdrawal(raw: dict) -> Withdrawal:
+    """A withdraw-history row → normalized Withdrawal."""
+    status = _WITHDRAWAL_STATUS.get(int(raw.get("status", 0)), WithdrawalStatus.PENDING)
+    tx_id = raw.get("txId") or None
+    if status == WithdrawalStatus.PENDING and tx_id:
+        status = WithdrawalStatus.SENT
+    return Withdrawal(
+        native_id=str(raw.get("id", "")),
+        asset=raw.get("coin") or "",
+        amount=_dec(raw.get("amount", 0) or 0),
+        status=status,
+        address=raw.get("address") or None,
+        network=(raw.get("network") or None) and str(raw["network"]).upper(),
+        tx_id=tx_id,
+        fee=_opt_dec(raw.get("transactionFee")),
+    )
+
+
+def normalize_deposit(raw: dict) -> Deposit:
+    """A deposit-history row → normalized Deposit."""
+    return Deposit(
+        native_id=str(raw.get("id") or raw.get("txId") or ""),
+        asset=raw.get("coin") or "",
+        amount=_dec(raw.get("amount", 0) or 0),
+        status=_DEPOSIT_STATUS.get(int(raw.get("status", 0)), DepositStatus.PENDING),
+        network=(raw.get("network") or None) and str(raw["network"]).upper(),
+        tx_id=raw.get("txId") or None,
+        credited_at=_epoch_ms(raw.get("insertTime")),
+    )
+
+
 # History endpoints are windowed by time. 24h satisfies every surface's
 # constraint (spot my_trades/all_orders require < 24h when both bounds are
 # set; futures allow up to 7 days).
@@ -402,6 +499,9 @@ class BinanceConnector(ExchangeConnector):
             Capability.TRADE_HISTORY,
             Capability.ORDER_HISTORY,
             Capability.SUBACCOUNT_LIST,
+            Capability.TRANSFERS,
+            Capability.WITHDRAWALS,
+            Capability.DEPOSITS,
         }
     )
 
@@ -781,6 +881,202 @@ class BinanceConnector(ExchangeConnector):
         )
         email = dump_sdk_model(resp.data()).get("email", "")
         return SubaccountInfo(native_uid=email, label=label, status="normal")
+
+    # -- transfers / withdrawals / deposits -----------------------------------
+    #
+    # Wallet↔wallet moves use the wallet universal-transfer endpoint;
+    # main↔sub moves use the sub-account universal transfer, where an omitted
+    # email means "the master" (the credential's own account). Both endpoints
+    # answer synchronously with a tranId, so a returned id is a confirmed move.
+
+    async def _submit_universal_transfer(
+        self, credential: Credential, transfer_type: str, asset: str, amount: float
+    ) -> dict:
+        wallet = Wallet(config_rest_api=_auth_config(credential))
+        resp = await self._call(
+            wallet.rest_api.user_universal_transfer,
+            type=transfer_type, asset=asset, amount=amount,
+        )
+        return dump_sdk_model(resp.data())
+
+    async def _submit_sub_transfer(
+        self,
+        credential: Credential,
+        asset: str,
+        amount: float,
+        from_wallet: str,
+        to_wallet: str,
+        from_email: str | None,
+        to_email: str | None,
+    ) -> dict:
+        sub = SubAccount(config_rest_api=_auth_config(credential))
+        kwargs: dict = {
+            "from_account_type": from_wallet,
+            "to_account_type": to_wallet,
+            "asset": asset,
+            "amount": amount,
+        }
+        if from_email:
+            kwargs["from_email"] = from_email
+        if to_email:
+            kwargs["to_email"] = to_email
+        resp = await self._call(sub.rest_api.universal_transfer, **kwargs)
+        return dump_sdk_model(resp.data())
+
+    async def transfer(
+        self,
+        credential: Credential,
+        asset: str,
+        amount,
+        from_wallet: WalletType | None = None,
+        to_wallet: WalletType | None = None,
+        from_subaccount: str | None = None,
+        to_subaccount: str | None = None,
+    ) -> TransferResult:
+        if from_subaccount or to_subaccount:
+            src = _SUB_TRANSFER_WALLET.get(from_wallet or WalletType.SPOT)
+            dst = _SUB_TRANSFER_WALLET.get(to_wallet or WalletType.SPOT)
+            if src is None or dst is None:
+                raise ValueError(
+                    "Binance main↔sub transfers support only SPOT/MARGIN/DERIVATIVES wallets"
+                )
+            data = await self._submit_sub_transfer(
+                credential, asset, float(amount), src, dst,
+                from_email=from_subaccount, to_email=to_subaccount,
+            )
+        else:
+            src_leg = _UNIVERSAL_TRANSFER_LEG[from_wallet or WalletType.SPOT]
+            dst_leg = _UNIVERSAL_TRANSFER_LEG[to_wallet or WalletType.SPOT]
+            if src_leg == dst_leg:
+                raise ValueError("Transfer source and destination wallets are the same")
+            data = await self._submit_universal_transfer(
+                credential, f"{src_leg}_{dst_leg}", asset, float(amount)
+            )
+        tran_id = data.get("tranId") or data.get("tran_id") or ""
+        return TransferResult(native_transfer_id=str(tran_id), status="confirmed")
+
+    async def _fetch_all_coins(self, credential: Credential) -> list[dict]:
+        wallet = Wallet(config_rest_api=_auth_config(credential))
+        resp = await self._call(wallet.rest_api.all_coins_information)
+        data = dump_sdk_model(resp.data())
+        return data if isinstance(data, list) else [data]
+
+    async def fetch_asset_networks(
+        self, credential: Credential, asset: str
+    ) -> list[AssetNetwork]:
+        for row in await self._fetch_all_coins(credential):
+            if str(row.get("coin", "")).upper() == asset.upper():
+                return normalize_asset_networks(row)
+        return []
+
+    async def _fetch_deposit_address_raw(
+        self, credential: Credential, asset: str, network: str, subaccount: str | None
+    ) -> dict:
+        if subaccount:
+            sub = SubAccount(config_rest_api=_auth_config(credential))
+            resp = await self._call(
+                sub.rest_api.get_sub_account_deposit_address,
+                email=subaccount, coin=asset, network=network,
+            )
+        else:
+            wallet = Wallet(config_rest_api=_auth_config(credential))
+            resp = await self._call(
+                wallet.rest_api.deposit_address, coin=asset, network=network
+            )
+        return dump_sdk_model(resp.data())
+
+    async def fetch_deposit_address(
+        self,
+        credential: Credential,
+        asset: str,
+        network: str,
+        subaccount: str | None = None,
+    ) -> DepositAddress:
+        data = await self._fetch_deposit_address_raw(credential, asset, network, subaccount)
+        address = data.get("address") or ""
+        if not address:
+            raise ValueError(f"Binance returned no {asset}/{network} deposit address")
+        return DepositAddress(
+            asset=asset, network=network.upper(), address=address,
+            tag=data.get("tag") or None,
+        )
+
+    async def withdraw(
+        self,
+        credential: Credential,
+        asset: str,
+        amount,
+        address: str,
+        network: str,
+        tag: str | None = None,
+    ) -> Withdrawal:
+        wallet = Wallet(config_rest_api=_auth_config(credential))
+        kwargs: dict = {
+            "coin": asset,
+            "address": address,
+            "amount": float(amount),
+            "network": network,
+        }
+        if tag:
+            kwargs["address_tag"] = tag
+        resp = await self._call(wallet.rest_api.withdraw, **kwargs)
+        data = dump_sdk_model(resp.data())
+        return Withdrawal(
+            native_id=str(data.get("id", "")),
+            asset=asset,
+            amount=_dec(amount),
+            status=WithdrawalStatus.PENDING,
+            address=address,
+            network=network.upper(),
+        )
+
+    async def _fetch_withdraw_history(self, credential: Credential) -> list[dict]:
+        wallet = Wallet(config_rest_api=_auth_config(credential))
+        resp = await self._call(wallet.rest_api.withdraw_history, limit=100)
+        data = dump_sdk_model(resp.data())
+        return data if isinstance(data, list) else [data]
+
+    async def fetch_withdrawal(
+        self, credential: Credential, native_id: str
+    ) -> Withdrawal | None:
+        for raw in await self._fetch_withdraw_history(credential):
+            if str(raw.get("id", "")) == native_id:
+                return normalize_withdrawal(raw)
+        return None
+
+    async def _fetch_deposit_history(
+        self,
+        credential: Credential,
+        asset: str | None,
+        start_ms: int | None,
+        subaccount: str | None,
+    ) -> list[dict]:
+        kwargs: dict = {"limit": 100}
+        if asset:
+            kwargs["coin"] = asset
+        if start_ms is not None:
+            kwargs["start_time"] = start_ms
+        if subaccount:
+            sub = SubAccount(config_rest_api=_auth_config(credential))
+            resp = await self._call(
+                sub.rest_api.get_sub_account_deposit_history, email=subaccount, **kwargs
+            )
+        else:
+            wallet = Wallet(config_rest_api=_auth_config(credential))
+            resp = await self._call(wallet.rest_api.deposit_history, **kwargs)
+        data = dump_sdk_model(resp.data())
+        return data if isinstance(data, list) else [data]
+
+    async def fetch_deposits(
+        self,
+        credential: Credential,
+        asset: str | None = None,
+        since: datetime | None = None,
+        subaccount: str | None = None,
+    ) -> list[Deposit]:
+        start_ms = int(since.timestamp() * 1000) if since else None
+        rows = await self._fetch_deposit_history(credential, asset, start_ms, subaccount)
+        return [normalize_deposit(raw) for raw in rows]
 
     # -- reference prices -----------------------------------------------------
 

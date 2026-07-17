@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     ORDER_MAX_NOTIONAL: float = 0
     ORDER_SYMBOL_ALLOWLIST: str = ""
 
+    # Transfer guardrails.
+    #   TRANSFER_MAX_VALUE       max transfer size valued in the quote asset
+    #                            (USDT) via reference prices; 0 = no cap.
+    #   TRANSFER_STUCK_MINUTES   an unfinished transfer with no state change
+    #                            for this long is flagged stuck for the operator.
+    TRANSFER_MAX_VALUE: float = 0
+    TRANSFER_STUCK_MINUTES: int = 120
+
     # Security. JWT signing key — set a strong value in production:
     # python -c "import secrets; print(secrets.token_urlsafe(64))"
     SECRET_KEY: str = ""

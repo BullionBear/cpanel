@@ -11,8 +11,12 @@ from decimal import Decimal
 from app.connectors.base import Capability, Credential, ExchangeConnector
 from app.connectors.types import (
     ApiKeyResult,
+    AssetNetwork,
     Balance,
     CredentialInfo,
+    Deposit,
+    DepositAddress,
+    DepositStatus,
     Instrument,
     InstrumentFilters,
     KeyScheme,
@@ -27,6 +31,8 @@ from app.connectors.types import (
     Trade,
     TransferResult,
     WalletType,
+    Withdrawal,
+    WithdrawalStatus,
 )
 
 _DEFAULT_INSTRUMENTS = [
@@ -85,6 +91,13 @@ class FakeConnector(ExchangeConnector):
         self.modified_keys: list[dict] = []
         self.frozen: dict[str, bool] = {}
         self.transfers: list[dict] = []
+        # Cross-exchange plumbing. Withdrawals rest as PENDING until the
+        # complete_withdrawal test hook runs; deposits appear only via the
+        # credit_deposit hook.
+        self.networks: dict[str, list[AssetNetwork]] = {}
+        self.withdrawals: dict[str, Withdrawal] = {}
+        self.deposits: list[Deposit] = []
+        self.transfer_failure: Exception | None = None  # raised by next transfer()
 
     # -- public market data --------------------------------------------------
 
@@ -284,6 +297,9 @@ class FakeConnector(ExchangeConnector):
         from_subaccount: str | None = None,
         to_subaccount: str | None = None,
     ) -> TransferResult:
+        if self.transfer_failure is not None:
+            failure, self.transfer_failure = self.transfer_failure, None
+            raise failure
         record = {
             "asset": asset, "amount": amount,
             "from_wallet": from_wallet, "to_wallet": to_wallet,
@@ -291,3 +307,99 @@ class FakeConnector(ExchangeConnector):
         }
         self.transfers.append(record)
         return TransferResult(native_transfer_id=str(next(self._ids)), status="confirmed")
+
+    # -- withdrawals / deposits -------------------------------------------
+
+    async def fetch_asset_networks(
+        self, credential: Credential, asset: str
+    ) -> list[AssetNetwork]:
+        return self.networks.get(
+            asset,
+            [
+                AssetNetwork(
+                    network="TESTNET",
+                    deposit_enabled=True,
+                    withdraw_enabled=True,
+                    withdraw_min=Decimal("1"),
+                    withdraw_fee=Decimal("0.5"),
+                )
+            ],
+        )
+
+    async def fetch_deposit_address(
+        self,
+        credential: Credential,
+        asset: str,
+        network: str,
+        subaccount: str | None = None,
+    ) -> DepositAddress:
+        suffix = subaccount or "self"
+        return DepositAddress(
+            asset=asset, network=network, address=f"fake-{asset}-{network}-{suffix}"
+        )
+
+    async def withdraw(
+        self,
+        credential: Credential,
+        asset: str,
+        amount,
+        address: str,
+        network: str,
+        tag: str | None = None,
+    ) -> Withdrawal:
+        withdrawal = Withdrawal(
+            native_id=f"wd-{next(self._ids)}",
+            asset=asset,
+            amount=Decimal(str(amount)),
+            status=WithdrawalStatus.PENDING,
+            address=address,
+            network=network,
+        )
+        self.withdrawals[withdrawal.native_id] = withdrawal
+        return withdrawal
+
+    async def fetch_withdrawal(
+        self, credential: Credential, native_id: str
+    ) -> Withdrawal | None:
+        return self.withdrawals.get(native_id)
+
+    async def fetch_deposits(
+        self,
+        credential: Credential,
+        asset: str | None = None,
+        since: datetime | None = None,
+        subaccount: str | None = None,
+    ) -> list[Deposit]:
+        return [d for d in self.deposits if asset is None or d.asset == asset]
+
+    def complete_withdrawal(
+        self, native_id: str, tx_id: str = "0xfaketx", fee: Decimal = Decimal("0.5")
+    ) -> Withdrawal:
+        """Test hook: the venue broadcast the withdrawal."""
+        old = self.withdrawals[native_id]
+        done = Withdrawal(
+            **{**old.__dict__, "status": WithdrawalStatus.COMPLETED,
+               "tx_id": tx_id, "fee": fee}
+        )
+        self.withdrawals[native_id] = done
+        return done
+
+    def credit_deposit(
+        self,
+        asset: str,
+        amount: Decimal,
+        network: str = "TESTNET",
+        tx_id: str | None = None,
+    ) -> Deposit:
+        """Test hook: a deposit arrived and credited on the venue."""
+        deposit = Deposit(
+            native_id=f"dep-{next(self._ids)}",
+            asset=asset,
+            amount=amount,
+            status=DepositStatus.CREDITED,
+            network=network,
+            tx_id=tx_id,
+            credited_at=datetime.now(timezone.utc),
+        )
+        self.deposits.append(deposit)
+        return deposit

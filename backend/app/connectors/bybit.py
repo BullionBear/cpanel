@@ -17,6 +17,7 @@ Uses the official ``pybit`` SDK (synchronous, run in a worker thread).
 import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -32,8 +33,12 @@ from app.connectors.errors import credential_error_reason
 from app.connectors.symbols import build_universal_symbol
 from app.connectors.types import (
     ApiKeyResult,
+    AssetNetwork,
     Balance,
     CredentialInfo,
+    Deposit,
+    DepositAddress,
+    DepositStatus,
     Instrument,
     InstrumentFilters,
     KeyScheme,
@@ -49,7 +54,10 @@ from app.connectors.types import (
     SubaccountInfo,
     TimeInForce,
     Trade,
+    TransferResult,
     WalletType,
+    Withdrawal,
+    WithdrawalStatus,
 )
 from app.core.ratelimit import Priority, TokenBucket
 
@@ -131,6 +139,40 @@ _ORDER_STATUS = {
 }
 
 _PERP_CONTRACT_TYPES = {"LinearPerpetual", "InversePerpetual"}
+
+# Normalized wallet -> Bybit v5 accountType. A Unified Trading Account keeps
+# spot, margin, and derivatives collateral in one UNIFIED wallet; FUND is the
+# separate funding wallet (also where on-chain withdrawals draw from).
+_WALLET_ACCOUNT_TYPE = {
+    WalletType.SPOT: "UNIFIED",
+    WalletType.MARGIN: "UNIFIED",
+    WalletType.DERIVATIVES: "UNIFIED",
+    WalletType.FUNDING: "FUND",
+}
+
+# Withdrawal record ``status`` string -> normalized lifecycle.
+# BlockchainConfirmed = broadcast (tx known) but not yet final.
+_WITHDRAWAL_STATUS = {
+    "SecurityCheck": WithdrawalStatus.PENDING,
+    "Pending": WithdrawalStatus.PENDING,
+    "success": WithdrawalStatus.COMPLETED,
+    "CancelByUser": WithdrawalStatus.FAILED,
+    "Reject": WithdrawalStatus.FAILED,
+    "Fail": WithdrawalStatus.FAILED,
+    "BlockchainConfirmed": WithdrawalStatus.SENT,
+    "MoreInformationRequired": WithdrawalStatus.PENDING,
+}
+
+# Deposit record ``status`` int: 3 = success, 10012 = credited to funding
+# pool; 4 = failed; the rest are still confirming.
+_DEPOSIT_STATUS = {
+    1: DepositStatus.PENDING,
+    2: DepositStatus.PENDING,
+    3: DepositStatus.CREDITED,
+    4: DepositStatus.FAILED,
+    10011: DepositStatus.PENDING,
+    10012: DepositStatus.CREDITED,
+}
 
 
 def _dec(value) -> Decimal:
@@ -296,6 +338,53 @@ def normalize_order(raw: dict, universal_symbol: str) -> Order:
     )
 
 
+def normalize_asset_networks(coin_row: dict) -> list[AssetNetwork]:
+    """One get_coin_info row → the asset's chains."""
+    networks: list[AssetNetwork] = []
+    for chain in coin_row.get("chains", []):
+        networks.append(
+            AssetNetwork(
+                network=str(chain.get("chain", "")).upper(),
+                deposit_enabled=chain.get("chainDeposit") == "1",
+                withdraw_enabled=chain.get("chainWithdraw") == "1",
+                withdraw_min=_dec(chain.get("withdrawMin", 0) or 0),
+                withdraw_fee=_dec(chain.get("withdrawFee", 0) or 0),
+            )
+        )
+    return networks
+
+
+def normalize_withdrawal_record(raw: dict) -> Withdrawal:
+    """A get_withdrawal_records row → normalized Withdrawal."""
+    return Withdrawal(
+        native_id=str(raw.get("withdrawId", "")),
+        asset=raw.get("coin") or "",
+        amount=_dec(raw.get("amount", 0) or 0),
+        status=_WITHDRAWAL_STATUS.get(raw.get("status") or "", WithdrawalStatus.PENDING),
+        address=raw.get("toAddress") or None,
+        network=(raw.get("chain") or None) and str(raw["chain"]).upper(),
+        tx_id=raw.get("txID") or None,
+        fee=_opt_dec(raw.get("withdrawFee")),
+    )
+
+
+def normalize_deposit_record(raw: dict) -> Deposit:
+    """A get_deposit_records row → normalized Deposit."""
+    try:
+        status = _DEPOSIT_STATUS.get(int(raw.get("status", 0)), DepositStatus.PENDING)
+    except (TypeError, ValueError):
+        status = DepositStatus.PENDING
+    return Deposit(
+        native_id=str(raw.get("txID") or raw.get("id") or ""),
+        asset=raw.get("coin") or "",
+        amount=_dec(raw.get("amount", 0) or 0),
+        status=status,
+        network=(raw.get("chain") or None) and str(raw["chain"]).upper(),
+        tx_id=raw.get("txID") or None,
+        credited_at=_epoch_ms(raw.get("successAt")),
+    )
+
+
 class BybitConnector(ExchangeConnector):
     exchange = "BYBIT"
     # Bybit exposes full self-service account management over API, so the
@@ -317,6 +406,9 @@ class BybitConnector(ExchangeConnector):
             Capability.API_KEY_CREATE,
             Capability.API_KEY_MODIFY,
             Capability.API_KEY_REVOKE,
+            Capability.TRANSFERS,
+            Capability.WITHDRAWALS,
+            Capability.DEPOSITS,
         }
     )
 
@@ -755,6 +847,201 @@ class BybitConnector(ExchangeConnector):
         await self._call(
             session.freeze_sub_uid, subuid=int(subaccount), frozen=1 if frozen else 0
         )
+
+    # -- transfers / withdrawals / deposits -----------------------------------
+    #
+    # Same-account wallet moves use the internal transfer (FUND ↔ UNIFIED);
+    # moves between uids (main ↔ sub) use the universal transfer, which needs
+    # both member ids — a ``None`` side resolves to the credential's own uid.
+    # Withdrawals draw from the FUND wallet (Bybit's rule for UTA accounts).
+
+    async def _master_uid(self, credential: Credential) -> str:
+        session = self._auth_session(credential)
+        response = await self._call(session.get_api_key_information)
+        uid = str(response.get("result", {}).get("userID", "") or "")
+        if not uid:
+            raise ValueError("Could not resolve the credential's Bybit uid")
+        return uid
+
+    @staticmethod
+    def _transfer_result(result: dict) -> TransferResult:
+        status = (result.get("status") or "").upper()
+        if status in ("SUCCESS", ""):
+            normalized = "confirmed"
+        elif status == "FAILED":
+            normalized = "failed"
+        else:
+            normalized = "submitted"
+        return TransferResult(
+            native_transfer_id=str(result.get("transferId", "")), status=normalized
+        )
+
+    async def transfer(
+        self,
+        credential: Credential,
+        asset: str,
+        amount,
+        from_wallet: WalletType | None = None,
+        to_wallet: WalletType | None = None,
+        from_subaccount: str | None = None,
+        to_subaccount: str | None = None,
+    ) -> TransferResult:
+        session = self._auth_session(credential)
+        src = _WALLET_ACCOUNT_TYPE[from_wallet or WalletType.DERIVATIVES]
+        dst = _WALLET_ACCOUNT_TYPE[to_wallet or WalletType.DERIVATIVES]
+        transfer_id = str(uuid.uuid4())
+        if from_subaccount or to_subaccount:
+            # Universal transfer needs both member ids; a None side is the
+            # credential's own (master) account.
+            master_uid = None
+            if not from_subaccount or not to_subaccount:
+                master_uid = await self._master_uid(credential)
+            from_uid = from_subaccount or master_uid
+            to_uid = to_subaccount or master_uid
+            response = await self._call(
+                session.create_universal_transfer,
+                transferId=transfer_id,
+                coin=asset,
+                amount=str(amount),
+                fromMemberId=int(from_uid),
+                toMemberId=int(to_uid),
+                fromAccountType=src,
+                toAccountType=dst,
+            )
+        else:
+            if src == dst:
+                raise ValueError(
+                    "Bybit internal transfers move between FUND and UNIFIED wallets"
+                )
+            response = await self._call(
+                session.create_internal_transfer,
+                transferId=transfer_id,
+                coin=asset,
+                amount=str(amount),
+                fromAccountType=src,
+                toAccountType=dst,
+            )
+        return self._transfer_result(response.get("result", {}))
+
+    async def _fetch_coin_info(self, credential: Credential, asset: str) -> dict:
+        session = self._auth_session(credential)
+        response = await self._call(session.get_coin_info, coin=asset)
+        rows = response.get("result", {}).get("rows", [])
+        return rows[0] if rows else {}
+
+    async def fetch_asset_networks(
+        self, credential: Credential, asset: str
+    ) -> list[AssetNetwork]:
+        return normalize_asset_networks(await self._fetch_coin_info(credential, asset))
+
+    async def _fetch_deposit_address_raw(
+        self, credential: Credential, asset: str, network: str, subaccount: str | None
+    ) -> dict:
+        session = self._auth_session(credential)
+        if subaccount:
+            response = await self._call(
+                session.get_sub_deposit_address,
+                coin=asset, chainType=network, subMemberId=subaccount,
+            )
+        else:
+            response = await self._call(
+                session.get_master_deposit_address, coin=asset, chainType=network
+            )
+        return response.get("result", {})
+
+    async def fetch_deposit_address(
+        self,
+        credential: Credential,
+        asset: str,
+        network: str,
+        subaccount: str | None = None,
+    ) -> DepositAddress:
+        result = await self._fetch_deposit_address_raw(
+            credential, asset, network, subaccount
+        )
+        chains = result.get("chains")
+        chain = (chains[0] if isinstance(chains, list) else chains) or {}
+        address = chain.get("addressDeposit") or ""
+        if not address:
+            raise ValueError(f"Bybit returned no {asset}/{network} deposit address")
+        return DepositAddress(
+            asset=asset,
+            network=network.upper(),
+            address=address,
+            tag=chain.get("tagDeposit") or None,
+        )
+
+    async def withdraw(
+        self,
+        credential: Credential,
+        asset: str,
+        amount,
+        address: str,
+        network: str,
+        tag: str | None = None,
+    ) -> Withdrawal:
+        session = self._auth_session(credential)
+        kwargs: dict = {
+            "coin": asset,
+            "chain": network,
+            "address": address,
+            "amount": str(amount),
+            "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+            "accountType": "FUND",
+        }
+        if tag:
+            kwargs["tag"] = tag
+        response = await self._call(session.withdraw, **kwargs)
+        return Withdrawal(
+            native_id=str(response.get("result", {}).get("id", "")),
+            asset=asset,
+            amount=_dec(amount),
+            status=WithdrawalStatus.PENDING,
+            address=address,
+            network=network.upper(),
+        )
+
+    async def fetch_withdrawal(
+        self, credential: Credential, native_id: str
+    ) -> Withdrawal | None:
+        session = self._auth_session(credential)
+        response = await self._call(
+            session.get_withdrawal_records, withdrawID=native_id, limit=1
+        )
+        rows = response.get("result", {}).get("rows", [])
+        return normalize_withdrawal_record(rows[0]) if rows else None
+
+    async def _fetch_deposit_rows(
+        self,
+        credential: Credential,
+        asset: str | None,
+        start_ms: int | None,
+        subaccount: str | None,
+    ) -> list[dict]:
+        session = self._auth_session(credential)
+        kwargs: dict = {"limit": 50}
+        if asset:
+            kwargs["coin"] = asset
+        if start_ms is not None:
+            kwargs["startTime"] = start_ms
+        if subaccount:
+            response = await self._call(
+                session.get_sub_deposit_records, subMemberId=subaccount, **kwargs
+            )
+        else:
+            response = await self._call(session.get_deposit_records, **kwargs)
+        return response.get("result", {}).get("rows", [])
+
+    async def fetch_deposits(
+        self,
+        credential: Credential,
+        asset: str | None = None,
+        since: datetime | None = None,
+        subaccount: str | None = None,
+    ) -> list[Deposit]:
+        start_ms = int(since.timestamp() * 1000) if since else None
+        rows = await self._fetch_deposit_rows(credential, asset, start_ms, subaccount)
+        return [normalize_deposit_record(raw) for raw in rows]
 
     # -- connector interface --------------------------------------------------
 

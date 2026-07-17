@@ -15,6 +15,7 @@ from app.jobs.orders import make_open_order_poll_job
 from app.jobs.scheduler import JobDefinition, scheduler
 from app.jobs.snapshots import make_snapshot_job
 from app.jobs.symbols import make_instrument_refresh, make_price_refresh
+from app.jobs.transfers import make_transfer_progress_job
 
 EXCHANGES = ["BINANCE", "BYBIT"]
 
@@ -70,6 +71,14 @@ def setup_jobs() -> None:
                 exchange=exchange,
             )
         )
+    # Transfers span exchanges, so progress tracking is one global job.
+    scheduler.register(
+        JobDefinition(
+            name="transfers.progress",
+            interval_seconds=60,
+            func=make_transfer_progress_job(),
+        )
+    )
 
 
 @asynccontextmanager

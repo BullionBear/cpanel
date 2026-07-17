@@ -13,15 +13,24 @@ from app.connectors.binance import (
     BinanceConnector,
     _advance_window,
     _normalize_pem,
+    normalize_asset_networks,
     normalize_cm_instrument,
+    normalize_deposit,
     normalize_futures_balances,
     normalize_positions,
     normalize_spot_balances,
     normalize_spot_instrument,
     normalize_trade,
     normalize_um_instrument,
+    normalize_withdrawal,
 )
-from app.connectors.types import MarketType, OrderSide, WalletType
+from app.connectors.types import (
+    DepositStatus,
+    MarketType,
+    OrderSide,
+    WalletType,
+    WithdrawalStatus,
+)
 
 # A syntactically valid Ed25519 PKCS#8 private key (test-only, not a real key).
 ED25519_BODY = "MC4CAQAwBQYDK2VwBCIEINaP1QKxqnkgM63/wvkTeuRg2MKi4iEbgNW9QxR4vzCI"
@@ -474,3 +483,129 @@ async def test_fetch_orders_history_normalizes(connector, monkeypatch):
     assert order.universal_symbol == "BINANCE_PERP_ETHUSDT"
     assert order.native_order_id == "8389765"
     assert order.status.value == "FILLED"
+
+
+# -- transfers / withdrawals / deposits ---------------------------------------
+
+COIN_ROW = {
+    "coin": "USDT",
+    "networkList": [
+        {
+            "network": "TRX",
+            "depositEnable": True,
+            "withdrawEnable": True,
+            "withdrawMin": "10",
+            "withdrawFee": "1",
+        },
+        {
+            "network": "ETH",
+            "depositEnable": True,
+            "withdrawEnable": False,
+            "withdrawMin": "20",
+            "withdrawFee": "4",
+        },
+    ],
+}
+
+
+def test_normalize_asset_networks():
+    networks = normalize_asset_networks(COIN_ROW)
+    trx = next(n for n in networks if n.network == "TRX")
+    assert trx.withdraw_enabled and trx.deposit_enabled
+    assert trx.withdraw_min == Decimal("10")
+    assert trx.withdraw_fee == Decimal("1")
+    eth = next(n for n in networks if n.network == "ETH")
+    assert eth.withdraw_enabled is False
+
+
+def test_normalize_withdrawal_statuses():
+    completed = normalize_withdrawal(
+        {"id": "w1", "coin": "USDT", "amount": "100", "status": 6,
+         "txId": "0xabc", "transactionFee": "1", "network": "TRX"}
+    )
+    assert completed.status == WithdrawalStatus.COMPLETED
+    assert completed.tx_id == "0xabc"
+    assert completed.fee == Decimal("1")
+
+    # Processing with a known hash is SENT (broadcast, not final).
+    sent = normalize_withdrawal(
+        {"id": "w2", "coin": "USDT", "amount": "100", "status": 4, "txId": "0xdef"}
+    )
+    assert sent.status == WithdrawalStatus.SENT
+
+    rejected = normalize_withdrawal(
+        {"id": "w3", "coin": "USDT", "amount": "100", "status": 3}
+    )
+    assert rejected.status == WithdrawalStatus.FAILED
+
+
+def test_normalize_deposit_credited():
+    deposit = normalize_deposit(
+        {"id": "d1", "coin": "USDT", "amount": "99", "status": 1,
+         "network": "TRX", "txId": "0xabc", "insertTime": 1_700_000_000_000}
+    )
+    assert deposit.status == DepositStatus.CREDITED
+    assert deposit.amount == Decimal("99")
+    assert deposit.credited_at is not None
+
+
+async def test_transfer_wallet_to_wallet_builds_type(monkeypatch):
+    c = BinanceConnector()
+    calls = []
+
+    async def submit(credential, transfer_type, asset, amount):
+        calls.append((transfer_type, asset, amount))
+        return {"tranId": 13526853623}
+
+    monkeypatch.setattr(c, "_submit_universal_transfer", submit)
+    result = await c.transfer(
+        {}, "USDT", Decimal("100"),
+        from_wallet=WalletType.SPOT, to_wallet=WalletType.DERIVATIVES,
+    )
+    assert calls == [("MAIN_UMFUTURE", "USDT", 100.0)]
+    assert result.native_transfer_id == "13526853623"
+    assert result.status == "confirmed"
+
+
+async def test_transfer_main_to_sub_uses_emails(monkeypatch):
+    c = BinanceConnector()
+    calls = []
+
+    async def submit(credential, asset, amount, from_wallet, to_wallet, from_email, to_email):
+        calls.append((asset, amount, from_wallet, to_wallet, from_email, to_email))
+        return {"tranId": 99}
+
+    monkeypatch.setattr(c, "_submit_sub_transfer", submit)
+    result = await c.transfer(
+        {}, "USDT", Decimal("5"), to_subaccount="sub@x.com"
+    )
+    assert calls == [("USDT", 5.0, "SPOT", "SPOT", None, "sub@x.com")]
+    assert result.status == "confirmed"
+
+
+async def test_fetch_withdrawal_finds_by_id(monkeypatch):
+    c = BinanceConnector()
+
+    async def history(credential):
+        return [
+            {"id": "other", "coin": "USDT", "amount": "1", "status": 4},
+            {"id": "w42", "coin": "USDT", "amount": "100", "status": 6, "txId": "0xabc"},
+        ]
+
+    monkeypatch.setattr(c, "_fetch_withdraw_history", history)
+    withdrawal = await c.fetch_withdrawal({}, "w42")
+    assert withdrawal is not None and withdrawal.status == WithdrawalStatus.COMPLETED
+    assert await c.fetch_withdrawal({}, "missing") is None
+
+
+async def test_fetch_deposit_address(monkeypatch):
+    c = BinanceConnector()
+
+    async def raw(credential, asset, network, subaccount):
+        assert subaccount is None
+        return {"address": "TAbc123", "tag": ""}
+
+    monkeypatch.setattr(c, "_fetch_deposit_address_raw", raw)
+    resolved = await c.fetch_deposit_address({}, "USDT", "TRX")
+    assert resolved.address == "TAbc123"
+    assert resolved.tag is None

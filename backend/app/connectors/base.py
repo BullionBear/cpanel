@@ -17,8 +17,11 @@ from typing import Any
 
 from app.connectors.types import (
     ApiKeyResult,
+    AssetNetwork,
     Balance,
     CredentialInfo,
+    Deposit,
+    DepositAddress,
     Instrument,
     KeyScheme,
     Order,
@@ -28,6 +31,7 @@ from app.connectors.types import (
     SubaccountInfo,
     TransferResult,
     WalletType,
+    Withdrawal,
 )
 
 Credential = dict[str, Any]
@@ -55,6 +59,7 @@ class Capability(StrEnum):
     API_KEY_REVOKE = "api_key_revoke"
     TRANSFERS = "transfers"
     WITHDRAWALS = "withdrawals"
+    DEPOSITS = "deposits"
 
 
 class NotSupported(Exception):
@@ -215,4 +220,62 @@ class ExchangeConnector:
         from_subaccount: str | None = None,
         to_subaccount: str | None = None,
     ) -> TransferResult:
+        """Intra-exchange move: wallet ↔ wallet and/or account ↔ account.
+
+        ``from_subaccount`` / ``to_subaccount`` are venue-native uids; ``None``
+        means "the account the credential belongs to" (typically the master
+        when both sides are given, or a self wallet move when both are None).
+        """
         raise NotSupported(self.exchange, Capability.TRANSFERS)
+
+    # -- withdrawals / deposits (cross-exchange transfers) ----------------
+
+    async def fetch_asset_networks(
+        self, credential: Credential, asset: str
+    ) -> list[AssetNetwork]:
+        """Chains the asset can move over, with per-chain withdraw/deposit
+        status, minimums, and fees — used to validate a cross-exchange
+        transfer on both sides before any money moves."""
+        raise NotSupported(self.exchange, Capability.WITHDRAWALS)
+
+    async def fetch_deposit_address(
+        self,
+        credential: Credential,
+        asset: str,
+        network: str,
+        subaccount: str | None = None,
+    ) -> DepositAddress:
+        """Deposit address for (asset, network). With ``subaccount`` set the
+        credential must be the master's and the address is the sub's."""
+        raise NotSupported(self.exchange, Capability.DEPOSITS)
+
+    async def withdraw(
+        self,
+        credential: Credential,
+        asset: str,
+        amount: Any,
+        address: str,
+        network: str,
+        tag: str | None = None,
+    ) -> Withdrawal:
+        """Submit an on-chain withdrawal. Returns at least the native id;
+        status/tx are advanced by polling ``fetch_withdrawal``."""
+        raise NotSupported(self.exchange, Capability.WITHDRAWALS)
+
+    async def fetch_withdrawal(
+        self, credential: Credential, native_id: str
+    ) -> Withdrawal | None:
+        """Current state of one withdrawal (None if the venue does not know it)."""
+        raise NotSupported(self.exchange, Capability.WITHDRAWALS)
+
+    async def fetch_deposits(
+        self,
+        credential: Credential,
+        asset: str | None = None,
+        since: datetime | None = None,
+        subaccount: str | None = None,
+    ) -> list[Deposit]:
+        """Recent deposits, newest first — polled to match an incoming
+        cross-exchange transfer. Same ``subaccount`` convention as
+        ``fetch_deposit_address``."""
+        raise NotSupported(self.exchange, Capability.DEPOSITS)

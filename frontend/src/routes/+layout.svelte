@@ -42,6 +42,11 @@
 					class:active={$page.url.pathname.startsWith('/history')}
 					href="/history">History</a
 				>
+				<a
+					class="nav-item"
+					class:active={$page.url.pathname.startsWith('/transfers')}
+					href="/transfers">Transfers</a
+				>
 			</nav>
 		</div>
 

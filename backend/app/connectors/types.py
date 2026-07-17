@@ -203,3 +203,63 @@ class ApiKeyResult:
 class TransferResult:
     native_transfer_id: str
     status: str                    # submitted | confirmed | failed
+
+
+class WithdrawalStatus(StrEnum):
+    """Normalized withdrawal lifecycle. SENT means broadcast on-chain (tx id
+    known) but not yet counted final by the venue; COMPLETED is final."""
+    PENDING = "PENDING"
+    SENT = "SENT"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class DepositStatus(StrEnum):
+    PENDING = "PENDING"
+    CREDITED = "CREDITED"
+    FAILED = "FAILED"
+
+
+@dataclass(frozen=True)
+class DepositAddress:
+    """A deposit address resolved for one (asset, network) pair.
+
+    Never cached long-term — re-fetched per transfer (ARCHITECTURE.md
+    "Transfer Orchestration")."""
+    asset: str
+    network: str
+    address: str
+    tag: str | None = None         # memo/tag chains (XRP, EOS, …)
+
+
+@dataclass(frozen=True)
+class AssetNetwork:
+    """One chain an asset can move over, as the venue reports it."""
+    network: str                   # venue chain code, e.g. TRX, ETH, BSC
+    deposit_enabled: bool
+    withdraw_enabled: bool
+    withdraw_min: Decimal
+    withdraw_fee: Decimal
+
+
+@dataclass(frozen=True)
+class Withdrawal:
+    native_id: str
+    asset: str
+    amount: Decimal
+    status: WithdrawalStatus
+    address: str | None = None
+    network: str | None = None
+    tx_id: str | None = None
+    fee: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class Deposit:
+    native_id: str
+    asset: str
+    amount: Decimal
+    status: DepositStatus
+    network: str | None = None
+    tx_id: str | None = None
+    credited_at: datetime | None = None

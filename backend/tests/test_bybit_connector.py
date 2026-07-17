@@ -8,12 +8,21 @@ import pytest
 from app.connectors.base import DEFAULT_HISTORY_BACKFILL
 from app.connectors.bybit import (
     BybitConnector,
+    normalize_asset_networks,
+    normalize_deposit_record,
     normalize_instrument,
     normalize_positions,
     normalize_trade,
     normalize_wallet_balances,
+    normalize_withdrawal_record,
 )
-from app.connectors.types import MarketType, OrderSide, WalletType
+from app.connectors.types import (
+    DepositStatus,
+    MarketType,
+    OrderSide,
+    WalletType,
+    WithdrawalStatus,
+)
 
 SPOT_BTCUSDT = {
     "symbol": "BTCUSDT",
@@ -383,3 +392,159 @@ async def test_fetch_orders_history_uses_order_endpoint(connector, monkeypatch):
     assert order.universal_symbol == "BYBIT_PERP_ETHUSDT"
     assert order.client_order_id == "cpanel-abc"
     assert order.status.value == "FILLED"
+
+
+# -- transfers / withdrawals / deposits ---------------------------------------
+
+COIN_INFO_ROW = {
+    "coin": "USDT",
+    "chains": [
+        {
+            "chain": "TRX",
+            "chainType": "TRC20",
+            "chainDeposit": "1",
+            "chainWithdraw": "1",
+            "withdrawMin": "10",
+            "withdrawFee": "1",
+        },
+        {
+            "chain": "ETH",
+            "chainType": "ERC20",
+            "chainDeposit": "1",
+            "chainWithdraw": "0",
+            "withdrawMin": "20",
+            "withdrawFee": "4",
+        },
+    ],
+}
+
+
+def test_normalize_asset_networks():
+    networks = normalize_asset_networks(COIN_INFO_ROW)
+    trx = next(n for n in networks if n.network == "TRX")
+    assert trx.withdraw_enabled and trx.deposit_enabled
+    assert trx.withdraw_min == Decimal("10")
+    assert trx.withdraw_fee == Decimal("1")
+    assert next(n for n in networks if n.network == "ETH").withdraw_enabled is False
+
+
+def test_normalize_withdrawal_record_statuses():
+    base = {
+        "withdrawId": "10195", "coin": "USDT", "amount": "100",
+        "toAddress": "TAbc", "chain": "TRX", "withdrawFee": "1",
+    }
+    assert normalize_withdrawal_record({**base, "status": "success"}).status \
+        == WithdrawalStatus.COMPLETED
+    sent = normalize_withdrawal_record(
+        {**base, "status": "BlockchainConfirmed", "txID": "0xabc"}
+    )
+    assert sent.status == WithdrawalStatus.SENT
+    assert sent.tx_id == "0xabc"
+    assert sent.fee == Decimal("1")
+    assert normalize_withdrawal_record({**base, "status": "Reject"}).status \
+        == WithdrawalStatus.FAILED
+    assert normalize_withdrawal_record({**base, "status": "SecurityCheck"}).status \
+        == WithdrawalStatus.PENDING
+
+
+def test_normalize_deposit_record_statuses():
+    base = {"coin": "USDT", "amount": "99", "chain": "TRX", "txID": "0xabc"}
+    credited = normalize_deposit_record(
+        {**base, "status": 3, "successAt": "1700000000000"}
+    )
+    assert credited.status == DepositStatus.CREDITED
+    assert credited.native_id == "0xabc"
+    assert credited.credited_at is not None
+    assert normalize_deposit_record({**base, "status": 2}).status == DepositStatus.PENDING
+    assert normalize_deposit_record({**base, "status": 4}).status == DepositStatus.FAILED
+
+
+async def test_internal_transfer_between_wallets(monkeypatch):
+    c = BybitConnector()
+    calls = []
+
+    async def call(func, **kwargs):
+        calls.append((func.__name__, kwargs))
+        return {"result": {"transferId": "uuid-1", "status": "SUCCESS"}}
+
+    monkeypatch.setattr(c, "_call", call)
+    result = await c.transfer(
+        {"api_key": "k", "secret": "s"}, "USDT", Decimal("100"),
+        from_wallet=WalletType.FUNDING, to_wallet=WalletType.DERIVATIVES,
+    )
+    name, kwargs = calls[0]
+    assert name == "create_internal_transfer"
+    assert kwargs["fromAccountType"] == "FUND"
+    assert kwargs["toAccountType"] == "UNIFIED"
+    assert kwargs["amount"] == "100"
+    assert result.status == "confirmed"
+    assert result.native_transfer_id == "uuid-1"
+
+
+async def test_internal_transfer_same_wallet_rejected():
+    c = BybitConnector()
+    with pytest.raises(ValueError):
+        await c.transfer(
+            {"api_key": "k", "secret": "s"}, "USDT", Decimal("1"),
+            from_wallet=WalletType.SPOT, to_wallet=WalletType.DERIVATIVES,
+        )
+
+
+async def test_universal_transfer_resolves_master_uid(monkeypatch):
+    c = BybitConnector()
+    calls = []
+
+    async def call(func, **kwargs):
+        calls.append((func.__name__, kwargs))
+        if func.__name__ == "get_api_key_information":
+            return {"result": {"userID": 111}}
+        return {"result": {"transferId": "uuid-2", "status": "PENDING"}}
+
+    monkeypatch.setattr(c, "_call", call)
+    result = await c.transfer(
+        {"api_key": "k", "secret": "s"}, "USDT", Decimal("5"),
+        to_subaccount="222",
+    )
+    name, kwargs = calls[-1]
+    assert name == "create_universal_transfer"
+    assert kwargs["fromMemberId"] == 111
+    assert kwargs["toMemberId"] == 222
+    assert result.status == "submitted"
+
+
+async def test_withdraw_draws_from_fund_wallet(monkeypatch):
+    c = BybitConnector()
+    calls = []
+
+    async def call(func, **kwargs):
+        calls.append((func.__name__, kwargs))
+        return {"result": {"id": "10195"}}
+
+    monkeypatch.setattr(c, "_call", call)
+    withdrawal = await c.withdraw(
+        {"api_key": "k", "secret": "s"}, "USDT", Decimal("100"), "TAbc", "TRX"
+    )
+    name, kwargs = calls[0]
+    assert name == "withdraw"
+    assert kwargs["accountType"] == "FUND"
+    assert kwargs["chain"] == "TRX"
+    assert withdrawal.native_id == "10195"
+    assert withdrawal.status == WithdrawalStatus.PENDING
+
+
+async def test_fetch_deposit_address_reads_chain(monkeypatch):
+    c = BybitConnector()
+
+    async def raw(credential, asset, network, subaccount):
+        return {
+            "coin": "USDT",
+            "chains": {"chainType": "TRC20", "chain": "TRX",
+                       "addressDeposit": "TAbc123", "tagDeposit": ""},
+        }
+
+    monkeypatch.setattr(c, "_fetch_deposit_address_raw", raw)
+    resolved = await c.fetch_deposit_address(
+        {"api_key": "k", "secret": "s"}, "USDT", "TRX"
+    )
+    assert resolved.address == "TAbc123"
+    assert resolved.tag is None
