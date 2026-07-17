@@ -39,8 +39,13 @@ _NETWORK_HINTS = (
 
 
 def _status_code(exc: Exception) -> int | None:
-    code = getattr(exc, "status_code", None)
-    return code if isinstance(code, int) else None
+    # Binance exposes status_code; gate-api and generated OpenAPI clients
+    # expose status.
+    for attr in ("status_code", "status"):
+        code = getattr(exc, attr, None)
+        if isinstance(code, int):
+            return code
+    return None
 
 
 def _venue_message(exc: Exception) -> str | None:
@@ -61,18 +66,22 @@ def _venue_message(exc: Exception) -> str | None:
 def credential_error_reason(exchange: str, exc: Exception) -> str:
     """A short, secret-free explanation of why verification failed."""
     text = str(exc).lower()
+    status = _status_code(exc)
+    message = _venue_message(exc)
 
     # Local (pre-flight) failure: the secret / private key could not be parsed
-    # or used to sign, so the request never reached the venue.
-    if isinstance(exc, (ValueError, TypeError)) or any(h in text for h in _KEY_HINTS):
+    # or used to sign, so the request never reached the venue. Only trust the
+    # textual hints when there is no HTTP status — a venue response means the
+    # request was signed and sent, and its stringified body/headers can
+    # coincidentally contain hint substrings (e.g. "der" in "HTTPHeaderDict").
+    if isinstance(exc, (ValueError, TypeError)) or (
+        status is None and any(h in text for h in _KEY_HINTS)
+    ):
         return (
             "The API secret or private key is malformed. Check that the scheme "
             "matches the key and that the full key (including PEM header/footer) "
             "was pasted correctly."
         )
-
-    status = _status_code(exc)
-    message = _venue_message(exc)
 
     # No HTTP status and a connectivity-shaped message: we never got a response.
     if status is None and any(w in text for w in _NETWORK_HINTS):

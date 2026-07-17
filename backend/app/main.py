@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import api_router
 from app.connectors.binance import BinanceConnector
 from app.connectors.bybit import BybitConnector
+from app.connectors.gateio import GateIOConnector
 from app.connectors.registry import connectors
 from app.core.config import settings
 from app.core.db import dispose_engine, get_session_factory
@@ -17,15 +18,17 @@ from app.jobs.snapshots import make_snapshot_job
 from app.jobs.symbols import make_instrument_refresh, make_price_refresh
 from app.jobs.transfers import make_transfer_progress_job
 
-EXCHANGES = ["BINANCE", "BYBIT"]
+EXCHANGES = ["BINANCE", "BYBIT", "GATEIO"]
 
 
 def setup_connectors() -> None:
     """Register connectors and their rate-limit budgets."""
     binance_bucket = rate_limiters.configure("BINANCE", rate=5, capacity=10)
     bybit_bucket = rate_limiters.configure("BYBIT", rate=5, capacity=10)
+    gateio_bucket = rate_limiters.configure("GATEIO", rate=5, capacity=10)
     connectors.register(BinanceConnector(bucket=binance_bucket))
     connectors.register(BybitConnector(bucket=bybit_bucket))
+    connectors.register(GateIOConnector(bucket=gateio_bucket))
 
 
 def setup_jobs() -> None:

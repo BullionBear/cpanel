@@ -75,6 +75,30 @@ const SPEC = {
 		positionModes: HEDGE,
 		contracts: true,
 		hint: 'Inverse (coin-margined): quantity is in contracts.'
+	},
+	gateioSpot: {
+		orderTypes: ['LIMIT', 'MARKET'],
+		tif: FULL_TIF,
+		reduceOnly: false,
+		positionModes: [],
+		contracts: false,
+		hint: 'Post-only routes as poc. Market buys convert qty to a quote amount at the last price.'
+	},
+	gateioPerp: {
+		orderTypes: ['LIMIT', 'MARKET'],
+		tif: FULL_TIF,
+		reduceOnly: true,
+		positionModes: [],
+		contracts: true,
+		hint: 'Quantity is in contracts; one-way position mode.'
+	},
+	gateioInverse: {
+		orderTypes: ['LIMIT', 'MARKET'],
+		tif: FULL_TIF,
+		reduceOnly: true,
+		positionModes: [],
+		contracts: true,
+		hint: 'Inverse (BTC-settled): quantity is in contracts; one-way position mode.'
 	}
 } satisfies Record<string, PanelSpec>;
 
@@ -91,7 +115,8 @@ const CATEGORY_LABEL: Record<Category, string> = {
 // "not yet supported" panel with an explanatory note.
 const SUPPORT: Record<string, Partial<Record<Category, PanelSpec>>> = {
 	BINANCE: { SPOT: SPEC.binanceSpot, PERP: SPEC.binancePerp, CMARGIN: SPEC.binanceCmargin },
-	BYBIT: { SPOT: SPEC.bybitSpot, PERP: SPEC.bybitPerp, CMARGIN: SPEC.bybitInverse }
+	BYBIT: { SPOT: SPEC.bybitSpot, PERP: SPEC.bybitPerp, CMARGIN: SPEC.bybitInverse },
+	GATEIO: { SPOT: SPEC.gateioSpot, PERP: SPEC.gateioPerp, CMARGIN: SPEC.gateioInverse }
 };
 
 export function resolvePanel(exchange: string, category: Category): PanelResolution {

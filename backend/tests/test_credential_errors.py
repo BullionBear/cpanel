@@ -61,6 +61,28 @@ def test_fallback_when_nothing_known():
     assert reason == "BINANCE rejected this API key."
 
 
+def test_gate_style_status_attribute_is_recognized():
+    # gate-api (generated OpenAPI client) exposes .status, not .status_code.
+    exc = Exception("boom")
+    exc.status = 403
+    exc.message = "Request API key does not have account permission"
+    reason = credential_error_reason("GATEIO", exc)
+    assert "403" in reason
+    assert "account permission" in reason
+
+
+def test_venue_response_with_key_hint_text_is_not_local_error():
+    # gate-api's str(exc) includes headers like "HTTPHeaderDict" ("der" hint);
+    # a response with an HTTP status must never be classified as a local
+    # malformed-key failure.
+    exc = Exception("HTTP response headers: HTTPHeaderDict({'Server': 'openresty'})")
+    exc.status = 401
+    exc.message = "Invalid key"
+    reason = credential_error_reason("GATEIO", exc)
+    assert "malformed" not in reason.lower()
+    assert "401" in reason
+
+
 def test_reason_never_includes_stringified_exception_for_venue_errors():
     # pybit embeds the signed request in str(exc); ensure we only use .message.
     exc = Exception("GET /v5/user/query-api?api_key=AKX&sign=LEAKEDSIGNATURE")

@@ -19,6 +19,14 @@
 				{ id: 'readme', name: 'Readme' },
 				{ id: 'account', name: 'Account' }
 			]
+		},
+		{
+			slug: 'gateio',
+			name: 'Gate.io',
+			tabs: [
+				{ id: 'readme', name: 'Readme' },
+				{ id: 'account', name: 'Account' }
+			]
 		}
 	];
 
