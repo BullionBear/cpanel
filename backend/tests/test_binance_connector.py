@@ -567,6 +567,17 @@ def test_normalize_deposit_credited():
     assert deposit.status == DepositStatus.CREDITED
     assert deposit.amount == Decimal("99")
     assert deposit.credited_at is not None
+    assert deposit.created_at is not None
+
+
+def test_normalize_withdrawal_created_at_from_apply_time():
+    withdrawal = normalize_withdrawal(
+        {"id": "w1", "coin": "USDT", "amount": "100", "status": 6,
+         "txId": "0xabc", "transactionFee": "1", "network": "TRX",
+         "applyTime": "2024-01-15 12:30:00"}
+    )
+    assert withdrawal.created_at is not None
+    assert withdrawal.created_at.year == 2024
 
 
 async def test_transfer_wallet_to_wallet_builds_type(monkeypatch):

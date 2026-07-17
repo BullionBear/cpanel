@@ -767,6 +767,7 @@ def test_normalize_deposit_record_statuses():
     assert credited.status == DepositStatus.CREDITED
     assert credited.native_id == "d33624854"
     assert credited.credited_at is not None
+    assert credited.created_at is not None
     assert normalize_deposit_record({**base, "status": "PEND"}).status == DepositStatus.PENDING
     assert normalize_deposit_record({**base, "status": "TRACK"}).status == DepositStatus.PENDING
     assert normalize_deposit_record({**base, "status": "INVALID"}).status == DepositStatus.FAILED

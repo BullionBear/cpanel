@@ -388,6 +388,7 @@ def normalize_withdrawal_record(raw: dict) -> Withdrawal:
         network=(raw.get("chain") or None) and str(raw["chain"]).upper(),
         tx_id=raw.get("txID") or None,
         fee=_opt_dec(raw.get("withdrawFee")),
+        created_at=_epoch_ms(raw.get("createTime") or raw.get("updateTime")),
     )
 
 
@@ -397,14 +398,16 @@ def normalize_deposit_record(raw: dict) -> Deposit:
         status = _DEPOSIT_STATUS.get(int(raw.get("status", 0)), DepositStatus.PENDING)
     except (TypeError, ValueError):
         status = DepositStatus.PENDING
+    credited_at = _epoch_ms(raw.get("successAt"))
     return Deposit(
-        native_id=str(raw.get("txID") or raw.get("id") or ""),
+        native_id=str(raw.get("id") or raw.get("txID") or ""),
         asset=raw.get("coin") or "",
         amount=_dec(raw.get("amount", 0) or 0),
         status=status,
         network=(raw.get("chain") or None) and str(raw["chain"]).upper(),
         tx_id=raw.get("txID") or None,
-        credited_at=_epoch_ms(raw.get("successAt")),
+        credited_at=credited_at,
+        created_at=credited_at,
     )
 
 
@@ -1053,20 +1056,51 @@ class BybitConnector(ExchangeConnector):
         asset: str | None,
         start_ms: int | None,
         subaccount: str | None,
-    ) -> list[dict]:
+        end_ms: int | None = None,
+        native_cursor: str | None = None,
+        limit: int = 50,
+    ) -> tuple[list[dict], str | None]:
         session = self._auth_session(credential)
-        kwargs: dict = {"limit": 50}
+        kwargs: dict = {"limit": limit}
         if asset:
             kwargs["coin"] = asset
         if start_ms is not None:
             kwargs["startTime"] = start_ms
+        if end_ms is not None:
+            kwargs["endTime"] = end_ms
+        if native_cursor:
+            kwargs["cursor"] = native_cursor
         if subaccount:
             response = await self._call(
                 session.get_sub_deposit_records, subMemberId=subaccount, **kwargs
             )
         else:
             response = await self._call(session.get_deposit_records, **kwargs)
-        return response.get("result", {}).get("rows", [])
+        result = response.get("result", {})
+        return result.get("rows", []), result.get("nextPageCursor") or None
+
+    async def _fetch_withdrawal_rows(
+        self,
+        credential: Credential,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+        native_cursor: str | None = None,
+        limit: int = 50,
+        withdraw_id: str | None = None,
+    ) -> tuple[list[dict], str | None]:
+        session = self._auth_session(credential)
+        kwargs: dict = {"limit": limit}
+        if withdraw_id is not None:
+            kwargs["withdrawID"] = withdraw_id
+        if start_ms is not None:
+            kwargs["startTime"] = start_ms
+        if end_ms is not None:
+            kwargs["endTime"] = end_ms
+        if native_cursor:
+            kwargs["cursor"] = native_cursor
+        response = await self._call(session.get_withdrawal_records, **kwargs)
+        result = response.get("result", {})
+        return result.get("rows", []), result.get("nextPageCursor") or None
 
     async def fetch_deposits(
         self,
@@ -1076,8 +1110,52 @@ class BybitConnector(ExchangeConnector):
         subaccount: str | None = None,
     ) -> list[Deposit]:
         start_ms = int(since.timestamp() * 1000) if since else None
-        rows = await self._fetch_deposit_rows(credential, asset, start_ms, subaccount)
+        rows, _ = await self._fetch_deposit_rows(credential, asset, start_ms, subaccount)
         return [normalize_deposit_record(raw) for raw in rows]
+
+    _FUND_HISTORY_LIMIT = 50
+
+    async def _fund_history_page(
+        self,
+        credential: Credential,
+        cursor: str | None,
+        *,
+        kind: str,
+    ) -> Page:
+        """One deposit/withdrawal page using the trade-history cursor shape."""
+        start_ms, end_ms, now_ms, native = self._history_window(cursor)
+        if start_ms >= now_ms:
+            return Page(items=[], next_cursor=None)
+        limit = self._FUND_HISTORY_LIMIT
+        if kind == "deposits":
+            rows, next_native = await self._fetch_deposit_rows(
+                credential, None, start_ms, None,
+                end_ms=end_ms, native_cursor=native, limit=limit,
+            )
+            items = [normalize_deposit_record(raw) for raw in rows]
+        else:
+            rows, next_native = await self._fetch_withdrawal_rows(
+                credential,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                native_cursor=native,
+                limit=limit,
+            )
+            items = [normalize_withdrawal_record(raw) for raw in rows]
+        return Page(
+            items=items,
+            next_cursor=self._next_history_cursor(start_ms, end_ms, now_ms, next_native),
+        )
+
+    async def fetch_deposits_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        return await self._fund_history_page(credential, cursor, kind="deposits")
+
+    async def fetch_withdrawals_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        return await self._fund_history_page(credential, cursor, kind="withdrawals")
 
     # -- connector interface --------------------------------------------------
 

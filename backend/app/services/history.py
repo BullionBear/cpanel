@@ -13,10 +13,11 @@ takes over. There is no separate backward-walking stream — recent history is
 what reconciliation needs, and anything older can be re-seeded by hand.
 
 Stream sets are connector strategy: Bybit returns its fixed account-wide
-streams; Binance returns one stream per *active* symbol, where activity is
-derived from panel orders, previously ingested order history, and snapshotted
-positions (querying every listed instrument would waste the rate budget on
-thousands of empty calls).
+streams for trades/orders; Binance returns one stream per *active* symbol,
+where activity is derived from panel orders, previously ingested order
+history, and snapshotted positions (querying every listed instrument would
+waste the rate budget on thousands of empty calls). Deposit and withdrawal
+history is always account-wide (``fund_history_stream_keys``).
 """
 import logging
 from datetime import datetime, timezone
@@ -29,9 +30,20 @@ from app.connectors.base import (
     Capability,
     ExchangeConnector,
 )
-from app.connectors.types import Order as ConnOrder, Trade as ConnTrade
+from app.connectors.types import (
+    Deposit as ConnDeposit,
+    Order as ConnOrder,
+    Trade as ConnTrade,
+    Withdrawal as ConnWithdrawal,
+)
 from app.models.account import Account
-from app.models.history import OrderHistory, SyncCursor, TradeHistory
+from app.models.history import (
+    DepositHistory,
+    OrderHistory,
+    SyncCursor,
+    TradeHistory,
+    WithdrawalHistory,
+)
 from app.models.order import Order
 from app.models.snapshot import PositionSnapshot
 from app.services.accounts import AccountError, decrypt_credential, get_active_credential
@@ -47,13 +59,15 @@ __all__ = [
     "sync_account_history",
     "list_trades",
     "list_order_history",
+    "list_deposits",
+    "list_withdrawals",
     "list_sync_cursors",
 ]
 
 # New accounts (streams without a cursor yet) backfill this far first.
 NEW_STREAM_BACKFILL = DEFAULT_HISTORY_BACKFILL
 
-DATA_KINDS = ("trades", "orders")
+DATA_KINDS = ("trades", "orders", "deposits", "withdrawals")
 
 # Pages ingested per stream per run. Bounds one scheduler tick; the next run
 # resumes from the stored cursor, so a large backlog just takes several runs.
@@ -203,6 +217,128 @@ async def _upsert_orders(
     return changed
 
 
+async def _upsert_deposits(
+    db: AsyncSession, account: Account, deposits: list[ConnDeposit]
+) -> int:
+    """Insert unseen deposits; advance status/tx of known ones."""
+    if not deposits:
+        return 0
+    # Skip venue rows with empty native ids — they cannot be upsert-keyed.
+    deposits = [d for d in deposits if d.native_id]
+    if not deposits:
+        return 0
+    rows = (
+        await db.execute(
+            select(DepositHistory).where(
+                DepositHistory.account_id == account.id,
+                DepositHistory.native_deposit_id.in_({d.native_id for d in deposits}),
+            )
+        )
+    ).scalars()
+    known = {r.native_deposit_id: r for r in rows}
+    changed = 0
+    for deposit in deposits:
+        row = known.get(deposit.native_id)
+        if row is None:
+            row = DepositHistory(
+                account_id=account.id,
+                exchange=account.exchange,
+                native_deposit_id=deposit.native_id,
+                asset=deposit.asset,
+                amount=deposit.amount,
+                status=deposit.status.value,
+                network=deposit.network,
+                tx_id=deposit.tx_id,
+                credited_at=deposit.credited_at,
+                created_at=deposit.created_at or deposit.credited_at,
+            )
+            db.add(row)
+            known[deposit.native_id] = row
+            changed += 1
+        elif row.status != deposit.status.value or row.tx_id != deposit.tx_id:
+            # Status/tx drive updates; do not compare datetimes (SQLite round-trips
+            # can shift tz/µs and would make every re-sync look like a change).
+            row.status = deposit.status.value
+            row.tx_id = deposit.tx_id
+            row.credited_at = deposit.credited_at
+            if deposit.created_at and row.created_at is None:
+                row.created_at = deposit.created_at
+            changed += 1
+    return changed
+
+
+async def _upsert_withdrawals(
+    db: AsyncSession, account: Account, withdrawals: list[ConnWithdrawal]
+) -> int:
+    """Insert unseen withdrawals; advance status/tx/fee of known ones."""
+    if not withdrawals:
+        return 0
+    withdrawals = [w for w in withdrawals if w.native_id]
+    if not withdrawals:
+        return 0
+    rows = (
+        await db.execute(
+            select(WithdrawalHistory).where(
+                WithdrawalHistory.account_id == account.id,
+                WithdrawalHistory.native_withdrawal_id.in_(
+                    {w.native_id for w in withdrawals}
+                ),
+            )
+        )
+    ).scalars()
+    known = {r.native_withdrawal_id: r for r in rows}
+    changed = 0
+    for withdrawal in withdrawals:
+        row = known.get(withdrawal.native_id)
+        if row is None:
+            row = WithdrawalHistory(
+                account_id=account.id,
+                exchange=account.exchange,
+                native_withdrawal_id=withdrawal.native_id,
+                asset=withdrawal.asset,
+                amount=withdrawal.amount,
+                status=withdrawal.status.value,
+                address=withdrawal.address,
+                network=withdrawal.network,
+                tx_id=withdrawal.tx_id,
+                fee=withdrawal.fee,
+                fee_asset=withdrawal.asset if withdrawal.fee is not None else None,
+                created_at=withdrawal.created_at,
+            )
+            db.add(row)
+            known[withdrawal.native_id] = row
+            changed += 1
+        elif (
+            row.status != withdrawal.status.value
+            or row.tx_id != withdrawal.tx_id
+            or row.fee != withdrawal.fee
+        ):
+            row.status = withdrawal.status.value
+            row.tx_id = withdrawal.tx_id
+            row.fee = withdrawal.fee
+            if withdrawal.fee is not None:
+                row.fee_asset = withdrawal.asset
+            if withdrawal.created_at and row.created_at is None:
+                row.created_at = withdrawal.created_at
+            changed += 1
+    return changed
+
+
+_FETCHERS = {
+    "trades": "fetch_trades",
+    "orders": "fetch_orders_history",
+    "deposits": "fetch_deposits_history",
+    "withdrawals": "fetch_withdrawals_history",
+}
+
+_UPSERTERS = {
+    "trades": _upsert_trades,
+    "orders": _upsert_orders,
+    "deposits": _upsert_deposits,
+    "withdrawals": _upsert_withdrawals,
+}
+
+
 # -- the generic sync worker ----------------------------------------------------
 
 async def sync_stream(
@@ -221,8 +357,8 @@ async def sync_stream(
         raise ValueError(f"Unknown history data kind {data_kind!r}")
     cursor_row = await _get_or_create_cursor(db, connector, account, data_kind, stream_key)
     credential = decrypt_credential(await get_active_credential(db, account))
-    fetch = connector.fetch_trades if data_kind == "trades" else connector.fetch_orders_history
-    upsert = _upsert_trades if data_kind == "trades" else _upsert_orders
+    fetch = getattr(connector, _FETCHERS[data_kind])
+    upsert = _UPSERTERS[data_kind]
 
     total = 0
     try:
@@ -254,7 +390,7 @@ async def sync_account_history(
     Streams are isolated: one failing stream (recorded on its cursor row) does
     not stop the others.
     """
-    kinds = [
+    trade_order_kinds = [
         kind
         for kind, capability in (
             ("trades", Capability.TRADE_HISTORY),
@@ -262,21 +398,47 @@ async def sync_account_history(
         )
         if connector.supports(capability)
     ]
-    if not kinds:
+    fund_kinds = [
+        kind
+        for kind, capability in (
+            ("deposits", Capability.DEPOSITS),
+            ("withdrawals", Capability.WITHDRAWALS),
+        )
+        if connector.supports(capability)
+    ]
+    if not trade_order_kinds and not fund_kinds:
         return 0
-    streams = connector.history_stream_keys(await active_symbols(db, account))
+
     total = 0
-    for data_kind in kinds:
-        for stream_key in streams:
-            try:
-                total += await sync_stream(db, connector, account, data_kind, stream_key)
-            except AccountError:
-                raise  # no usable credential — pointless to try other streams
-            except Exception:
-                logger.exception(
-                    "History sync failed for %s account %s stream %s/%s",
-                    account.exchange, account.id, data_kind, stream_key,
-                )
+    if trade_order_kinds:
+        streams = connector.history_stream_keys(await active_symbols(db, account))
+        for data_kind in trade_order_kinds:
+            for stream_key in streams:
+                try:
+                    total += await sync_stream(
+                        db, connector, account, data_kind, stream_key
+                    )
+                except AccountError:
+                    raise  # no usable credential — pointless to try other streams
+                except Exception:
+                    logger.exception(
+                        "History sync failed for %s account %s stream %s/%s",
+                        account.exchange, account.id, data_kind, stream_key,
+                    )
+    if fund_kinds:
+        for data_kind in fund_kinds:
+            for stream_key in connector.fund_history_stream_keys():
+                try:
+                    total += await sync_stream(
+                        db, connector, account, data_kind, stream_key
+                    )
+                except AccountError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "History sync failed for %s account %s stream %s/%s",
+                        account.exchange, account.id, data_kind, stream_key,
+                    )
     return total
 
 
@@ -288,7 +450,8 @@ def _apply_filters(
     *,
     exchange: str | None,
     account_id: int | None,
-    universal_symbol: str | None,
+    universal_symbol: str | None = None,
+    asset: str | None = None,
     start: datetime | None,
     end: datetime | None,
     time_column,
@@ -299,6 +462,8 @@ def _apply_filters(
         query = query.where(model.account_id == account_id)
     if universal_symbol:
         query = query.where(model.universal_symbol == universal_symbol)
+    if asset:
+        query = query.where(model.asset == asset.upper())
     if start is not None:
         query = query.where(time_column >= start)
     if end is not None:
@@ -361,6 +526,75 @@ async def list_order_history(
         await db.execute(
             _apply_filters(select(OrderHistory), OrderHistory, **filters)
             .order_by(OrderHistory.placed_at.desc().nullslast(), OrderHistory.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    ).scalars()
+    return total, list(rows)
+
+
+async def list_deposits(
+    db: AsyncSession,
+    *,
+    exchange: str | None = None,
+    account_id: int | None = None,
+    asset: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[int, list[DepositHistory]]:
+    filters = dict(
+        exchange=exchange, account_id=account_id, asset=asset,
+        start=start, end=end, time_column=DepositHistory.created_at,
+    )
+    total = (
+        await db.execute(
+            _apply_filters(select(func.count(DepositHistory.id)), DepositHistory, **filters)
+        )
+    ).scalar_one()
+    rows = (
+        await db.execute(
+            _apply_filters(select(DepositHistory), DepositHistory, **filters)
+            .order_by(
+                DepositHistory.created_at.desc().nullslast(), DepositHistory.id.desc()
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+    ).scalars()
+    return total, list(rows)
+
+
+async def list_withdrawals(
+    db: AsyncSession,
+    *,
+    exchange: str | None = None,
+    account_id: int | None = None,
+    asset: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[int, list[WithdrawalHistory]]:
+    filters = dict(
+        exchange=exchange, account_id=account_id, asset=asset,
+        start=start, end=end, time_column=WithdrawalHistory.created_at,
+    )
+    total = (
+        await db.execute(
+            _apply_filters(
+                select(func.count(WithdrawalHistory.id)), WithdrawalHistory, **filters
+            )
+        )
+    ).scalar_one()
+    rows = (
+        await db.execute(
+            _apply_filters(select(WithdrawalHistory), WithdrawalHistory, **filters)
+            .order_by(
+                WithdrawalHistory.created_at.desc().nullslast(),
+                WithdrawalHistory.id.desc(),
+            )
             .limit(limit)
             .offset(offset)
         )

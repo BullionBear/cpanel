@@ -7,7 +7,13 @@ no pydantic, no network clients.
 from app.models.base import Base
 from app.models.account import Account, ApiCredential
 from app.models.audit_log import AuditLog
-from app.models.history import OrderHistory, SyncCursor, TradeHistory
+from app.models.history import (
+    DepositHistory,
+    OrderHistory,
+    SyncCursor,
+    TradeHistory,
+    WithdrawalHistory,
+)
 from app.models.job_run import JobRun
 from app.models.order import Order
 from app.models.snapshot import BalanceSnapshot, PositionSnapshot
@@ -21,9 +27,11 @@ __all__ = [
     "AuditLog",
     "JobRun",
     "Order",
+    "DepositHistory",
     "OrderHistory",
     "SyncCursor",
     "TradeHistory",
+    "WithdrawalHistory",
     "BalanceSnapshot",
     "PositionSnapshot",
     "Transfer",

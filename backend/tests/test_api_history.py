@@ -65,9 +65,19 @@ async def test_requires_auth(session_factory):
 
 
 async def test_sync_then_explore(client):
+    # Seed venue deposit/withdrawal history (exchange-sourced, not panel transfers).
+    from app.connectors.registry import connectors
+
+    fake = connectors.get("FAKE")
+    fake.credit_deposit("USDT", Decimal("25"), tx_id="0xd")
+    wd = await fake.withdraw(
+        CRED, "USDT", Decimal("10"), address="TExternal", network="TRX"
+    )
+    fake.complete_withdrawal(wd.native_id, tx_id="0xw", fee=Decimal("0.5"))
+
     resp = await client.post(f"/history/sync/{client.account_id}")
     assert resp.status_code == 200
-    assert resp.json()["ingested"] == 2  # 1 trade + 1 order
+    assert resp.json()["ingested"] == 4  # 1 trade + 1 order + 1 deposit + 1 withdrawal
 
     trades = (await client.get("/history/trades")).json()
     assert trades["total"] == 1
@@ -79,9 +89,21 @@ async def test_sync_then_explore(client):
     assert orders["total"] == 1
     assert orders["items"][0]["status"] == "FILLED"
 
+    deposits = (await client.get("/history/deposits")).json()
+    assert deposits["total"] == 1
+    assert deposits["items"][0]["asset"] == "USDT"
+    assert Decimal(deposits["items"][0]["amount"]) == Decimal("25")
+
+    withdrawals = (await client.get("/history/withdrawals")).json()
+    assert withdrawals["total"] == 1
+    assert withdrawals["items"][0]["status"] == "COMPLETED"
+    assert Decimal(withdrawals["items"][0]["fee"]) == Decimal("0.5")
+
     # Filters narrow, unknown values exclude.
     assert (await client.get("/history/trades", params={"exchange": "FAKE"})).json()["total"] == 1
     assert (await client.get("/history/trades", params={"universal_symbol": "NOPE"})).json()["total"] == 0
+    assert (await client.get("/history/deposits", params={"asset": "USDT"})).json()["total"] == 1
+    assert (await client.get("/history/deposits", params={"asset": "BTC"})).json()["total"] == 0
 
 
 async def test_stream_health_listed(client):
@@ -90,6 +112,8 @@ async def test_stream_health_listed(client):
     assert {(s["data_kind"], s["stream_key"]) for s in streams} == {
         ("trades", "account"),
         ("orders", "account"),
+        ("deposits", "account"),
+        ("withdrawals", "account"),
     }
     for stream in streams:
         assert stream["account_id"] == client.account_id

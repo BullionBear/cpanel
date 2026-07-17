@@ -215,6 +215,25 @@ class FakeConnector(ExchangeConnector):
         end = start + len(items)
         return Page(items=items, next_cursor=str(end) if end < len(orders) else None)
 
+    async def fetch_deposits_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        start = int(cursor) if cursor else 0
+        items = self.deposits[start:start + 100]
+        end = start + len(items)
+        return Page(items=items, next_cursor=str(end) if end < len(self.deposits) else None)
+
+    async def fetch_withdrawals_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        withdrawals = sorted(self.withdrawals.values(), key=lambda w: w.native_id)
+        start = int(cursor) if cursor else 0
+        items = withdrawals[start:start + 100]
+        end = start + len(items)
+        return Page(
+            items=items, next_cursor=str(end) if end < len(withdrawals) else None
+        )
+
     # -- accounts and provisioning -----------------------------------------
 
     async def verify_credential(self, credential: Credential) -> CredentialInfo:
@@ -355,6 +374,7 @@ class FakeConnector(ExchangeConnector):
             status=WithdrawalStatus.PENDING,
             address=address,
             network=network,
+            created_at=datetime.now(timezone.utc),
         )
         self.withdrawals[withdrawal.native_id] = withdrawal
         return withdrawal
@@ -393,6 +413,7 @@ class FakeConnector(ExchangeConnector):
         tx_id: str | None = None,
     ) -> Deposit:
         """Test hook: a deposit arrived and credited on the venue."""
+        now = datetime.now(timezone.utc)
         deposit = Deposit(
             native_id=f"dep-{next(self._ids)}",
             asset=asset,
@@ -400,7 +421,8 @@ class FakeConnector(ExchangeConnector):
             status=DepositStatus.CREDITED,
             network=network,
             tx_id=tx_id,
-            credited_at=datetime.now(timezone.utc),
+            credited_at=now,
+            created_at=now,
         )
         self.deposits.append(deposit)
         return deposit

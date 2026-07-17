@@ -474,8 +474,24 @@ def test_normalize_deposit_record_statuses():
     assert credited.status == DepositStatus.CREDITED
     assert credited.native_id == "0xabc"
     assert credited.credited_at is not None
+    assert credited.created_at is not None
+    # Prefer venue unique id when present.
+    with_id = normalize_deposit_record(
+        {**base, "id": "160237231", "status": 3, "successAt": "1700000000000"}
+    )
+    assert with_id.native_id == "160237231"
     assert normalize_deposit_record({**base, "status": 2}).status == DepositStatus.PENDING
     assert normalize_deposit_record({**base, "status": 4}).status == DepositStatus.FAILED
+
+
+def test_normalize_withdrawal_record_created_at():
+    raw = {
+        "withdrawId": "10195", "coin": "USDT", "amount": "100",
+        "toAddress": "TAbc", "chain": "TRX", "withdrawFee": "1",
+        "status": "success", "createTime": "1700000000000",
+    }
+    withdrawal = normalize_withdrawal_record(raw)
+    assert withdrawal.created_at is not None
 
 
 async def test_internal_transfer_between_wallets(monkeypatch):

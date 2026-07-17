@@ -1,9 +1,10 @@
 """History explorer endpoints.
 
-Reads serve the locally ingested ``trade_history`` / ``order_history`` tables
-(never a live venue call). ``/history/streams`` exposes per-stream sync
-health from the cursor table; the on-demand sync trigger is audited like
-every other state-changing operation.
+Reads serve the locally ingested history tables (trades, orders, deposits,
+withdrawals) — never a live venue call. Rows are filled by syncing venue
+history endpoints. ``/history/streams`` exposes per-stream sync health from
+the cursor table; the on-demand sync trigger is audited like every other
+state-changing operation.
 """
 from datetime import datetime
 from decimal import Decimal
@@ -63,6 +64,42 @@ class OrderHistoryOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DepositHistoryOut(BaseModel):
+    id: int
+    account_id: int
+    exchange: str
+    native_deposit_id: str
+    asset: str
+    amount: Decimal
+    status: str
+    network: str | None
+    tx_id: str | None
+    credited_at: datetime | None
+    created_at: datetime | None
+    ingested_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class WithdrawalHistoryOut(BaseModel):
+    id: int
+    account_id: int
+    exchange: str
+    native_withdrawal_id: str
+    asset: str
+    amount: Decimal
+    status: str
+    address: str | None
+    network: str | None
+    tx_id: str | None
+    fee: Decimal | None
+    fee_asset: str | None
+    created_at: datetime | None
+    ingested_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class TradePage(BaseModel):
     total: int
     items: list[TradeOut]
@@ -71,6 +108,16 @@ class TradePage(BaseModel):
 class OrderHistoryPage(BaseModel):
     total: int
     items: list[OrderHistoryOut]
+
+
+class DepositHistoryPage(BaseModel):
+    total: int
+    items: list[DepositHistoryOut]
+
+
+class WithdrawalHistoryPage(BaseModel):
+    total: int
+    items: list[WithdrawalHistoryOut]
 
 
 class StreamOut(BaseModel):
@@ -149,6 +196,58 @@ async def list_order_history(
     )
     return OrderHistoryPage(
         total=total, items=[OrderHistoryOut.model_validate(r) for r in rows]
+    )
+
+
+@router.get("/deposits", response_model=DepositHistoryPage)
+async def list_deposits(
+    exchange: str | None = None,
+    account_id: int | None = None,
+    asset: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    total, rows = await svc.list_deposits(
+        db,
+        exchange=exchange,
+        account_id=account_id,
+        asset=asset,
+        start=start,
+        end=end,
+        limit=limit,
+        offset=offset,
+    )
+    return DepositHistoryPage(
+        total=total, items=[DepositHistoryOut.model_validate(r) for r in rows]
+    )
+
+
+@router.get("/withdrawals", response_model=WithdrawalHistoryPage)
+async def list_withdrawals(
+    exchange: str | None = None,
+    account_id: int | None = None,
+    asset: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    total, rows = await svc.list_withdrawals(
+        db,
+        exchange=exchange,
+        account_id=account_id,
+        asset=asset,
+        start=start,
+        end=end,
+        limit=limit,
+        offset=offset,
+    )
+    return WithdrawalHistoryPage(
+        total=total, items=[WithdrawalHistoryOut.model_validate(r) for r in rows]
     )
 
 

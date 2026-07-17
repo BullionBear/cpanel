@@ -554,6 +554,7 @@ def normalize_withdrawal_record(raw: dict) -> Withdrawal:
     tx_id = raw.get("txid") or None
     if status == WithdrawalStatus.PENDING and tx_id:
         status = WithdrawalStatus.SENT
+    created_at = _epoch_s(raw.get("timestamp"))
     return Withdrawal(
         native_id=str(raw.get("id", "")),
         asset=raw.get("currency") or "",
@@ -563,12 +564,14 @@ def normalize_withdrawal_record(raw: dict) -> Withdrawal:
         network=(raw.get("chain") or None) and str(raw["chain"]).upper(),
         tx_id=tx_id,
         fee=_opt_dec(raw.get("fee")),
+        created_at=created_at,
     )
 
 
 def normalize_deposit_record(raw: dict) -> Deposit:
     """A /wallet/deposits row → normalized Deposit."""
     status = _DEPOSIT_STATUS.get(str(raw.get("status") or "").upper(), DepositStatus.PENDING)
+    created_at = _epoch_s(raw.get("timestamp"))
     return Deposit(
         native_id=str(raw.get("id") or raw.get("txid") or ""),
         asset=raw.get("currency") or "",
@@ -576,7 +579,8 @@ def normalize_deposit_record(raw: dict) -> Deposit:
         status=status,
         network=(raw.get("chain") or None) and str(raw["chain"]).upper(),
         tx_id=raw.get("txid") or None,
-        credited_at=_epoch_s(raw.get("timestamp")) if status == DepositStatus.CREDITED else None,
+        credited_at=created_at if status == DepositStatus.CREDITED else None,
+        created_at=created_at,
     )
 
 
@@ -1479,28 +1483,52 @@ class GateIOConnector(ExchangeConnector):
         )
 
     async def _fetch_withdrawal_rows(
-        self, credential: Credential, native_id: str
+        self,
+        credential: Credential,
+        *,
+        native_id: str | None = None,
+        start_s: int | None = None,
+        end_s: int | None = None,
+        limit: int = 100,
+        offset: int = 0,
     ) -> list[dict]:
+        kwargs: dict = {"limit": limit}
+        if native_id is not None:
+            kwargs["withdraw_id"] = native_id
+        if start_s is not None:
+            kwargs["_from"] = start_s
+        if end_s is not None:
+            kwargs["to"] = end_s
+        if offset:
+            kwargs["offset"] = offset
         return dump_gate_model(
-            await self._call(
-                self._wallet(credential).list_withdrawals, withdraw_id=native_id
-            )
+            await self._call(self._wallet(credential).list_withdrawals, **kwargs)
         )
 
     async def fetch_withdrawal(
         self, credential: Credential, native_id: str
     ) -> Withdrawal | None:
-        rows = await self._fetch_withdrawal_rows(credential, native_id)
+        rows = await self._fetch_withdrawal_rows(credential, native_id=native_id)
         return normalize_withdrawal_record(rows[0]) if rows else None
 
     async def _fetch_deposit_rows(
-        self, credential: Credential, asset: str | None, start_s: int | None
+        self,
+        credential: Credential,
+        asset: str | None,
+        start_s: int | None,
+        end_s: int | None = None,
+        limit: int = 100,
+        offset: int = 0,
     ) -> list[dict]:
-        kwargs: dict = {"limit": 100}
+        kwargs: dict = {"limit": limit}
         if asset:
             kwargs["currency"] = asset.upper()
         if start_s is not None:
             kwargs["_from"] = start_s
+        if end_s is not None:
+            kwargs["to"] = end_s
+        if offset:
+            kwargs["offset"] = offset
         return dump_gate_model(
             await self._call(self._wallet(credential).list_deposits, **kwargs)
         )
@@ -1520,3 +1548,40 @@ class GateIOConnector(ExchangeConnector):
         start_s = int(since.timestamp()) if since else None
         rows = await self._fetch_deposit_rows(credential, asset, start_s)
         return [normalize_deposit_record(raw) for raw in rows]
+
+    _FUND_HISTORY_LIMIT = 100
+
+    async def _fund_history_page(
+        self, credential: Credential, cursor: str | None, *, kind: str
+    ) -> Page:
+        start_ms, end_ms, now_ms, skip = self._history_window(cursor)
+        if start_ms >= now_ms:
+            return Page(items=[], next_cursor=None)
+        limit = self._FUND_HISTORY_LIMIT
+        start_s, end_s = start_ms // 1000, end_ms // 1000
+        if kind == "deposits":
+            rows = await self._fetch_deposit_rows(
+                credential, None, start_s, end_s=end_s, limit=limit, offset=skip
+            )
+            items = [normalize_deposit_record(raw) for raw in rows]
+        else:
+            rows = await self._fetch_withdrawal_rows(
+                credential, start_s=start_s, end_s=end_s, limit=limit, offset=skip
+            )
+            items = [normalize_withdrawal_record(raw) for raw in rows]
+        return Page(
+            items=items,
+            next_cursor=self._next_history_cursor(
+                start_ms, end_ms, now_ms, skip, len(rows), limit
+            ),
+        )
+
+    async def fetch_deposits_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        return await self._fund_history_page(credential, cursor, kind="deposits")
+
+    async def fetch_withdrawals_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        return await self._fund_history_page(credential, cursor, kind="withdrawals")

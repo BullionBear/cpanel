@@ -34,6 +34,38 @@ export interface OrderHistoryRow {
 	ingested_at: string;
 }
 
+export interface DepositHistoryRow {
+	id: number;
+	account_id: number;
+	exchange: string;
+	native_deposit_id: string;
+	asset: string;
+	amount: string;
+	status: string;
+	network: string | null;
+	tx_id: string | null;
+	credited_at: string | null;
+	created_at: string | null;
+	ingested_at: string;
+}
+
+export interface WithdrawalHistoryRow {
+	id: number;
+	account_id: number;
+	exchange: string;
+	native_withdrawal_id: string;
+	asset: string;
+	amount: string;
+	status: string;
+	address: string | null;
+	network: string | null;
+	tx_id: string | null;
+	fee: string | null;
+	fee_asset: string | null;
+	created_at: string | null;
+	ingested_at: string;
+}
+
 export interface StreamHealth {
 	account_id: number;
 	account_label: string;
@@ -55,6 +87,12 @@ export const fetchTrades = (params: Record<string, string> = {}) =>
 
 export const fetchOrderHistory = (params: Record<string, string> = {}) =>
 	apiGet<Page<OrderHistoryRow>>('/history/orders', params);
+
+export const fetchDepositHistory = (params: Record<string, string> = {}) =>
+	apiGet<Page<DepositHistoryRow>>('/history/deposits', params);
+
+export const fetchWithdrawalHistory = (params: Record<string, string> = {}) =>
+	apiGet<Page<WithdrawalHistoryRow>>('/history/withdrawals', params);
 
 export const fetchStreams = (params: Record<string, string> = {}) =>
 	apiGet<StreamHealth[]>('/history/streams', params);
