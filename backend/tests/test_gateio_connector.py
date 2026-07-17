@@ -980,6 +980,46 @@ async def test_verify_invalid_when_fallback_also_fails(monkeypatch):
     assert "Signature mismatch" in info.reason
 
 
+def test_gate_login_name_sanitizes_and_suffixes():
+    from app.connectors.gateio import _gate_login_name
+
+    name = _gate_login_name("mm-01")
+    assert name.startswith("mm_01_")
+    assert name.replace("_", "").isalnum()
+    # Two calls must not collide — Gate login names are globally unique.
+    assert _gate_login_name("prom") != _gate_login_name("prom")
+
+
+async def test_create_subaccount_uses_unique_login_keeps_remark(monkeypatch):
+    c = GateIOConnector()
+    captured = {}
+
+    async def call(func, *args, **kwargs):
+        body = args[0]
+        captured["login_name"] = body.login_name
+        captured["remark"] = body.remark
+        return {"user_id": 10099, "login_name": body.login_name, "remark": body.remark}
+
+    monkeypatch.setattr(c, "_call", call)
+    sub = await c.create_subaccount({"api_key": "k", "secret": "s"}, "prom")
+    assert sub.native_uid == "10099"
+    assert sub.label == "prom"  # panel label, not the Gate username
+    assert captured["remark"] == "prom"
+    assert captured["login_name"].startswith("prom_")
+    assert captured["login_name"] != "prom"
+
+
+async def test_create_subaccount_surfaces_venue_rejection(monkeypatch):
+    c = GateIOConnector()
+
+    async def call(func, *args, **kwargs):
+        raise _gate_error(400, "OPERATION_ERROR", "Username is taken. Please use another one")
+
+    monkeypatch.setattr(c, "_call", call)
+    with pytest.raises(ValueError, match="Username is taken"):
+        await c.create_subaccount({"api_key": "k", "secret": "s"}, "prom")
+
+
 async def test_list_subaccounts(monkeypatch):
     c = GateIOConnector()
 

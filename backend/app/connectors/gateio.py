@@ -32,7 +32,10 @@ Design decisions and venue quirks:
   with page (spot) or offset (futures) pagination, so the cursor is a JSON
   pair ``{"start": epoch_ms, "skip": rows_consumed_in_window}``; the
   window slides forward 24h once its pages are exhausted.
-- **Provisioning** is full self-service. The SDK's ``SubAccountKey``
+- **Provisioning** is full self-service. Subaccount ``login_name`` values
+  are globally unique on Gate and restricted to ``[A-Za-z0-9_]``, so
+  ``create_subaccount`` derives a suffixed username from the panel label
+  and stores the original label in ``remark``. The SDK's ``SubAccountKey``
   model drops the one-time ``secret`` returned on key creation, so
   ``create_api_key`` reads the raw HTTP response instead. Created keys
   always get the ``account`` read permission on top of the requested
@@ -49,6 +52,8 @@ Design decisions and venue quirks:
 import asyncio
 import json
 import logging
+import re
+import secrets
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -156,6 +161,17 @@ _DEPOSIT_STATUS = {
 # GateApiException labels that mean "this account/surface does not exist
 # yet" (e.g. futures never opened) rather than a real failure.
 _EMPTY_ACCOUNT_LABELS = {"USER_NOT_FOUND", "CONTRACT_NOT_FOUND", "POSITION_NOT_FOUND"}
+
+# Gate login_name: letters, digits, underscore only; globally unique across
+# the venue, so panel labels like "prom" collide unless we suffix them.
+_LOGIN_NAME_RE = re.compile(r"[^A-Za-z0-9_]+")
+_LOGIN_NAME_MAX = 28  # leave room for "_" + 6 hex chars
+
+
+def _gate_login_name(label: str) -> str:
+    base = _LOGIN_NAME_RE.sub("_", label).strip("_") or "sub"
+    base = base[:_LOGIN_NAME_MAX]
+    return f"{base}_{secrets.token_hex(3)}"
 
 
 def _configuration(key: str | None = None, secret: str | None = None) -> gate_api.Configuration:
@@ -1185,14 +1201,20 @@ class GateIOConnector(ExchangeConnector):
         ]
 
     async def create_subaccount(self, credential: Credential, label: str) -> SubaccountInfo:
-        body = gate_api.SubAccount(login_name=label, remark=label)
-        row = dump_gate_model(
-            await self._call(self._sub_api(credential).create_sub_accounts, body)
-        )
+        # Gate's login_name is a globally unique username (letters/digits/_ only).
+        # Keep the panel label in remark so listing/display still uses it.
+        body = gate_api.SubAccount(login_name=_gate_login_name(label), remark=label)
+        try:
+            row = dump_gate_model(
+                await self._call(self._sub_api(credential).create_sub_accounts, body)
+            )
+        except GateApiException as exc:
+            raise ValueError(exc.message or "Gate.io rejected subaccount creation") from exc
         return SubaccountInfo(
             native_uid=str(row.get("user_id", "")),
-            label=row.get("remark") or row.get("login_name") or label,
+            label=label,
             status="normal",
+            raw=row,
         )
 
     async def set_subaccount_frozen(

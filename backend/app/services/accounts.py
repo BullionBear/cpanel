@@ -261,7 +261,15 @@ async def create_subaccount(
 ) -> Account:
     """Create a subaccount on the venue and register it locally."""
     master = await get_active_credential(db, account)
-    sub = await connector.create_subaccount(decrypt_credential(master), label)
+    try:
+        sub = await connector.create_subaccount(decrypt_credential(master), label)
+    except AccountError:
+        raise
+    except Exception as exc:
+        # Venue SDKs raise their own types (GateApiException, …); surface the
+        # clean message as a client error instead of a 500.
+        message = getattr(exc, "message", None) or str(exc)
+        raise AccountError(str(message).strip() or "Venue rejected subaccount creation") from exc
     row = Account(
         exchange=account.exchange,
         label=sub.label,
