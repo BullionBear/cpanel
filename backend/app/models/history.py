@@ -1,25 +1,28 @@
-"""History ingestion: trade/order/deposit/withdrawal history and sync cursors.
+"""History ingestion: trade/order/deposit/withdrawal/funding history and cursors.
 
 ``trade_history`` and ``order_history`` are written by **upsert** keyed by
 ``(account, universal_symbol, native id)`` — venue ids are only guaranteed
 unique per symbol on some exchanges (Binance), so the symbol is part of the
-key. ``deposit_history`` / ``withdrawal_history`` are keyed by
-``(account, native id)`` — fund movements are account-wide, not per symbol.
-Re-fetching an overlapping window can never create duplicates, which is
-what makes every sync job idempotent (ARCHITECTURE.md "History Ingestion").
+key. ``deposit_history`` / ``withdrawal_history`` / ``funding_fee_history``
+are keyed by ``(account, native id)`` — fund movements and funding
+settlements are account-wide (funding streams may still be sharded by
+derivatives surface). Re-fetching an overlapping window can never create
+duplicates, which is what makes every sync job idempotent
+(ARCHITECTURE.md "History Ingestion").
 
-All four tables are filled from **venue history endpoints**, not from
+All five tables are filled from **venue history endpoints**, not from
 panel-orchestrated transfer rows.
 
 ``sync_cursor`` records ingestion progress per ``(account, data kind,
 stream key)``. The stream key exists because venues shard their history
 endpoints differently: Binance queries trades/orders per symbol (one stream
 per active symbol), Bybit per account-wide category; deposit/withdrawal
-streams are account-wide on every venue. The cursor value is opaque here —
-the connector defines its meaning (a timestamp, a trade id, or a native
-pagination token). A stream with no cursor row yet is *new*: the sync worker
-seeds it three days in the past so a freshly connected account backfills its
-recent history before incremental sync takes over.
+streams are account-wide on every venue; funding-fee streams are per
+derivatives surface (um/cm, linear/inverse, settle). The cursor value is
+opaque here — the connector defines its meaning (a timestamp, a trade id,
+or a native pagination token). A stream with no cursor row yet is *new*:
+the sync worker seeds it three days in the past so a freshly connected
+account backfills its recent history before incremental sync takes over.
 """
 from datetime import datetime
 from decimal import Decimal
@@ -196,6 +199,42 @@ class WithdrawalHistory(Base):
     )
 
 
+class FundingFeeHistory(Base):
+    """Perpetual funding settlements as reported by the venue's income /
+    transaction-log / account-book endpoints.
+
+    ``amount`` is signed: positive = received funding, negative = paid.
+    """
+
+    __tablename__ = "funding_fee_history"
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id", "native_funding_id",
+            name="uq_funding_fee_history_account_native",
+        ),
+        Index("ix_funding_fee_history_account_settled", "account_id", "settled_at"),
+        Index("ix_funding_fee_history_account_symbol", "account_id", "universal_symbol"),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPk, primary_key=True, autoincrement=True)
+
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("account.id"), nullable=False, index=True
+    )
+    exchange: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    universal_symbol: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
+    native_funding_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    asset: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    amount: Mapped[Decimal] = mapped_column(Num, nullable=False)
+    funding_rate: Mapped[Decimal | None] = mapped_column(Num)
+
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class SyncCursor(Base):
     __tablename__ = "sync_cursor"
     __table_args__ = (
@@ -211,7 +250,7 @@ class SyncCursor(Base):
         ForeignKey("account.id"), nullable=False, index=True
     )
     exchange: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    # trades | orders | deposits | withdrawals
+    # trades | orders | deposits | withdrawals | funding
     data_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     stream_key: Mapped[str] = mapped_column(String(80), nullable=False)
 

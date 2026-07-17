@@ -9,6 +9,7 @@ from app.models.account import Account, ApiCredential
 from app.models.audit_log import AuditLog
 from app.models.history import (
     DepositHistory,
+    FundingFeeHistory,
     OrderHistory,
     SyncCursor,
     TradeHistory,
@@ -28,6 +29,7 @@ __all__ = [
     "JobRun",
     "Order",
     "DepositHistory",
+    "FundingFeeHistory",
     "OrderHistory",
     "SyncCursor",
     "TradeHistory",

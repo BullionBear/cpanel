@@ -17,7 +17,8 @@ streams for trades/orders; Binance returns one stream per *active* symbol,
 where activity is derived from panel orders, previously ingested order
 history, and snapshotted positions (querying every listed instrument would
 waste the rate budget on thousands of empty calls). Deposit and withdrawal
-history is always account-wide (``fund_history_stream_keys``).
+history is always account-wide (``fund_history_stream_keys``). Funding-fee
+history is per derivatives surface (``funding_history_stream_keys``).
 """
 import logging
 from datetime import datetime, timezone
@@ -32,6 +33,7 @@ from app.connectors.base import (
 )
 from app.connectors.types import (
     Deposit as ConnDeposit,
+    FundingFee as ConnFundingFee,
     Order as ConnOrder,
     Trade as ConnTrade,
     Withdrawal as ConnWithdrawal,
@@ -39,6 +41,7 @@ from app.connectors.types import (
 from app.models.account import Account
 from app.models.history import (
     DepositHistory,
+    FundingFeeHistory,
     OrderHistory,
     SyncCursor,
     TradeHistory,
@@ -61,13 +64,14 @@ __all__ = [
     "list_order_history",
     "list_deposits",
     "list_withdrawals",
+    "list_funding_fees",
     "list_sync_cursors",
 ]
 
 # New accounts (streams without a cursor yet) backfill this far first.
 NEW_STREAM_BACKFILL = DEFAULT_HISTORY_BACKFILL
 
-DATA_KINDS = ("trades", "orders", "deposits", "withdrawals")
+DATA_KINDS = ("trades", "orders", "deposits", "withdrawals", "funding")
 
 # Pages ingested per stream per run. Bounds one scheduler tick; the next run
 # resumes from the stored cursor, so a large backlog just takes several runs.
@@ -324,11 +328,54 @@ async def _upsert_withdrawals(
     return changed
 
 
+async def _upsert_funding_fees(
+    db: AsyncSession, account: Account, fees: list[ConnFundingFee]
+) -> int:
+    """Insert funding settlements not seen before. Settlements are immutable."""
+    if not fees:
+        return 0
+    fees = [f for f in fees if f.native_id]
+    if not fees:
+        return 0
+    existing: set[str] = set(
+        (
+            await db.execute(
+                select(FundingFeeHistory.native_funding_id).where(
+                    FundingFeeHistory.account_id == account.id,
+                    FundingFeeHistory.native_funding_id.in_(
+                        {f.native_id for f in fees}
+                    ),
+                )
+            )
+        ).scalars()
+    )
+    written = 0
+    for fee in fees:
+        if fee.native_id in existing:
+            continue
+        existing.add(fee.native_id)
+        db.add(
+            FundingFeeHistory(
+                account_id=account.id,
+                exchange=account.exchange,
+                universal_symbol=fee.universal_symbol,
+                native_funding_id=fee.native_id,
+                asset=fee.asset,
+                amount=fee.amount,
+                funding_rate=fee.funding_rate,
+                settled_at=fee.settled_at,
+            )
+        )
+        written += 1
+    return written
+
+
 _FETCHERS = {
     "trades": "fetch_trades",
     "orders": "fetch_orders_history",
     "deposits": "fetch_deposits_history",
     "withdrawals": "fetch_withdrawals_history",
+    "funding": "fetch_funding_fees_history",
 }
 
 _UPSERTERS = {
@@ -336,6 +383,7 @@ _UPSERTERS = {
     "orders": _upsert_orders,
     "deposits": _upsert_deposits,
     "withdrawals": _upsert_withdrawals,
+    "funding": _upsert_funding_fees,
 }
 
 
@@ -406,7 +454,10 @@ async def sync_account_history(
         )
         if connector.supports(capability)
     ]
-    if not trade_order_kinds and not fund_kinds:
+    funding_kinds = (
+        ["funding"] if connector.supports(Capability.FUNDING_HISTORY) else []
+    )
+    if not trade_order_kinds and not fund_kinds and not funding_kinds:
         return 0
 
     total = 0
@@ -428,6 +479,20 @@ async def sync_account_history(
     if fund_kinds:
         for data_kind in fund_kinds:
             for stream_key in connector.fund_history_stream_keys():
+                try:
+                    total += await sync_stream(
+                        db, connector, account, data_kind, stream_key
+                    )
+                except AccountError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "History sync failed for %s account %s stream %s/%s",
+                        account.exchange, account.id, data_kind, stream_key,
+                    )
+    if funding_kinds:
+        for data_kind in funding_kinds:
+            for stream_key in connector.funding_history_stream_keys():
                 try:
                     total += await sync_stream(
                         db, connector, account, data_kind, stream_key
@@ -594,6 +659,48 @@ async def list_withdrawals(
             .order_by(
                 WithdrawalHistory.created_at.desc().nullslast(),
                 WithdrawalHistory.id.desc(),
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+    ).scalars()
+    return total, list(rows)
+
+
+async def list_funding_fees(
+    db: AsyncSession,
+    *,
+    exchange: str | None = None,
+    account_id: int | None = None,
+    universal_symbol: str | None = None,
+    asset: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[int, list[FundingFeeHistory]]:
+    filters = dict(
+        exchange=exchange,
+        account_id=account_id,
+        universal_symbol=universal_symbol,
+        asset=asset,
+        start=start,
+        end=end,
+        time_column=FundingFeeHistory.settled_at,
+    )
+    total = (
+        await db.execute(
+            _apply_filters(
+                select(func.count(FundingFeeHistory.id)), FundingFeeHistory, **filters
+            )
+        )
+    ).scalar_one()
+    rows = (
+        await db.execute(
+            _apply_filters(select(FundingFeeHistory), FundingFeeHistory, **filters)
+            .order_by(
+                FundingFeeHistory.settled_at.desc().nullslast(),
+                FundingFeeHistory.id.desc(),
             )
             .limit(limit)
             .offset(offset)

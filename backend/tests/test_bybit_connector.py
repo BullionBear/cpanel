@@ -11,6 +11,7 @@ from app.connectors.bybit import (
     normalize_asset_networks,
     normalize_deposit_record,
     normalize_fund_balances,
+    normalize_funding_fee,
     normalize_instrument,
     normalize_positions,
     normalize_trade,
@@ -464,6 +465,30 @@ def test_normalize_withdrawal_record_statuses():
         == WithdrawalStatus.FAILED
     assert normalize_withdrawal_record({**base, "status": "SecurityCheck"}).status \
         == WithdrawalStatus.PENDING
+
+
+def test_normalize_funding_fee():
+    fee = normalize_funding_fee(
+        {
+            "id": "tx-1",
+            "symbol": "ETHUSDT",
+            "currency": "USDT",
+            "funding": "-1.25",
+            "feeRate": "0.0001",
+            "transactionTime": "1700000000000",
+            "type": "SETTLEMENT",
+        },
+        "BYBIT_PERP_ETHUSDT",
+    )
+    assert fee.native_id == "tx-1"
+    assert fee.amount == Decimal("-1.25")
+    assert fee.funding_rate == Decimal("0.0001")
+    assert fee.asset == "USDT"
+    assert fee.settled_at is not None
+
+
+def test_funding_history_stream_keys():
+    assert BybitConnector().funding_history_stream_keys() == ["linear", "inverse"]
 
 
 def test_normalize_deposit_record_statuses():

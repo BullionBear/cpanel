@@ -66,6 +66,19 @@ export interface WithdrawalHistoryRow {
 	ingested_at: string;
 }
 
+export interface FundingFeeHistoryRow {
+	id: number;
+	account_id: number;
+	exchange: string;
+	universal_symbol: string;
+	native_funding_id: string;
+	asset: string;
+	amount: string;
+	funding_rate: string | null;
+	settled_at: string | null;
+	ingested_at: string;
+}
+
 export interface StreamHealth {
 	account_id: number;
 	account_label: string;
@@ -93,6 +106,9 @@ export const fetchDepositHistory = (params: Record<string, string> = {}) =>
 
 export const fetchWithdrawalHistory = (params: Record<string, string> = {}) =>
 	apiGet<Page<WithdrawalHistoryRow>>('/history/withdrawals', params);
+
+export const fetchFundingFeeHistory = (params: Record<string, string> = {}) =>
+	apiGet<Page<FundingFeeHistoryRow>>('/history/funding', params);
 
 export const fetchStreams = (params: Record<string, string> = {}) =>
 	apiGet<StreamHealth[]>('/history/streams', params);

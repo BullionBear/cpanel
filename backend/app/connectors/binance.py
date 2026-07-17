@@ -25,8 +25,14 @@ from binance_common.configuration import ConfigurationRestAPI
 from binance_sdk_derivatives_trading_coin_futures.derivatives_trading_coin_futures import (
     DerivativesTradingCoinFutures,
 )
+from binance_sdk_derivatives_trading_coin_futures.rest_api.models.enums import (
+    GetIncomeHistoryIncomeTypeEnum as CmIncomeType,
+)
 from binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futures import (
     DerivativesTradingUsdsFutures,
+)
+from binance_sdk_derivatives_trading_usds_futures.rest_api.models.enums import (
+    GetIncomeHistoryIncomeTypeEnum as UmIncomeType,
 )
 from binance_sdk_spot.spot import Spot
 from binance_sdk_sub_account.sub_account import SubAccount
@@ -48,6 +54,7 @@ from app.connectors.types import (
     Deposit,
     DepositAddress,
     DepositStatus,
+    FundingFee,
     Instrument,
     InstrumentFilters,
     MarketType,
@@ -495,6 +502,25 @@ def normalize_deposit(raw: dict) -> Deposit:
     )
 
 
+def normalize_funding_fee(
+    raw: dict, universal_symbol: str, *, stream_key: str
+) -> FundingFee:
+    """A futures income row (incomeType=FUNDING_FEE) → FundingFee.
+
+    ``tranId`` is unique per income type on one surface; prefix with the
+    stream key so UM/CM ids cannot collide in the shared history table.
+    """
+    tran_id = raw.get("tranId") or raw.get("tranID") or ""
+    return FundingFee(
+        universal_symbol=universal_symbol,
+        native_id=f"{stream_key}:{tran_id}",
+        asset=raw.get("asset") or "",
+        amount=_dec(raw.get("income", 0) or 0),
+        funding_rate=None,
+        settled_at=_epoch_ms(raw.get("time")),
+    )
+
+
 # History endpoints are windowed by time. 24h satisfies every surface's
 # constraint (spot my_trades/all_orders require < 24h when both bounds are
 # set; futures allow up to 7 days).
@@ -540,6 +566,7 @@ class BinanceConnector(ExchangeConnector):
             Capability.TRANSFERS,
             Capability.WITHDRAWALS,
             Capability.DEPOSITS,
+            Capability.FUNDING_HISTORY,
         }
     )
     # Binance has more wallets (Margin, Earn, Trading Bots, …) but the panel
@@ -1183,6 +1210,73 @@ class BinanceConnector(ExchangeConnector):
         return Page(
             items=[normalize_withdrawal(raw) for raw in rows],
             next_cursor=_advance_window(stamped, "_t", start_ms, end_ms, now_ms, limit),
+        )
+
+    # -- funding fee history --------------------------------------------------
+
+    # um = USD-M (fapi), cm = COIN-M (dapi). Income is account-wide per surface.
+    _FUNDING_STREAMS: dict[str, MarketType] = {
+        "um": MarketType.PERP,
+        "cm": MarketType.CMARGIN,
+    }
+
+    def funding_history_stream_keys(self) -> list[str]:
+        return list(self._FUNDING_STREAMS)
+
+    async def _fetch_income_history(
+        self,
+        credential: Credential,
+        stream_key: str,
+        start_ms: int,
+        end_ms: int,
+        limit: int,
+    ) -> list[dict]:
+        if stream_key == "um":
+            rest = DerivativesTradingUsdsFutures(
+                config_rest_api=_auth_config(credential)
+            ).rest_api
+            income_type = UmIncomeType.FUNDING_FEE
+        elif stream_key == "cm":
+            rest = DerivativesTradingCoinFutures(
+                config_rest_api=_auth_config(credential)
+            ).rest_api
+            income_type = CmIncomeType.FUNDING_FEE
+        else:
+            raise ValueError(f"Unknown Binance funding stream {stream_key!r}")
+        resp = await self._call(
+            rest.get_income_history,
+            income_type=income_type,
+            start_time=start_ms,
+            end_time=end_ms,
+            limit=limit,
+        )
+        data = dump_sdk_model(resp.data())
+        return data if isinstance(data, list) else [data] if data else []
+
+    async def fetch_funding_fees_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        if stream_key not in self._FUNDING_STREAMS:
+            raise ValueError(f"Unknown Binance funding stream {stream_key!r}")
+        if not self._native_map:
+            await self.fetch_instruments()
+        start_ms, end_ms, now_ms = self._history_window(cursor)
+        if start_ms >= now_ms:
+            return Page(items=[], next_cursor=None)
+        limit = self._FUND_HISTORY_LIMIT
+        rows = await self._fetch_income_history(
+            credential, stream_key, start_ms, end_ms, limit
+        )
+        market_type = self._FUNDING_STREAMS[stream_key]
+        items: list[FundingFee] = []
+        for raw in rows:
+            universal = self._native_map.get((market_type, raw.get("symbol", "")))
+            if universal is None:
+                continue
+            items.append(normalize_funding_fee(raw, universal, stream_key=stream_key))
+        return Page(
+            items=items,
+            next_cursor=_advance_window(rows, "time", start_ms, end_ms, now_ms, limit),
         )
 
     # -- reference prices -----------------------------------------------------

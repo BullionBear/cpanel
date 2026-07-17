@@ -11,6 +11,7 @@ from app.connectors.gateio import (
     normalize_asset_networks,
     normalize_contract,
     normalize_deposit_record,
+    normalize_funding_fee,
     normalize_futures_balance,
     normalize_futures_order,
     normalize_futures_trade,
@@ -771,6 +772,30 @@ def test_normalize_deposit_record_statuses():
     assert normalize_deposit_record({**base, "status": "PEND"}).status == DepositStatus.PENDING
     assert normalize_deposit_record({**base, "status": "TRACK"}).status == DepositStatus.PENDING
     assert normalize_deposit_record({**base, "status": "INVALID"}).status == DepositStatus.FAILED
+
+
+def test_normalize_funding_fee():
+    fee = normalize_funding_fee(
+        {
+            "time": 1636624854,
+            "change": "-0.0123",
+            "balance": "100.5",
+            "type": "fund",
+            "text": "",
+            "contract": "BTC_USDT",
+            "id": "ab12",
+        },
+        "GATEIO_PERP_BTCUSDT",
+        settle="usdt",
+    )
+    assert fee.native_id == "usdt:ab12"
+    assert fee.amount == Decimal("-0.0123")
+    assert fee.asset == "USDT"
+    assert fee.settled_at is not None
+
+
+def test_funding_history_stream_keys():
+    assert GateIOConnector().funding_history_stream_keys() == ["usdt", "btc"]
 
 
 async def test_withdraw_builds_ledger_record(monkeypatch):

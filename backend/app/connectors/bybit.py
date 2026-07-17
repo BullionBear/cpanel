@@ -39,6 +39,7 @@ from app.connectors.types import (
     Deposit,
     DepositAddress,
     DepositStatus,
+    FundingFee,
     Instrument,
     InstrumentFilters,
     KeyScheme,
@@ -411,6 +412,22 @@ def normalize_deposit_record(raw: dict) -> Deposit:
     )
 
 
+def normalize_funding_fee(raw: dict, universal_symbol: str) -> FundingFee:
+    """A transaction-log SETTLEMENT row → FundingFee.
+
+    Bybit's ``funding`` field is signed the same way we store it (positive =
+    received). ``feeRate`` on SETTLEMENT rows is the funding rate.
+    """
+    return FundingFee(
+        universal_symbol=universal_symbol,
+        native_id=str(raw.get("id") or ""),
+        asset=raw.get("currency") or raw.get("baseCoin") or "",
+        amount=_dec(raw.get("funding", 0) or 0),
+        funding_rate=_opt_dec(raw.get("feeRate")),
+        settled_at=_epoch_ms(raw.get("transactionTime")),
+    )
+
+
 class BybitConnector(ExchangeConnector):
     exchange = "BYBIT"
     # Bybit exposes full self-service account management over API, so the
@@ -435,6 +452,7 @@ class BybitConnector(ExchangeConnector):
             Capability.TRANSFERS,
             Capability.WITHDRAWALS,
             Capability.DEPOSITS,
+            Capability.FUNDING_HISTORY,
         }
     )
     # A Unified Trading Account has exactly two wallets: UNIFIED (spot +
@@ -1156,6 +1174,64 @@ class BybitConnector(ExchangeConnector):
         self, credential: Credential, stream_key: str, cursor: str | None
     ) -> Page:
         return await self._fund_history_page(credential, cursor, kind="withdrawals")
+
+    # -- funding fee history --------------------------------------------------
+
+    # Spot has no funding; only linear (PERP) and inverse (CMARGIN) settle it.
+    _FUNDING_CATEGORIES = ("linear", "inverse")
+    _FUNDING_HISTORY_LIMIT = 50
+
+    def funding_history_stream_keys(self) -> list[str]:
+        return list(self._FUNDING_CATEGORIES)
+
+    async def _fetch_funding_rows(
+        self,
+        credential: Credential,
+        category: str,
+        start_ms: int,
+        end_ms: int,
+        native_cursor: str | None,
+        limit: int,
+    ) -> tuple[list[dict], str | None]:
+        session = self._auth_session(credential)
+        kwargs: dict = {
+            "accountType": "UNIFIED",
+            "category": category,
+            "type": "SETTLEMENT",
+            "startTime": start_ms,
+            "endTime": end_ms,
+            "limit": limit,
+        }
+        if native_cursor:
+            kwargs["cursor"] = native_cursor
+        response = await self._call(session.get_transaction_log, **kwargs)
+        result = response.get("result", {})
+        return result.get("list", []), result.get("nextPageCursor") or None
+
+    async def fetch_funding_fees_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        if stream_key not in self._FUNDING_CATEGORIES:
+            raise ValueError(f"Unknown Bybit funding stream {stream_key!r}")
+        if not self._native_map:
+            await self.fetch_instruments()
+        start_ms, end_ms, now_ms, native = self._history_window(cursor)
+        if start_ms >= now_ms:
+            return Page(items=[], next_cursor=None)
+        limit = self._FUNDING_HISTORY_LIMIT
+        rows, next_native = await self._fetch_funding_rows(
+            credential, stream_key, start_ms, end_ms, native, limit
+        )
+        items: list[FundingFee] = []
+        for raw in rows:
+            universal = self._universal_for(stream_key, raw.get("symbol", ""))
+            if universal is None:
+                continue
+            items.append(normalize_funding_fee(raw, universal))
+        return Page(
+            items=items,
+            next_cursor=self._next_history_cursor(start_ms, end_ms, now_ms, next_native),
+        )
 
     # -- connector interface --------------------------------------------------
 

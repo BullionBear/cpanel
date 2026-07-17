@@ -17,6 +17,7 @@ from app.connectors.types import (
     Deposit,
     DepositAddress,
     DepositStatus,
+    FundingFee,
     Instrument,
     InstrumentFilters,
     KeyScheme,
@@ -98,6 +99,7 @@ class FakeConnector(ExchangeConnector):
         self.networks: dict[str, list[AssetNetwork]] = {}
         self.withdrawals: dict[str, Withdrawal] = {}
         self.deposits: list[Deposit] = []
+        self.funding_fees: list[FundingFee] = []
         self.transfer_failure: Exception | None = None  # raised by next transfer()
 
     # -- public market data --------------------------------------------------
@@ -232,6 +234,17 @@ class FakeConnector(ExchangeConnector):
         end = start + len(items)
         return Page(
             items=items, next_cursor=str(end) if end < len(withdrawals) else None
+        )
+
+    async def fetch_funding_fees_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        start = int(cursor) if cursor else 0
+        items = self.funding_fees[start:start + 100]
+        end = start + len(items)
+        return Page(
+            items=items,
+            next_cursor=str(end) if end < len(self.funding_fees) else None,
         )
 
     # -- accounts and provisioning -----------------------------------------
@@ -426,3 +439,22 @@ class FakeConnector(ExchangeConnector):
         )
         self.deposits.append(deposit)
         return deposit
+
+    def credit_funding_fee(
+        self,
+        universal_symbol: str,
+        asset: str,
+        amount: Decimal,
+        funding_rate: Decimal | None = None,
+    ) -> FundingFee:
+        """Test hook: a funding settlement was applied on the venue."""
+        fee = FundingFee(
+            universal_symbol=universal_symbol,
+            native_id=f"fund-{next(self._ids)}",
+            asset=asset,
+            amount=amount,
+            funding_rate=funding_rate,
+            settled_at=datetime.now(timezone.utc),
+        )
+        self.funding_fees.append(fee)
+        return fee
