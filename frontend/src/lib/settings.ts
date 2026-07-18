@@ -42,8 +42,19 @@ export async function deleteApiToken(): Promise<void> {
 	await apiDelete('/auth/api-token');
 }
 
-export async function fetchAuditHistory(limit = 100): Promise<AuditEntry[]> {
-	return apiGet<AuditEntry[]>('/audit', { limit: String(limit) });
+export interface AuditPage {
+	total: number;
+	items: AuditEntry[];
+}
+
+export async function fetchAuditHistory(
+	params: { limit?: number; offset?: number; action?: string } = {}
+): Promise<AuditPage> {
+	const query: Record<string, string> = {};
+	if (params.limit != null) query.limit = String(params.limit);
+	if (params.offset != null) query.offset = String(params.offset);
+	if (params.action) query.action = params.action;
+	return apiGet<AuditPage>('/audit', query);
 }
 
 export function authMethodLabel(method: string | null): string {

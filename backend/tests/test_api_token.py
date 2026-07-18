@@ -149,12 +149,13 @@ async def test_audit_scoped_to_actor(ui_client, session_factory):
     response = await ui_client.get("/audit")
     assert response.status_code == 200
     body = response.json()
-    assert len(body) == 1
-    assert body[0]["actor_id"] == "99"
-    assert body[0]["ip_address"] == "1.2.3.4"
-    assert body[0]["auth_method"] == "api_key"
-    assert body[0]["return_code"] == 200
-    assert body[0]["user_agent"] == "curl/8.0"
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
+    assert body["items"][0]["actor_id"] == "99"
+    assert body["items"][0]["ip_address"] == "1.2.3.4"
+    assert body["items"][0]["auth_method"] == "api_key"
+    assert body["items"][0]["return_code"] == 200
+    assert body["items"][0]["user_agent"] == "curl/8.0"
 
 
 async def test_activity_middleware_records_request(client, session_factory):

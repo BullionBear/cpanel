@@ -101,4 +101,5 @@ async def test_trigger_is_audited(client, session_factory):
     assert entry.status == "succeeded"
 
     listed = (await client.get("/audit")).json()
-    assert listed[0]["action"] == "jobs.trigger"
+    assert listed["total"] == 1
+    assert listed["items"][0]["action"] == "jobs.trigger"

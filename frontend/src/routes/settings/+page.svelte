@@ -13,6 +13,8 @@
 		type AuditEntry
 	} from '$lib/settings';
 
+	const PAGE_SIZE = 50;
+
 	let apiToken: string | null = null;
 	let loadingToken = false;
 	let creatingToken = false;
@@ -22,6 +24,8 @@
 	let copied = false;
 
 	let entries: AuditEntry[] = [];
+	let auditTotal = 0;
+	let auditOffset = 0;
 	let loadingAudit = false;
 	let auditError = '';
 
@@ -47,15 +51,35 @@
 		loadingAudit = true;
 		auditError = '';
 		try {
-			entries = await fetchAuditHistory(100);
+			const page = await fetchAuditHistory({ limit: PAGE_SIZE, offset: auditOffset });
+			entries = page.items;
+			auditTotal = page.total;
 		} catch (e) {
 			entries = [];
+			auditTotal = 0;
 			auditError =
 				e instanceof ApiError && e.status === 401
 					? 'Please log in to view audit history.'
 					: 'Failed to load audit history.';
 		} finally {
 			loadingAudit = false;
+		}
+	}
+
+	function refreshAudit() {
+		auditOffset = 0;
+		return loadAudit();
+	}
+
+	function prevAuditPage() {
+		auditOffset = Math.max(0, auditOffset - PAGE_SIZE);
+		loadAudit();
+	}
+
+	function nextAuditPage() {
+		if (auditOffset + PAGE_SIZE < auditTotal) {
+			auditOffset += PAGE_SIZE;
+			loadAudit();
 		}
 	}
 
@@ -68,7 +92,7 @@
 			tokenNotice = apiToken
 				? 'API key issued. Copy it now — you can also retrieve it later until you revoke it.'
 				: '';
-			await loadAudit();
+			await refreshAudit();
 		} catch (e) {
 			tokenError = e instanceof Error ? e.message : 'Failed to create API key.';
 		} finally {
@@ -85,7 +109,7 @@
 			await deleteApiToken();
 			apiToken = null;
 			tokenNotice = 'API key revoked.';
-			await loadAudit();
+			await refreshAudit();
 		} catch (e) {
 			tokenError = e instanceof Error ? e.message : 'Failed to revoke API key.';
 		} finally {
@@ -202,12 +226,15 @@
 					<h2>Audit history</h2>
 					<p class="muted">
 						Your recent activity — IP, device, auth method, operation, and return code.
+						{#if auditTotal > 0}
+							<span class="audit-count">{auditTotal} total</span>
+						{/if}
 					</p>
 				</div>
 				<button
 					class="btn secondary small"
 					type="button"
-					on:click={loadAudit}
+					on:click={refreshAudit}
 					disabled={loadingAudit}
 				>
 					{loadingAudit ? 'Refreshing…' : 'Refresh'}
@@ -267,6 +294,23 @@
 						</tbody>
 					</table>
 				</div>
+				{#if auditTotal > PAGE_SIZE}
+					<div class="pager">
+						<button type="button" on:click={prevAuditPage} disabled={auditOffset === 0 || loadingAudit}>
+							Previous
+						</button>
+						<span>
+							{auditOffset + 1}–{Math.min(auditOffset + PAGE_SIZE, auditTotal)} of {auditTotal}
+						</span>
+						<button
+							type="button"
+							on:click={nextAuditPage}
+							disabled={auditOffset + PAGE_SIZE >= auditTotal || loadingAudit}
+						>
+							Next
+						</button>
+					</div>
+				{/if}
 			{/if}
 		</section>
 	{/if}
@@ -419,6 +463,41 @@
 		background: var(--danger-bg);
 		border-color: transparent;
 		color: var(--danger-text);
+	}
+
+	.audit-count {
+		color: var(--text-muted);
+		white-space: nowrap;
+	}
+
+	.pager {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 1rem;
+		margin-top: 1rem;
+		font-size: 0.875rem;
+		color: var(--text-muted);
+	}
+	.pager button {
+		height: 2rem;
+		padding: 0 0.875rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-xs);
+		background: var(--white);
+		color: var(--text);
+		font-family: inherit;
+		font-size: 0.8125rem;
+		font-weight: 600;
+		cursor: pointer;
+		transition: border-color 0.2s ease;
+	}
+	.pager button:hover:not(:disabled) {
+		border-color: var(--text);
+	}
+	.pager button:disabled {
+		opacity: 0.5;
+		cursor: default;
 	}
 
 	@media (max-width: 720px) {
