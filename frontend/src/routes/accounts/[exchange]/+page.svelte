@@ -495,7 +495,7 @@
 			{#if main.credentials.length === 0}<p class="muted">No keys registered.</p>{/if}
 			{#each main.credentials as cred (cred.id)}
 				<div class="cred-row" class:revoked={cred.status !== 'active'}>
-					<code>{cred.api_key.slice(0, 10)}…</code>
+					<code>{cred.api_key ? `${cred.api_key.slice(0, 10)}…` : '(missing key)'}</code>
 					<span class="tag">{cred.scheme}</span>
 					{#if cred.read_only}<span class="tag">read-only</span>{/if}
 					{#if cred.can_withdraw}<span class="tag warn">withdraw</span>{/if}
@@ -503,7 +503,11 @@
 					{#each cred.tags ?? [] as t}<span class="tag chip">{t}</span>{/each}
 					<Menu small label="API key actions">
 						<button class="menu-item" on:click={() => openDetail(main, cred)}>Detail</button>
-						<button class="menu-item" disabled={busy} on:click={() => toggleReveal(main, cred)}>
+						<button
+							class="menu-item"
+							disabled={busy || !cred.api_key}
+							on:click={() => toggleReveal(main, cred)}
+						>
 							{revealed[cred.id] ? 'Hide secret' : 'Reveal secret'}
 						</button>
 						<button class="menu-item" on:click={() => startTagEdit(cred)}>Edit tags</button>
@@ -603,14 +607,18 @@
 
 					{#each sub.credentials as cred (cred.id)}
 						<div class="cred-row indent" class:revoked={cred.status !== 'active'}>
-							<code>{cred.api_key.slice(0, 10)}…</code>
+							<code>{cred.api_key ? `${cred.api_key.slice(0, 10)}…` : '(missing key)'}</code>
 							<span class="tag">{cred.scheme}</span>
 							{#if cred.read_only}<span class="tag">read-only</span>{/if}
 							<span class="tag" class:ok={cred.status === 'active'}>{cred.status}</span>
 							{#each cred.tags ?? [] as t}<span class="tag chip">{t}</span>{/each}
 							<Menu small label="API key actions">
 								<button class="menu-item" on:click={() => openDetail(sub, cred)}>Detail</button>
-								<button class="menu-item" disabled={busy} on:click={() => toggleReveal(sub, cred)}>
+								<button
+									class="menu-item"
+									disabled={busy || !cred.api_key}
+									on:click={() => toggleReveal(sub, cred)}
+								>
 									{revealed[cred.id] ? 'Hide secret' : 'Reveal secret'}
 								</button>
 								<button class="menu-item" on:click={() => startTagEdit(cred)}>Edit tags</button>
@@ -788,7 +796,12 @@
 	<div class="overlay" on:click|self={closeKeyDialog} role="presentation">
 		<div class="dialog" role="dialog" aria-modal="true" aria-label="Create API key">
 			<h2>Create API key</h2>
-			<p class="muted">For subaccount “{keyDialog.subLabel}” on {exchange}.</p>
+			<p class="muted">
+				For subaccount “{keyDialog.subLabel}” on {exchange}.
+				{#if needsPassphrase}
+					Bitget generates the passphrase automatically — it will be shown after creation.
+				{/if}
+			</p>
 
 			<div class="field">
 				<span class="field-label">Permissions</span>
@@ -962,7 +975,8 @@
 		margin: 0.15rem 0;
 	}
 	.reveal span {
-		width: 3rem;
+		flex: 0 0 5.5rem;
+		width: 5.5rem;
 		color: var(--text-muted);
 	}
 	.reveal code {

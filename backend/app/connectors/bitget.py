@@ -39,6 +39,7 @@ import hmac
 import json
 import logging
 import secrets
+import string
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -115,6 +116,16 @@ _PERMISSION_SCOPES = {
     "wallet": "transfer",
     "options": "margin_trade",
 }
+
+
+def _bitget_passphrase(length: int = 16) -> str:
+    """Generate a Bitget-compliant passphrase: 8–32 letters + digits only."""
+    length = max(8, min(length, 32))
+    alphabet = string.ascii_letters + string.digits
+    while True:
+        value = "".join(secrets.choice(alphabet) for _ in range(length))
+        if any(c.isalpha() for c in value) and any(c.isdigit() for c in value):
+            return value
 
 _SPOT_ORDER_STATUS = {
     "live": OrderStatus.OPEN,
@@ -1280,7 +1291,9 @@ class BitgetConnector(ExchangeConnector):
             raise ValueError("Bitget issues only HMAC keys via API")
         if not subaccount:
             raise ValueError("Bitget API key creation targets a virtual subaccount uid")
-        passphrase = secrets.token_urlsafe(12)
+        # Bitget requires 8–32 alphanumeric chars (letters + digits); urlsafe
+        # tokens can include '-' / '_' and get rejected.
+        passphrase = _bitget_passphrase()
         perm_list = ["read"]
         if not read_only:
             for scope in permissions:
@@ -1290,7 +1303,7 @@ class BitgetConnector(ExchangeConnector):
         body: dict[str, Any] = {
             "subAccountUid": subaccount,
             "passphrase": passphrase,
-            "label": (note or "cpanel")[:32],
+            "label": (note or "cpanel")[:20],
             "permList": perm_list,
         }
         if ips:
@@ -1302,12 +1315,25 @@ class BitgetConnector(ExchangeConnector):
             body=body,
         )
         data = data or {}
+        # Venue field names: subAccountApiKey / secretKey (not apiKey / secret).
+        api_key = str(
+            data.get("subAccountApiKey")
+            or data.get("apiKey")
+            or data.get("accessKey")
+            or ""
+        )
+        secret = str(data.get("secretKey") or data.get("secret") or "")
+        if not api_key or not secret:
+            raise BitgetAPIError(
+                "Bitget create-virtual-subaccount-apikey returned no api key/secret"
+            )
         return ApiKeyResult(
-            api_key=str(data.get("apiKey") or data.get("accessKey") or ""),
-            secret=str(data.get("secret") or data.get("secretKey") or ""),
+            api_key=api_key,
+            secret=secret,
             scheme=KeyScheme.HMAC,
             permissions=perm_list,
-            passphrase=str(data.get("passphrase") or passphrase),
+            # Response does not echo the passphrase; keep the one we sent.
+            passphrase=passphrase,
         )
 
     # -- transfers --------------------------------------------------------------

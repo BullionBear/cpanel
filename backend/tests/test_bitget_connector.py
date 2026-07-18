@@ -504,12 +504,18 @@ async def test_create_api_key_includes_passphrase(connector, monkeypatch):
     async def api(method, path, **kwargs):
         body = kwargs["body"]
         assert "passphrase" in body
+        assert body["passphrase"].isalnum()
+        assert any(c.isalpha() for c in body["passphrase"])
+        assert any(c.isdigit() for c in body["passphrase"])
         assert "read" in body["permList"]
         assert "spot_trade" in body["permList"]
+        # Venue response uses subAccountApiKey / secretKey — not apiKey / secret.
         return {
-            "apiKey": "ak",
-            "secret": "sk",
-            "passphrase": body["passphrase"],
+            "subAccountUid": "999",
+            "subAccountApiKey": "bg_ak",
+            "secretKey": "sk",
+            "permList": body["permList"],
+            "label": body["label"],
         }
 
     monkeypatch.setattr(connector, "_api", api)
@@ -519,9 +525,24 @@ async def test_create_api_key_includes_passphrase(connector, monkeypatch):
         scheme=KeyScheme.HMAC,
         permissions=["spot"],
     )
-    assert key.api_key == "ak"
-    assert key.passphrase
+    assert key.api_key == "bg_ak"
+    assert key.secret == "sk"
+    assert key.passphrase and key.passphrase.isalnum()
     assert key.scheme == KeyScheme.HMAC
+
+
+async def test_create_api_key_rejects_empty_response(connector, monkeypatch):
+    async def api(method, path, **kwargs):
+        return {"subAccountUid": "999", "label": "x"}
+
+    monkeypatch.setattr(connector, "_api", api)
+    with pytest.raises(BitgetAPIError, match="no api key"):
+        await connector.create_api_key(
+            {"api_key": "k", "secret": "s", "passphrase": "p"},
+            subaccount="999",
+            scheme=KeyScheme.HMAC,
+            permissions=["spot"],
+        )
 
 
 def test_bitget_api_error_attrs():

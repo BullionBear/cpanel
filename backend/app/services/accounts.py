@@ -334,15 +334,23 @@ async def create_sub_api_key(
     master = await get_active_credential(db, main_account)
     from app.connectors.types import KeyScheme
 
-    key = await connector.create_api_key(
-        decrypt_credential(master),
-        subaccount=sub_account.native_uid,
-        scheme=KeyScheme(scheme),
-        permissions=permissions,
-        read_only=read_only,
-        ips=ips,
-        note=note,
-    )
+    try:
+        key = await connector.create_api_key(
+            decrypt_credential(master),
+            subaccount=sub_account.native_uid,
+            scheme=KeyScheme(scheme),
+            permissions=permissions,
+            read_only=read_only,
+            ips=ips,
+            note=note,
+        )
+    except AccountError:
+        raise
+    except Exception as exc:
+        message = getattr(exc, "message", None) or str(exc)
+        raise AccountError(str(message).strip() or "Venue rejected API key creation") from exc
+    if not key.api_key or not key.secret:
+        raise AccountError("Venue created a key but returned no api key/secret")
     credential = ApiCredential(
         account_id=sub_account.id,
         scheme=key.scheme.value,
