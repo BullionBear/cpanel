@@ -17,6 +17,7 @@ from app.jobs.scheduler import JobDefinition, scheduler
 from app.jobs.snapshots import make_snapshot_job
 from app.jobs.symbols import make_instrument_refresh, make_price_refresh
 from app.jobs.transfers import make_transfer_progress_job
+from app.middleware.activity_audit import ActivityAuditMiddleware
 
 EXCHANGES = ["BINANCE", "BYBIT", "GATEIO"]
 
@@ -88,12 +89,15 @@ def setup_jobs() -> None:
 async def lifespan(app: FastAPI):
     setup_connectors()
     setup_jobs()
+    if settings.DATABASE_URL:
+        app.state.session_factory = get_session_factory()
     if settings.SCHEDULER_ENABLED and settings.DATABASE_URL:
         await scheduler.start(get_session_factory())
     yield
     if scheduler.running:
         await scheduler.stop()
     await dispose_engine()
+    app.state.session_factory = None
 
 
 app = FastAPI(
@@ -103,6 +107,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(ActivityAuditMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.FRONTEND_URL],

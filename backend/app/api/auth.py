@@ -2,26 +2,31 @@
 
 No users table exists yet in the rebuilt schema, so the signed-in identity
 (Discord id + display name) is embedded in the issued JWT instead of a DB row.
+
+Panel API keys are long-lived ``api_`` JWTs stored in ``panel_access_token`` so
+they can be revoked. Minting requires an active Discord OAuth UI session.
 """
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
-from fastapi.security import OAuth2PasswordBearer
-from fastapi import Depends
 from pydantic import BaseModel
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.audit import Actor, audit, current_actor, current_ui_actor
 from app.core.config import settings
+from app.core.db import get_db
 from app.core.security import (
     consume_discord_exchange_token,
     create_access_token,
     create_discord_exchange_token,
     create_oauth_state_token,
-    decode_access_token,
     verify_oauth_state_token,
 )
+from app.models.panel_access_token import PanelAccessToken
 from app.services.discord_oauth import (
     DiscordOAuthError,
     build_authorize_url,
@@ -32,7 +37,7 @@ from app.services.discord_oauth import (
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/discord/exchange")
+API_TOKEN_TTL = timedelta(days=365 * 10)
 
 
 class Token(BaseModel):
@@ -47,6 +52,10 @@ class ExchangeRequest(BaseModel):
 class UserResponse(BaseModel):
     id: str
     username: str
+
+
+class MessageResponse(BaseModel):
+    message: str
 
 
 def _redirect_with_error(error: str) -> RedirectResponse:
@@ -106,8 +115,67 @@ async def discord_exchange(body: ExchangeRequest):
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_current_user_info(token: str = Depends(oauth2_scheme)):
-    payload = decode_access_token(token)
-    if payload is None or payload.get("type") != "ui_access":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
-    return UserResponse(id=payload["sub"], username=payload.get("name") or f"user_{payload['sub']}")
+async def get_current_user_info(actor: Actor = Depends(current_actor)):
+    return UserResponse(id=actor.id, username=actor.name or f"user_{actor.id}")
+
+
+@router.get("/api-token", response_model=Token)
+async def get_api_token(
+    actor: Actor = Depends(current_ui_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the caller's active panel API key, if any."""
+    now = datetime.now(timezone.utc)
+    row = (
+        await db.execute(
+            select(PanelAccessToken)
+            .where(PanelAccessToken.actor_id == actor.id, PanelAccessToken.expired_at > now)
+            .order_by(PanelAccessToken.created_at.desc())
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No API token found")
+    return Token(access_token=row.access_token, token_type="bearer")
+
+
+@router.post("/api-token", response_model=Token)
+async def create_api_token(
+    actor: Actor = Depends(current_ui_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create or replace the panel API key. Requires Discord OAuth (ui_ session)."""
+    api_token = create_access_token(
+        data={"sub": actor.id, "name": actor.name, "type": "api_access"},
+        expires_delta=API_TOKEN_TTL,
+        prefix="api_",
+    )
+    async with audit(db, actor, "auth.api_token.create", target=actor.id):
+        await db.execute(delete(PanelAccessToken).where(PanelAccessToken.actor_id == actor.id))
+        db.add(
+            PanelAccessToken(
+                actor_id=actor.id,
+                actor_name=actor.name or None,
+                access_token=api_token,
+                expired_at=datetime.now(timezone.utc) + API_TOKEN_TTL,
+            )
+        )
+        await db.commit()
+    return Token(access_token=api_token, token_type="bearer")
+
+
+@router.delete("/api-token", response_model=MessageResponse)
+async def delete_api_token(
+    actor: Actor = Depends(current_ui_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Revoke the caller's panel API key."""
+    existing = (
+        await db.execute(select(PanelAccessToken).where(PanelAccessToken.actor_id == actor.id))
+    ).scalar_one_or_none()
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No API token found")
+
+    async with audit(db, actor, "auth.api_token.delete", target=actor.id):
+        await db.execute(delete(PanelAccessToken).where(PanelAccessToken.actor_id == actor.id))
+        await db.commit()
+    return MessageResponse(message="API token deleted successfully")

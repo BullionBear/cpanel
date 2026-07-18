@@ -17,6 +17,7 @@ from app.models.history import (
 )
 from app.models.job_run import JobRun
 from app.models.order import Order
+from app.models.panel_access_token import PanelAccessToken
 from app.models.snapshot import BalanceSnapshot, PositionSnapshot
 from app.models.transfer import Transfer, TransferStep
 from app.models.universal_ticker import UniversalTicker
@@ -28,6 +29,7 @@ __all__ = [
     "AuditLog",
     "JobRun",
     "Order",
+    "PanelAccessToken",
     "DepositHistory",
     "FundingFeeHistory",
     "OrderHistory",
