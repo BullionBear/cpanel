@@ -38,6 +38,12 @@ class AuditLog(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="started")
     error: Mapped[str | None] = mapped_column(Text)
 
+    # Request metadata (populated for interactive / API activity)
+    ip_address: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(512))
+    auth_method: Mapped[str | None] = mapped_column(String(32))  # discord_oauth | api_key
+    return_code: Mapped[int | None] = mapped_column(Integer)
+
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
