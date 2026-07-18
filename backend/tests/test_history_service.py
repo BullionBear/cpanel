@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.connectors.base import ExchangeConnector
 from app.connectors.fake import FakeConnector
-from app.connectors.types import OrderRequest, OrderSide, OrderType
+from app.connectors.types import Order, OrderRequest, OrderSide, OrderStatus, OrderType
 from app.models.history import (
     DepositHistory,
     FundingFeeHistory,
@@ -148,6 +148,74 @@ async def test_order_history_upsert_advances_state(db, connector):
     row = (await db.execute(select(OrderHistory))).scalars().one()
     assert row.status == "FILLED"
     assert row.filled_qty == Decimal("2")
+
+
+async def test_order_history_skips_pure_cancels(db, connector):
+    """Cancelled with no fills is noise — never store it; drop if already OPEN."""
+    account = await _account_with_key(db, connector)
+    cred = {"api_key": "k", "secret": "s"}
+    never_synced = await connector.place_order(
+        cred,
+        OrderRequest(
+            universal_symbol="FAKE_PERP_ETHUSDT",
+            side=OrderSide.SELL,
+            type=OrderType.LIMIT,
+            qty=Decimal("2"),
+            price=Decimal("3100"),
+        ),
+    )
+    await connector.cancel_order(cred, never_synced.universal_symbol, never_synced.native_order_id)
+    assert await svc.sync_stream(db, connector, account, "orders", "account") == 0
+    assert (await db.execute(select(OrderHistory))).scalars().all() == []
+
+    open_then_cancel = await connector.place_order(
+        cred,
+        OrderRequest(
+            universal_symbol="FAKE_PERP_ETHUSDT",
+            side=OrderSide.BUY,
+            type=OrderType.LIMIT,
+            qty=Decimal("1"),
+            price=Decimal("3000"),
+        ),
+    )
+    assert await svc.sync_stream(db, connector, account, "orders", "account") == 1
+    assert (await db.execute(select(OrderHistory))).scalars().one().status == "OPEN"
+
+    await connector.cancel_order(
+        cred, open_then_cancel.universal_symbol, open_then_cancel.native_order_id
+    )
+    assert await svc.sync_stream(db, connector, account, "orders", "account") == 1
+    assert (await db.execute(select(OrderHistory))).scalars().all() == []
+
+
+async def test_order_history_keeps_partial_then_cancel(db, connector):
+    """Cancel after a partial fill is real activity and must stay in history."""
+    account = await _account_with_key(db, connector)
+    cred = {"api_key": "k", "secret": "s"}
+    order = await connector.place_order(
+        cred,
+        OrderRequest(
+            universal_symbol="FAKE_PERP_ETHUSDT",
+            side=OrderSide.SELL,
+            type=OrderType.LIMIT,
+            qty=Decimal("2"),
+            price=Decimal("3100"),
+        ),
+    )
+    resting = connector.orders[order.native_order_id]
+    connector.orders[order.native_order_id] = Order(
+        **{
+            **resting.__dict__,
+            "status": OrderStatus.PARTIALLY_FILLED,
+            "filled_qty": Decimal("0.5"),
+        }
+    )
+    await connector.cancel_order(cred, order.universal_symbol, order.native_order_id)
+
+    assert await svc.sync_stream(db, connector, account, "orders", "account") == 1
+    row = (await db.execute(select(OrderHistory))).scalars().one()
+    assert row.status == "CANCELLED"
+    assert row.filled_qty == Decimal("0.5")
 
 
 async def test_sync_account_history_covers_both_kinds(db, connector):

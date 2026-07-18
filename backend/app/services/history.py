@@ -35,6 +35,7 @@ from app.connectors.types import (
     Deposit as ConnDeposit,
     FundingFee as ConnFundingFee,
     Order as ConnOrder,
+    OrderStatus,
     Trade as ConnTrade,
     Withdrawal as ConnWithdrawal,
 )
@@ -176,10 +177,20 @@ async def _upsert_trades(
     return written
 
 
+def _is_pure_cancel(order: ConnOrder) -> bool:
+    """True when the order was cancelled with no fills — not worth storing."""
+    return order.status is OrderStatus.CANCELLED and order.filled_qty == 0
+
+
 async def _upsert_orders(
     db: AsyncSession, account: Account, orders: list[ConnOrder]
 ) -> int:
-    """Insert unseen orders; advance the state of known ones. Returns changes."""
+    """Insert unseen orders; advance the state of known ones. Returns changes.
+
+    Pure cancels (``CANCELLED`` with zero ``filled_qty``) are skipped. If a
+    previously stored open order later cancels without filling, its row is
+    removed. Partially filled then cancelled orders are kept.
+    """
     if not orders:
         return 0
     rows = (
@@ -193,7 +204,14 @@ async def _upsert_orders(
     known = {(r.universal_symbol, r.native_order_id): r for r in rows}
     changed = 0
     for order in orders:
-        row = known.get((order.universal_symbol, order.native_order_id))
+        key = (order.universal_symbol, order.native_order_id)
+        row = known.get(key)
+        if _is_pure_cancel(order):
+            if row is not None:
+                await db.delete(row)
+                del known[key]
+                changed += 1
+            continue
         if row is None:
             row = OrderHistory(
                 account_id=account.id,
@@ -211,7 +229,7 @@ async def _upsert_orders(
                 updated_at=order.updated_at,
             )
             db.add(row)
-            known[(order.universal_symbol, order.native_order_id)] = row
+            known[key] = row
             changed += 1
         elif row.status != order.status.value or row.filled_qty != order.filled_qty:
             row.status = order.status.value
