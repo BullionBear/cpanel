@@ -56,11 +56,13 @@ export interface RegisterAccountBody {
 	secret: string;
 	tags?: string[];
 	cred_label?: string;
+	passphrase?: string;
 }
 
 export interface RevealedSecret {
 	api_key: string;
 	secret: string;
+	passphrase?: string | null;
 }
 
 export const fetchTree = () => apiGet<AccountNode[]>('/accounts/tree');
@@ -85,7 +87,14 @@ export const renameAccount = (exchange: string, label: string, newLabel: string)
 export const addCredential = (
 	exchange: string,
 	label: string,
-	body: { scheme?: string; api_key: string; secret: string; tags?: string[]; label?: string }
+	body: {
+		scheme?: string;
+		api_key: string;
+		secret: string;
+		tags?: string[];
+		label?: string;
+		passphrase?: string;
+	}
 ) => apiPost<Credential>(`${accountPath(exchange, label)}/credentials`, body);
 
 export const revealSecret = (exchange: string, label: string, apiKey: string) =>
@@ -132,7 +141,7 @@ export interface SubKeyOptions {
 }
 
 export const createSubApiKey = (exchange: string, label: string, body: SubKeyOptions) =>
-	apiPost<{ credential: Credential; secret: string }>(
+	apiPost<{ credential: Credential; secret: string; passphrase?: string | null }>(
 		`${accountPath(exchange, label)}/api-keys`,
 		body
 	);

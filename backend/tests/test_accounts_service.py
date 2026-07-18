@@ -49,6 +49,27 @@ async def test_add_credential_verifies_and_encrypts(db, connector):
     assert main.native_uid == "uid-1"
 
 
+async def test_bitget_credential_requires_and_stores_passphrase(db, connector):
+    main = await make_main(db, exchange="BITGET", label="bg-main")
+    with pytest.raises(svc.CredentialInvalid, match="passphrase"):
+        await svc.add_credential(db, connector, main, "HMAC", "my-api-key", "my-secret")
+
+    credential, _ = await svc.add_credential(
+        db,
+        connector,
+        main,
+        "HMAC",
+        "my-api-key",
+        "my-secret",
+        passphrase="venue-pass",
+    )
+    assert credential.passphrase_enc is not None
+    assert "venue-pass" not in credential.passphrase_enc
+    decrypted = svc.decrypt_credential(credential)
+    assert decrypted["passphrase"] == "venue-pass"
+    assert svc.reveal_passphrase(credential) == "venue-pass"
+
+
 async def test_add_credential_rejected(db, connector):
     main = await make_main(db)
     with pytest.raises(svc.CredentialInvalid):

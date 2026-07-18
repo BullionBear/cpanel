@@ -1,0 +1,530 @@
+"""Bitget normalization and request-shaping tests (no network)."""
+import json
+from datetime import datetime, timezone
+from decimal import Decimal
+
+import pytest
+
+from app.connectors.bitget import (
+    BitgetAPIError,
+    BitgetConnector,
+    normalize_asset_networks,
+    normalize_deposit_record,
+    normalize_funding_balances,
+    normalize_funding_fee,
+    normalize_futures_balances,
+    normalize_mix_instrument,
+    normalize_mix_order,
+    normalize_mix_trade,
+    normalize_positions,
+    normalize_spot_balances,
+    normalize_spot_instrument,
+    normalize_spot_order,
+    normalize_spot_trade,
+    normalize_withdrawal_record,
+)
+from app.connectors.types import (
+    DepositStatus,
+    KeyScheme,
+    MarketType,
+    OrderRequest,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    TimeInForce,
+    WalletType,
+    WithdrawalStatus,
+)
+
+SPOT_BTC = {
+    "symbol": "BTCUSDT",
+    "baseCoin": "BTC",
+    "quoteCoin": "USDT",
+    "pricePrecision": "2",
+    "quantityPrecision": "6",
+    "minTradeAmount": "0.0001",
+    "maxTradeAmount": "1000",
+    "minTradeUSDT": "5",
+    "status": "online",
+}
+
+SPOT_HALTED = {**SPOT_BTC, "symbol": "ETHUSDT", "baseCoin": "ETH", "status": "halt"}
+
+USDT_PERP = {
+    "symbol": "ETHUSDT",
+    "baseCoin": "ETH",
+    "quoteCoin": "USDT",
+    "symbolType": "perpetual",
+    "symbolStatus": "normal",
+    "pricePlace": "2",
+    "priceEndStep": "1",
+    "volumePlace": "0",
+    "minTradeNum": "1",
+    "sizeMultiplier": "0.01",
+}
+
+COIN_PERP = {
+    "symbol": "BTCUSD",
+    "baseCoin": "BTC",
+    "quoteCoin": "USD",
+    "symbolType": "perpetual",
+    "symbolStatus": "normal",
+    "pricePlace": "1",
+    "priceEndStep": "1",
+    "volumePlace": "0",
+    "minTradeNum": "1",
+}
+
+DELIVERY = {**USDT_PERP, "symbol": "ETHUSDCM24", "symbolType": "delivery"}
+
+
+def test_normalize_spot_instrument():
+    inst = normalize_spot_instrument(SPOT_BTC)
+    assert inst.universal_symbol == "BITGET_SPOT_BTCUSDT"
+    assert inst.native_symbol == "BTCUSDT"
+    assert inst.filters.price_tick == Decimal("0.01")
+    assert inst.filters.qty_step == Decimal("0.000001")
+    assert inst.filters.min_notional == Decimal("5")
+    assert inst.status == "active"
+
+
+def test_halted_spot_instrument():
+    assert normalize_spot_instrument(SPOT_HALTED).status == "halted"
+
+
+def test_normalize_mix_instruments():
+    perp = normalize_mix_instrument(USDT_PERP, MarketType.PERP)
+    assert perp.universal_symbol == "BITGET_PERP_ETHUSDT"
+    assert perp.settle_asset == "USDT"
+    assert perp.filters.qty_step == Decimal("1")
+    inv = normalize_mix_instrument(COIN_PERP, MarketType.CMARGIN)
+    assert inv.universal_symbol == "BITGET_CMARGIN_BTCUSD"
+    assert inv.settle_asset == "BTC"
+    assert normalize_mix_instrument(DELIVERY, MarketType.PERP) is None
+
+
+@pytest.fixture
+def connector(monkeypatch):
+    c = BitgetConnector()
+
+    async def spot_symbols():
+        return [SPOT_BTC, SPOT_HALTED]
+
+    async def mix_contracts(product_type):
+        return {
+            "USDT-FUTURES": [USDT_PERP, DELIVERY],
+            "COIN-FUTURES": [COIN_PERP],
+        }[product_type]
+
+    async def spot_tickers():
+        return [{"symbol": "BTCUSDT", "lastPr": "62600.5"}]
+
+    async def mix_tickers(product_type):
+        return {
+            "USDT-FUTURES": [{"symbol": "ETHUSDT", "lastPr": "3301"}],
+            "COIN-FUTURES": [{"symbol": "BTCUSD", "lastPr": "62601"}],
+        }[product_type]
+
+    monkeypatch.setattr(c, "_fetch_spot_symbols", spot_symbols)
+    monkeypatch.setattr(c, "_fetch_mix_contracts", mix_contracts)
+    monkeypatch.setattr(c, "_fetch_spot_tickers", spot_tickers)
+    monkeypatch.setattr(c, "_fetch_mix_tickers", mix_tickers)
+    return c
+
+
+async def test_fetch_instruments(connector):
+    instruments = await connector.fetch_instruments()
+    assert {i.universal_symbol for i in instruments} == {
+        "BITGET_SPOT_BTCUSDT",
+        "BITGET_SPOT_ETHUSDT",
+        "BITGET_PERP_ETHUSDT",
+        "BITGET_CMARGIN_BTCUSD",
+    }
+
+
+async def test_reference_prices(connector):
+    prices = await connector.fetch_reference_prices()
+    assert prices["BITGET_SPOT_BTCUSDT"] == Decimal("62600.5")
+    assert prices["BITGET_PERP_ETHUSDT"] == Decimal("3301")
+    assert prices["BITGET_CMARGIN_BTCUSD"] == Decimal("62601")
+
+
+def test_normalize_spot_balances_drops_zero():
+    rows = [
+        {"coin": "USDT", "available": "10", "frozen": "1", "locked": "1"},
+        {"coin": "BTC", "available": "0", "frozen": "0", "locked": "0"},
+    ]
+    bals = normalize_spot_balances(rows)
+    assert len(bals) == 1
+    assert bals[0].wallet == WalletType.SPOT
+    assert bals[0].free == Decimal("10")
+    assert bals[0].locked == Decimal("2")
+
+
+def test_normalize_funding_and_futures_balances():
+    funding = normalize_funding_balances(
+        [{"coin": "USDT", "available": "5", "frozen": "0"}]
+    )
+    assert funding[0].wallet == WalletType.FUNDING
+    futures = normalize_futures_balances(
+        [{"marginCoin": "USDT", "available": "100", "locked": "20"}],
+        "USDT-FUTURES",
+    )
+    assert futures[0].wallet == WalletType.FUTURES
+    assert futures[0].free == Decimal("100")
+
+
+def test_normalize_positions():
+    native_map = {(MarketType.PERP, "ETHUSDT"): "BITGET_PERP_ETHUSDT"}
+    rows = [
+        {
+            "symbol": "ETHUSDT",
+            "holdSide": "long",
+            "total": "2",
+            "openPriceAvg": "3000",
+            "markPrice": "3100",
+            "unrealizedPL": "200",
+        },
+        {"symbol": "ETHUSDT", "holdSide": "long", "total": "0"},
+    ]
+    positions = normalize_positions(rows, "USDT-FUTURES", native_map)
+    assert len(positions) == 1
+    assert positions[0].side == "long"
+    assert positions[0].size == Decimal("2")
+
+
+SPOT_ORDER = {
+    "orderId": "111",
+    "clientOid": "cpanel-1",
+    "symbol": "BTCUSDT",
+    "side": "buy",
+    "orderType": "limit",
+    "status": "live",
+    "size": "0.01",
+    "price": "60000",
+    "baseVolume": "0",
+    "cTime": "1710488334000",
+    "uTime": "1710488334000",
+}
+
+
+def test_normalize_spot_order_statuses():
+    open_o = normalize_spot_order(SPOT_ORDER, "BITGET_SPOT_BTCUSDT")
+    assert open_o.status == OrderStatus.OPEN
+    assert open_o.client_order_id == "cpanel-1"
+    filled = normalize_spot_order(
+        {**SPOT_ORDER, "status": "filled", "baseVolume": "0.01"},
+        "BITGET_SPOT_BTCUSDT",
+    )
+    assert filled.status == OrderStatus.FILLED
+    assert filled.filled_qty == Decimal("0.01")
+    cancelled = normalize_spot_order(
+        {**SPOT_ORDER, "status": "cancelled"}, "BITGET_SPOT_BTCUSDT"
+    )
+    assert cancelled.status == OrderStatus.CANCELLED
+
+
+def test_normalize_mix_order_and_trade():
+    order = normalize_mix_order(
+        {
+            "orderId": "222",
+            "clientOid": "x",
+            "side": "sell",
+            "orderType": "market",
+            "status": "partially_filled",
+            "size": "10",
+            "baseVolume": "4",
+            "priceAvg": "3300",
+        },
+        "BITGET_PERP_ETHUSDT",
+    )
+    assert order.side == OrderSide.SELL
+    assert order.type == OrderType.MARKET
+    assert order.status == OrderStatus.PARTIALLY_FILLED
+    trade = normalize_mix_trade(
+        {
+            "tradeId": "t1",
+            "orderId": "222",
+            "side": "sell",
+            "price": "3300",
+            "baseVolume": "4",
+            "feeDetail": {"totalFee": "-0.1", "feeCoin": "USDT"},
+            "cTime": "1710488334000",
+        },
+        "BITGET_PERP_ETHUSDT",
+    )
+    assert trade.fee == Decimal("0.1")
+    assert trade.fee_asset == "USDT"
+
+
+def test_normalize_spot_trade_fee_json_string():
+    trade = normalize_spot_trade(
+        {
+            "tradeId": "9",
+            "orderId": "1",
+            "side": "buy",
+            "priceAvg": "100",
+            "size": "1",
+            "feeDetail": json.dumps({"totalFee": "0.02", "feeCoin": "USDT"}),
+            "cTime": "1710488334000",
+        },
+        "BITGET_SPOT_BTCUSDT",
+    )
+    assert trade.fee == Decimal("0.02")
+
+
+def test_withdraw_deposit_status_maps():
+    w = normalize_withdrawal_record(
+        {
+            "orderId": "w1",
+            "coin": "USDT",
+            "size": "10",
+            "status": "success",
+            "chain": "TRC20",
+            "address": "Txxx",
+            "fee": "1",
+        }
+    )
+    assert w.status == WithdrawalStatus.COMPLETED
+    d = normalize_deposit_record(
+        {"orderId": "d1", "coin": "USDT", "size": "5", "status": "2", "chain": "TRC20"}
+    )
+    assert d.status == DepositStatus.CREDITED
+
+
+def test_normalize_asset_networks():
+    nets = normalize_asset_networks(
+        {
+            "coin": "USDT",
+            "chains": [
+                {
+                    "chain": "TRC20",
+                    "withdrawable": "true",
+                    "rechargeable": "true",
+                    "minWithdrawAmount": "10",
+                    "withdrawFee": "1",
+                }
+            ],
+        }
+    )
+    assert len(nets) == 1
+    assert nets[0].network == "TRC20"
+    assert nets[0].withdraw_min == Decimal("10")
+
+
+def test_normalize_funding_fee():
+    fee = normalize_funding_fee(
+        {
+            "billId": "b1",
+            "coin": "USDT",
+            "amount": "-0.5",
+            "fundingRate": "0.0001",
+            "cTime": "1710488334000",
+        },
+        "BITGET_PERP_ETHUSDT",
+    )
+    assert fee.amount == Decimal("-0.5")
+    assert fee.funding_rate == Decimal("0.0001")
+
+
+async def test_fetch_balances(connector, monkeypatch):
+    async def spot(cred):
+        return [{"coin": "USDT", "available": "10", "frozen": "0", "locked": "0"}]
+
+    async def funding(cred):
+        return [{"coin": "USDT", "available": "3", "frozen": "0"}]
+
+    async def mix(cred, product_type):
+        if product_type == "USDT-FUTURES":
+            return [{"marginCoin": "USDT", "available": "50", "locked": "0"}]
+        return []
+
+    monkeypatch.setattr(connector, "_fetch_spot_assets", spot)
+    monkeypatch.setattr(connector, "_fetch_funding_assets", funding)
+    monkeypatch.setattr(connector, "_fetch_mix_accounts", mix)
+    bals = await connector.fetch_balances(
+        {"api_key": "k", "secret": "s", "passphrase": "p"}
+    )
+    assert {(b.wallet, b.asset) for b in bals} == {
+        (WalletType.SPOT, "USDT"),
+        (WalletType.FUNDING, "USDT"),
+        (WalletType.FUTURES, "USDT"),
+    }
+
+
+async def test_verify_credential_maps_authorities(connector, monkeypatch):
+    async def api(method, path, **kwargs):
+        assert path == "/api/v2/spot/account/info"
+        assert kwargs["credential"]["passphrase"] == "pp"
+        return {
+            "userId": "12345",
+            "parentId": "0",
+            "authorities": ["stor", "stow", "wwow"],
+        }
+
+    monkeypatch.setattr(connector, "_api", api)
+    info = await connector.verify_credential(
+        {"api_key": "k", "secret": "s", "passphrase": "pp"}
+    )
+    assert info.valid
+    assert info.native_uid == "12345"
+    assert info.is_master is True
+    assert info.can_trade is True
+    assert info.can_withdraw is True
+    assert info.read_only is False
+
+
+async def test_verify_requires_passphrase(connector):
+    info = await connector.verify_credential({"api_key": "k", "secret": "s"})
+    assert info.valid is False
+    assert "passphrase" in (info.reason or "").lower() or "rejected" in (
+        info.reason or ""
+    ).lower()
+
+
+async def test_place_spot_limit_shapes_request(connector, monkeypatch):
+    calls = []
+
+    async def api(method, path, **kwargs):
+        calls.append((method, path, kwargs.get("body")))
+        if path.endswith("place-order"):
+            return {"orderId": "99"}
+        if path.endswith("orderInfo"):
+            return {**SPOT_ORDER, "orderId": "99", "status": "live"}
+        return []
+
+    monkeypatch.setattr(connector, "_api", api)
+    await connector.fetch_instruments()
+    order = await connector.place_order(
+        {"api_key": "k", "secret": "s", "passphrase": "p"},
+        OrderRequest(
+            universal_symbol="BITGET_SPOT_BTCUSDT",
+            side=OrderSide.BUY,
+            type=OrderType.LIMIT,
+            qty=Decimal("0.01"),
+            price=Decimal("60000"),
+            client_order_id="cid-1",
+            time_in_force=TimeInForce.POST_ONLY,
+        ),
+    )
+    method, path, body = calls[0]
+    assert method == "POST" and path.endswith("place-order")
+    assert body["force"] == "post_only"
+    assert body["clientOid"] == "cid-1"
+    assert body["price"] == "60000"
+    assert order.native_order_id == "99"
+
+
+async def test_transfer_wallet_legs(connector, monkeypatch):
+    calls = []
+
+    async def api(method, path, **kwargs):
+        calls.append((path, kwargs.get("body")))
+        return {"transferId": "tr1"}
+
+    monkeypatch.setattr(connector, "_api", api)
+    result = await connector.transfer(
+        {"api_key": "k", "secret": "s", "passphrase": "p"},
+        "USDT",
+        Decimal("1"),
+        from_wallet=WalletType.SPOT,
+        to_wallet=WalletType.FUNDING,
+    )
+    assert result.native_transfer_id == "tr1"
+    assert calls[0][1]["fromType"] == "spot"
+    assert calls[0][1]["toType"] == "p2p"
+
+    with pytest.raises(ValueError, match="distinct"):
+        await connector.transfer(
+            {"api_key": "k", "secret": "s", "passphrase": "p"},
+            "USDT",
+            Decimal("1"),
+            from_wallet=WalletType.SPOT,
+            to_wallet=WalletType.SPOT,
+        )
+
+
+async def test_transfer_rejects_unknown_wallet(connector):
+    with pytest.raises(ValueError, match="wallets"):
+        connector._wallet_leg(WalletType.UNIFIED)
+
+
+def test_history_stream_keys(connector):
+    assert connector.history_stream_keys([]) == [
+        "spot",
+        "mix:USDT-FUTURES",
+        "mix:COIN-FUTURES",
+    ]
+
+
+async def test_history_cursor_round_trip(connector, monkeypatch):
+    pages = []
+
+    async def api(method, path, **kwargs):
+        params = kwargs.get("params") or {}
+        pages.append(params)
+        if params.get("idLessThan"):
+            return []
+        # Full page so next cursor keeps the same window with an id.
+        return [
+            {
+                "tradeId": str(i),
+                "orderId": "o",
+                "symbol": "BTCUSDT",
+                "side": "buy",
+                "priceAvg": "1",
+                "size": "1",
+                "feeDetail": {},
+                "cTime": params["startTime"],
+            }
+            for i in range(100)
+        ]
+
+    monkeypatch.setattr(connector, "_api", api)
+    await connector.fetch_instruments()
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    cursor = connector.initial_history_cursor(start)
+    page = await connector.fetch_trades(
+        {"api_key": "k", "secret": "s", "passphrase": "p"}, "spot", cursor
+    )
+    assert len(page.items) == 100
+    assert page.next_cursor is not None
+    decoded = json.loads(page.next_cursor)
+    assert decoded["id"] == "99"
+    assert decoded["start"] == int(start.timestamp() * 1000)
+
+    page2 = await connector.fetch_trades(
+        {"api_key": "k", "secret": "s", "passphrase": "p"}, "spot", page.next_cursor
+    )
+    assert pages[1]["idLessThan"] == "99"
+    assert page2.items == []
+
+
+async def test_create_api_key_includes_passphrase(connector, monkeypatch):
+    async def api(method, path, **kwargs):
+        body = kwargs["body"]
+        assert "passphrase" in body
+        assert "read" in body["permList"]
+        assert "spot_trade" in body["permList"]
+        return {
+            "apiKey": "ak",
+            "secret": "sk",
+            "passphrase": body["passphrase"],
+        }
+
+    monkeypatch.setattr(connector, "_api", api)
+    key = await connector.create_api_key(
+        {"api_key": "k", "secret": "s", "passphrase": "p"},
+        subaccount="999",
+        scheme=KeyScheme.HMAC,
+        permissions=["spot"],
+    )
+    assert key.api_key == "ak"
+    assert key.passphrase
+    assert key.scheme == KeyScheme.HMAC
+
+
+def test_bitget_api_error_attrs():
+    err = BitgetAPIError("bad key", code="40001", status_code=400)
+    assert err.message == "bad key"
+    assert err.status_code == 400

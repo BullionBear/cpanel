@@ -99,6 +99,7 @@ class CredentialCreate(BaseModel):
     secret: str = Field(min_length=8)
     label: str | None = None
     tags: list[str] = []
+    passphrase: str | None = None  # required for Bitget
 
 
 class RegisterAccount(BaseModel):
@@ -112,6 +113,7 @@ class RegisterAccount(BaseModel):
     secret: str = Field(min_length=8)
     tags: list[str] = []
     cred_label: str | None = None
+    passphrase: str | None = None  # required for Bitget
 
 
 class AccountRename(BaseModel):
@@ -136,6 +138,7 @@ class SubKeyCreated(BaseModel):
     credential: CredentialOut
     # Plaintext secret. Also retrievable later via the reveal endpoint.
     secret: str
+    passphrase: str | None = None
 
 
 class TagsUpdate(BaseModel):
@@ -154,6 +157,7 @@ class FreezeUpdate(BaseModel):
 class SecretOut(BaseModel):
     api_key: str
     secret: str
+    passphrase: str | None = None
 
 
 # -- helpers ----------------------------------------------------------------
@@ -321,6 +325,7 @@ async def register_account(
                 db, connector, body.exchange, body.label, body.account_type,
                 body.scheme, body.api_key, body.secret,
                 tags=body.tags, parent_id=body.parent_id, cred_label=body.cred_label,
+                passphrase=body.passphrase,
             )
         except svc.CredentialInvalid as exc:
             raise HTTPException(status_code=400, detail=str(exc))
@@ -348,7 +353,7 @@ async def add_credential(
         try:
             credential, _ = await svc.add_credential(
                 db, connector, account, body.scheme, body.api_key, body.secret,
-                label=body.label, tags=body.tags,
+                label=body.label, tags=body.tags, passphrase=body.passphrase,
             )
         except svc.CredentialInvalid as exc:
             raise HTTPException(status_code=400, detail=str(exc))
@@ -374,7 +379,10 @@ async def reveal_credential_secret(
         params={"api_key": credential.api_key[:8] + "..."},
     ):
         secret = svc.reveal_secret(credential)
-    return SecretOut(api_key=credential.api_key, secret=secret)
+        passphrase = svc.reveal_passphrase(credential)
+    return SecretOut(
+        api_key=credential.api_key, secret=secret, passphrase=passphrase
+    )
 
 
 @router.put(
@@ -583,4 +591,8 @@ async def create_sub_api_key(
             )
         except svc.AccountError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-    return SubKeyCreated(credential=CredentialOut.model_validate(credential), secret=secret)
+    return SubKeyCreated(
+        credential=CredentialOut.model_validate(credential),
+        secret=secret,
+        passphrase=svc.reveal_passphrase(credential),
+    )

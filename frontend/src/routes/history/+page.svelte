@@ -233,6 +233,7 @@
 			<option value="BINANCE">Binance</option>
 			<option value="BYBIT">Bybit</option>
 			<option value="GATEIO">Gate.io</option>
+			<option value="BITGET">Bitget</option>
 		</select>
 		<select bind:value={accountId} on:change={applyFilters}>
 			<option value="">All accounts</option>

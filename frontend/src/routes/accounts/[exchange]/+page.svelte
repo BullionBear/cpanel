@@ -34,13 +34,14 @@
 	let busy = false;
 
 	$: registrationOnly = caps?.registration_only ?? exchange === 'BINANCE';
+	$: needsPassphrase = exchange === 'BITGET';
 	// Every exchange page leads with its Readme.
 	$: tab = $page.url.searchParams.get('tab') ?? 'readme';
 	$: schemes = exchange === 'BINANCE' ? ['HMAC', 'ED25519'] : ['HMAC'];
 	$: mains = tree.filter((a) => a.exchange === exchange);
 
 	// Registration form (main account)
-	let reg = { label: '', scheme: 'HMAC', api_key: '', secret: '', tags: '' };
+	let reg = { label: '', scheme: 'HMAC', api_key: '', secret: '', passphrase: '', tags: '' };
 	// Per-main new-subaccount name (self-service venues)
 	let subName: Record<number, string> = {};
 
@@ -66,7 +67,7 @@
 	// The open "Create key" dialog, or null when closed.
 	let keyDialog: KeyDialog | null = null;
 	// Secret shown once right after a key is created (from the create response).
-	let createdSecret: { api_key: string; secret: string } | null = null;
+	let createdSecret: { api_key: string; secret: string; passphrase?: string | null } | null = null;
 	// The API key whose full detail dialog is open, or null when closed.
 	let detail: { account: AccountInfo; cred: Credential } | null = null;
 
@@ -82,13 +83,17 @@
 		p && Object.keys(p).length ? JSON.stringify(p, null, 2) : '';
 
 	// Revealed secrets, keyed by credential id
-	let revealed: Record<number, { api_key: string; secret: string }> = {};
+	let revealed: Record<number, { api_key: string; secret: string; passphrase?: string | null }> =
+		{};
 	// Tag editing drafts, keyed by credential id
 	let tagDraft: Record<number, string> = {};
 	// Nickname edit drafts, keyed by account id
 	let nameDraft: Record<number, string> = {};
 	// "Register an existing key" drafts, keyed by account id
-	let keyReg: Record<number, { scheme: string; api_key: string; secret: string; tags: string }> = {};
+	let keyReg: Record<
+		number,
+		{ scheme: string; api_key: string; secret: string; passphrase: string; tags: string }
+	> = {};
 
 	let loadedFor = '';
 	$: if (browser && exchange && exchange !== loadedFor) {
@@ -99,7 +104,14 @@
 		tagDraft = {};
 		nameDraft = {};
 		keyReg = {};
-		reg = { label: '', scheme: schemes[0] ?? 'HMAC', api_key: '', secret: '', tags: '' };
+		reg = {
+			label: '',
+			scheme: schemes[0] ?? 'HMAC',
+			api_key: '',
+			secret: '',
+			passphrase: '',
+			tags: ''
+		};
 		load();
 	}
 
@@ -149,10 +161,18 @@
 				scheme: reg.scheme,
 				api_key: reg.api_key.trim(),
 				secret: reg.secret.trim(),
+				passphrase: needsPassphrase ? reg.passphrase.trim() : undefined,
 				tags: parseTags(reg.tags)
 			});
 			notice = `Registered "${reg.label.trim()}".`;
-			reg = { label: '', scheme: schemes[0] ?? 'HMAC', api_key: '', secret: '', tags: '' };
+			reg = {
+				label: '',
+				scheme: schemes[0] ?? 'HMAC',
+				api_key: '',
+				secret: '',
+				passphrase: '',
+				tags: ''
+			};
 		});
 
 	// Which accounts accept a manually-registered (venue-made) key: any account
@@ -178,7 +198,13 @@
 		});
 
 	const startAddKey = (accountId: number) => {
-		keyReg[accountId] = { scheme: schemes[0] ?? 'HMAC', api_key: '', secret: '', tags: '' };
+		keyReg[accountId] = {
+			scheme: schemes[0] ?? 'HMAC',
+			api_key: '',
+			secret: '',
+			passphrase: '',
+			tags: ''
+		};
 		keyReg = keyReg;
 	};
 	const cancelAddKey = (accountId: number) => {
@@ -198,6 +224,7 @@
 				scheme: form.scheme,
 				api_key: form.api_key.trim(),
 				secret: form.secret.trim(),
+				passphrase: needsPassphrase ? form.passphrase.trim() : undefined,
 				tags: parseTags(form.tags)
 			});
 			notice = `Registered a key on "${account.label}".`;
@@ -248,7 +275,11 @@
 				tags: parseTags(d.tags)
 			});
 			notice = `Key created for "${d.subLabel}".`;
-			createdSecret = { api_key: result.credential.api_key, secret: result.secret };
+			createdSecret = {
+				api_key: result.credential.api_key,
+				secret: result.secret,
+				passphrase: result.passphrase
+			};
 			keyDialog = null;
 		});
 	};
@@ -416,8 +447,21 @@
 			{/if}
 			<input placeholder="API key" bind:value={reg.api_key} required />
 			<input type="password" placeholder="Secret / private key" bind:value={reg.secret} required />
+			{#if needsPassphrase}
+				<input
+					type="password"
+					placeholder="Passphrase"
+					bind:value={reg.passphrase}
+					required
+				/>
+			{/if}
 			<input placeholder="Tags (comma-separated)" bind:value={reg.tags} />
-			<button class="btn" disabled={busy || !reg.label.trim()}>Verify &amp; register</button>
+			<button
+				class="btn"
+				disabled={busy || !reg.label.trim() || (needsPassphrase && !reg.passphrase.trim())}
+			>
+				Verify &amp; register
+			</button>
 		</form>
 	</div>
 
@@ -474,6 +518,9 @@
 					<div class="reveal">
 						<div><span>Key</span><code>{revealed[cred.id].api_key}</code></div>
 						<div><span>Secret</span><code>{revealed[cred.id].secret}</code></div>
+						{#if revealed[cred.id].passphrase}
+							<div><span>Passphrase</span><code>{revealed[cred.id].passphrase}</code></div>
+						{/if}
 					</div>
 				{/if}
 				{#if tagDraft[cred.id] !== undefined}
@@ -494,8 +541,21 @@
 					{/if}
 					<input placeholder="API key" bind:value={keyReg[main.id].api_key} required />
 					<input type="password" placeholder="Secret / private key" bind:value={keyReg[main.id].secret} required />
+					{#if needsPassphrase}
+						<input
+							type="password"
+							placeholder="Passphrase"
+							bind:value={keyReg[main.id].passphrase}
+							required
+						/>
+					{/if}
 					<input placeholder="Tags (comma-separated)" bind:value={keyReg[main.id].tags} />
-					<button class="btn small" disabled={busy}>Verify &amp; register key</button>
+					<button
+						class="btn small"
+						disabled={busy || (needsPassphrase && !keyReg[main.id].passphrase.trim())}
+					>
+						Verify &amp; register key
+					</button>
 					<button type="button" class="btn secondary small" on:click={() => cancelAddKey(main.id)}>Cancel</button>
 				</form>
 			{/if}
@@ -572,6 +632,9 @@
 							<div class="reveal indent">
 								<div><span>Key</span><code>{revealed[cred.id].api_key}</code></div>
 								<div><span>Secret</span><code>{revealed[cred.id].secret}</code></div>
+								{#if revealed[cred.id].passphrase}
+									<div><span>Passphrase</span><code>{revealed[cred.id].passphrase}</code></div>
+								{/if}
 							</div>
 						{/if}
 						{#if tagDraft[cred.id] !== undefined}
@@ -593,8 +656,21 @@
 							<!-- svelte-ignore a11y-autofocus -->
 							<input placeholder="API key" bind:value={keyReg[sub.id].api_key} required use:autofocus />
 							<input type="password" placeholder="Secret / private key" bind:value={keyReg[sub.id].secret} required />
+							{#if needsPassphrase}
+								<input
+									type="password"
+									placeholder="Passphrase"
+									bind:value={keyReg[sub.id].passphrase}
+									required
+								/>
+							{/if}
 							<input placeholder="Tags (comma-separated)" bind:value={keyReg[sub.id].tags} />
-							<button class="btn small" disabled={busy}>Verify &amp; register key</button>
+							<button
+								class="btn small"
+								disabled={busy || (needsPassphrase && !keyReg[sub.id].passphrase.trim())}
+							>
+								Verify &amp; register key
+							</button>
 							<button type="button" class="btn secondary small" on:click={() => cancelAddKey(sub.id)}>Cancel</button>
 						</form>
 					{/if}
@@ -641,6 +717,9 @@
 			<div class="reveal">
 				<div><span>Key</span><code>{createdSecret.api_key}</code></div>
 				<div><span>Secret</span><code>{createdSecret.secret}</code></div>
+				{#if createdSecret.passphrase}
+					<div><span>Passphrase</span><code>{createdSecret.passphrase}</code></div>
+				{/if}
 			</div>
 			<div class="dialog-actions">
 				<button class="btn" on:click={() => (createdSecret = null)}>Done</button>
@@ -696,6 +775,9 @@
 				<div class="reveal">
 					<div><span>Key</span><code>{revealed[detail.cred.id].api_key}</code></div>
 					<div><span>Secret</span><code>{revealed[detail.cred.id].secret}</code></div>
+					{#if revealed[detail.cred.id].passphrase}
+						<div><span>Passphrase</span><code>{revealed[detail.cred.id].passphrase}</code></div>
+					{/if}
 				</div>
 			{/if}
 		</div>

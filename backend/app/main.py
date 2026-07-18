@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import api_router
 from app.connectors.binance import BinanceConnector
+from app.connectors.bitget import BitgetConnector
 from app.connectors.bybit import BybitConnector
 from app.connectors.gateio import GateIOConnector
 from app.connectors.registry import connectors
@@ -19,7 +20,7 @@ from app.jobs.symbols import make_instrument_refresh, make_price_refresh
 from app.jobs.transfers import make_transfer_progress_job
 from app.middleware.activity_audit import ActivityAuditMiddleware
 
-EXCHANGES = ["BINANCE", "BYBIT", "GATEIO"]
+EXCHANGES = ["BINANCE", "BYBIT", "GATEIO", "BITGET"]
 
 
 def setup_connectors() -> None:
@@ -27,9 +28,11 @@ def setup_connectors() -> None:
     binance_bucket = rate_limiters.configure("BINANCE", rate=5, capacity=10)
     bybit_bucket = rate_limiters.configure("BYBIT", rate=5, capacity=10)
     gateio_bucket = rate_limiters.configure("GATEIO", rate=5, capacity=10)
+    bitget_bucket = rate_limiters.configure("BITGET", rate=5, capacity=10)
     connectors.register(BinanceConnector(bucket=binance_bucket))
     connectors.register(BybitConnector(bucket=bybit_bucket))
     connectors.register(GateIOConnector(bucket=gateio_bucket))
+    connectors.register(BitgetConnector(bucket=bitget_bucket))
 
 
 def setup_jobs() -> None:

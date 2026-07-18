@@ -27,11 +27,14 @@ class CredentialInvalid(AccountError):
 
 def decrypt_credential(credential: ApiCredential) -> Credential:
     """Decrypted mapping for connector calls. Use at signing time only."""
-    return {
+    out: Credential = {
         "api_key": credential.api_key,
         "secret": SecretBox().decrypt(credential.secret_enc),
         "scheme": credential.scheme,
     }
+    if credential.passphrase_enc:
+        out["passphrase"] = SecretBox().decrypt(credential.passphrase_enc)
+    return out
 
 
 async def get_active_credential(db: AsyncSession, account: Account) -> ApiCredential:
@@ -71,6 +74,15 @@ async def register_account(
     return account
 
 
+def _credential_payload(
+    scheme: str, api_key: str, secret: str, passphrase: str | None = None
+) -> Credential:
+    payload: Credential = {"api_key": api_key, "secret": secret, "scheme": scheme}
+    if passphrase:
+        payload["passphrase"] = passphrase
+    return payload
+
+
 async def add_credential(
     db: AsyncSession,
     connector: ExchangeConnector,
@@ -80,10 +92,13 @@ async def add_credential(
     secret: str,
     label: str | None = None,
     tags: list[str] | None = None,
+    passphrase: str | None = None,
 ) -> tuple[ApiCredential, CredentialInfo]:
     """Encrypt, verify against the venue, and store a credential."""
+    if account.exchange.upper() == "BITGET" and not passphrase:
+        raise CredentialInvalid("Bitget API keys require a passphrase")
     info = await connector.verify_credential(
-        {"api_key": api_key, "secret": secret, "scheme": scheme}
+        _credential_payload(scheme, api_key, secret, passphrase)
     )
     if not info.valid:
         raise CredentialInvalid(info.reason or "The venue rejected this API key")
@@ -93,6 +108,7 @@ async def add_credential(
         scheme=scheme,
         api_key=api_key,
         secret_enc=SecretBox().encrypt(secret),
+        passphrase_enc=SecretBox().encrypt(passphrase) if passphrase else None,
         label=label,
         permissions=info.permissions,
         read_only=info.read_only,
@@ -121,6 +137,7 @@ async def register_account_with_credential(
     tags: list[str] | None = None,
     parent_id: int | None = None,
     cred_label: str | None = None,
+    passphrase: str | None = None,
 ) -> tuple[Account, ApiCredential, CredentialInfo]:
     """Register an account and its API key in a single step.
 
@@ -132,9 +149,11 @@ async def register_account_with_credential(
         raise AccountError("Subaccounts must reference a parent account")
     if account_type == "main" and parent_id is not None:
         raise AccountError("Main accounts cannot have a parent")
+    if exchange.upper() == "BITGET" and not passphrase:
+        raise CredentialInvalid("Bitget API keys require a passphrase")
 
     info = await connector.verify_credential(
-        {"api_key": api_key, "secret": secret, "scheme": scheme}
+        _credential_payload(scheme, api_key, secret, passphrase)
     )
     if not info.valid:
         raise CredentialInvalid(info.reason or "The venue rejected this API key")
@@ -154,6 +173,7 @@ async def register_account_with_credential(
         scheme=scheme,
         api_key=api_key,
         secret_enc=SecretBox().encrypt(secret),
+        passphrase_enc=SecretBox().encrypt(passphrase) if passphrase else None,
         label=cred_label,
         permissions=info.permissions,
         read_only=info.read_only,
@@ -192,6 +212,13 @@ async def rename_account(db: AsyncSession, account: Account, label: str) -> Acco
 def reveal_secret(credential: ApiCredential) -> str:
     """Decrypt and return a stored secret. Callers MUST audit each reveal."""
     return SecretBox().decrypt(credential.secret_enc)
+
+
+def reveal_passphrase(credential: ApiCredential) -> str | None:
+    """Decrypt and return a stored passphrase, if any. Callers MUST audit."""
+    if not credential.passphrase_enc:
+        return None
+    return SecretBox().decrypt(credential.passphrase_enc)
 
 
 async def set_credential_tags(
@@ -321,6 +348,9 @@ async def create_sub_api_key(
         scheme=key.scheme.value,
         api_key=key.api_key,
         secret_enc=SecretBox().encrypt(key.secret),
+        passphrase_enc=(
+            SecretBox().encrypt(key.passphrase) if key.passphrase else None
+        ),
         label=note or "created by cpanel",
         permissions={"granted": key.permissions},
         read_only=read_only,

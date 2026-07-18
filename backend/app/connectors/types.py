@@ -200,6 +200,7 @@ class ApiKeyResult:
     secret: str                    # plaintext only at creation time
     scheme: KeyScheme
     permissions: list[str] = field(default_factory=list)
+    passphrase: str | None = None  # Bitget and similar; plaintext only at creation
 
 
 @dataclass(frozen=True)

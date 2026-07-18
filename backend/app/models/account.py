@@ -56,6 +56,8 @@ class ApiCredential(Base):
     scheme: Mapped[str] = mapped_column(String(16), nullable=False)  # HMAC | ED25519 | RSA
     api_key: Mapped[str] = mapped_column(String(256), nullable=False)
     secret_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    # Encrypted passphrase for venues that require one (Bitget). Null elsewhere.
+    passphrase_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     label: Mapped[str | None] = mapped_column(String(128))
 
     # Normalized permission info captured at verification time

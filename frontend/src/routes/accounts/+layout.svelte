@@ -27,6 +27,14 @@
 				{ id: 'readme', name: 'Readme' },
 				{ id: 'account', name: 'Account' }
 			]
+		},
+		{
+			slug: 'bitget',
+			name: 'Bitget',
+			tabs: [
+				{ id: 'readme', name: 'Readme' },
+				{ id: 'account', name: 'Account' }
+			]
 		}
 	];
 
