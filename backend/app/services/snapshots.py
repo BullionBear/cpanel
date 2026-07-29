@@ -66,22 +66,40 @@ def _value_in_quote(asset: str, amount: Decimal, prices: dict[str, Decimal]) -> 
 
 
 async def capture_snapshots(
-    db: AsyncSession, connector: ExchangeConnector, account: Account
+    db: AsyncSession,
+    connector: ExchangeConnector,
+    account: Account,
+    *,
+    balances: list[Balance] | None = None,
+    positions: list[Position] | None = None,
 ) -> int:
     """Capture one balance+position batch for an account. Returns rows written.
 
     Balances and positions are gated on the connector's capabilities so a venue
     that only exposes one still snapshots what it can.
-    """
-    credential = await get_active_credential(db, account)
-    decrypted = decrypt_credential(credential)
 
-    balances: list[Balance] = []
-    positions: list[Position] = []
-    if connector.supports(Capability.BALANCES):
-        balances = await connector.fetch_balances(decrypted)
-    if connector.supports(Capability.POSITIONS):
-        positions = await connector.fetch_positions(decrypted)
+    Optional ``balances`` / ``positions`` skip the venue fetch (used when the
+    caller already fetched, e.g. post-transfer refresh with a lag retry).
+    """
+    if balances is None or positions is None:
+        credential = await get_active_credential(db, account)
+        decrypted = decrypt_credential(credential)
+        if balances is None:
+            balances = (
+                await connector.fetch_balances(decrypted)
+                if connector.supports(Capability.BALANCES)
+                else []
+            )
+        if positions is None:
+            positions = (
+                await connector.fetch_positions(decrypted)
+                if connector.supports(Capability.POSITIONS)
+                else []
+            )
+    else:
+        # Prefetched path still needs a credential check so accounts without
+        # keys fail the same way as a live capture.
+        await get_active_credential(db, account)
 
     prices = await _price_map(db, account.exchange)
     batch_id = uuid.uuid4().hex

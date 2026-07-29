@@ -101,6 +101,11 @@ class FakeConnector(ExchangeConnector):
         self.deposits: list[Deposit] = []
         self.funding_fees: list[FundingFee] = []
         self.transfer_failure: Exception | None = None  # raised by next transfer()
+        # When > 0, transfer_balances returns a pre-transfer copy for that many
+        # calls after transfer() mutates balances (venue balance lag).
+        self.transfer_balance_lag_fetches: int = 0
+        self._stale_balances: list[Balance] | None = None
+        self._stale_balance_fetches_left: int = 0
 
     # -- public market data --------------------------------------------------
 
@@ -113,6 +118,9 @@ class FakeConnector(ExchangeConnector):
     # -- account state --------------------------------------------------------
 
     async def fetch_balances(self, credential: Credential) -> list[Balance]:
+        if self._stale_balance_fetches_left > 0 and self._stale_balances is not None:
+            self._stale_balance_fetches_left -= 1
+            return list(self._stale_balances)
         return list(self.balances)
 
     async def fetch_positions(self, credential: Credential) -> list[Position]:
@@ -320,6 +328,25 @@ class FakeConnector(ExchangeConnector):
 
     # -- transfers ------------------------------------------------------
 
+    def _adjust_balance(self, wallet: WalletType, asset: str, delta: Decimal) -> None:
+        for i, balance in enumerate(self.balances):
+            if balance.wallet == wallet and balance.asset == asset:
+                new_free = balance.free + delta
+                if new_free == 0 and balance.locked == 0:
+                    self.balances.pop(i)
+                else:
+                    self.balances[i] = Balance(
+                        wallet=wallet,
+                        asset=asset,
+                        free=new_free,
+                        locked=balance.locked,
+                    )
+                return
+        if delta > 0:
+            self.balances.append(
+                Balance(wallet=wallet, asset=asset, free=delta, locked=Decimal("0"))
+            )
+
     async def transfer(
         self,
         credential: Credential,
@@ -333,12 +360,20 @@ class FakeConnector(ExchangeConnector):
         if self.transfer_failure is not None:
             failure, self.transfer_failure = self.transfer_failure, None
             raise failure
+        amount = Decimal(amount)
         record = {
             "asset": asset, "amount": amount,
             "from_wallet": from_wallet, "to_wallet": to_wallet,
             "from_subaccount": from_subaccount, "to_subaccount": to_subaccount,
         }
         self.transfers.append(record)
+        if self.transfer_balance_lag_fetches > 0:
+            self._stale_balances = list(self.balances)
+            self._stale_balance_fetches_left = self.transfer_balance_lag_fetches
+        if from_wallet is not None:
+            self._adjust_balance(from_wallet, asset, -amount)
+        if to_wallet is not None:
+            self._adjust_balance(to_wallet, asset, amount)
         return TransferResult(native_transfer_id=str(next(self._ids)), status="confirmed")
 
     # -- withdrawals / deposits -------------------------------------------

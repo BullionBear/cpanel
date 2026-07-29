@@ -238,8 +238,18 @@
 
 	async function loadTransfers() {
 		try {
+			const previous = transfers;
 			transfers = await fetchTransfers({ limit: '100' });
 			listError = '';
+			// Cross/withdraw paths finish via the progress job — refresh holdings then.
+			const newlyCompleted = transfers.filter(
+				(t) =>
+					t.status === 'completed' &&
+					previous.some((p) => p.id === t.id && p.status === 'in_progress')
+			);
+			for (const t of newlyCompleted) {
+				await invalidateHoldings(t.from_account_id, t.to_account_id);
+			}
 		} catch (e) {
 			listError =
 				e instanceof ApiError && e.status === 401
@@ -289,6 +299,9 @@
 			resetPreview();
 			expanded = created.id;
 			await loadTransfers();
+			if (created.status === 'completed') {
+				await invalidateHoldings(created.from_account_id, created.to_account_id);
+			}
 		} catch (e) {
 			formError = e instanceof ApiError ? e.message : 'Transfer failed to start';
 		} finally {
@@ -311,18 +324,20 @@
 	$: balanceAccount = accounts.find((a) => String(a.account_id) === balanceAccountId) ?? null;
 	$: loadHoldings(balanceAccount);
 
-	async function loadHoldings(account: OverviewItem | null) {
+	async function loadHoldings(account: OverviewItem | null, force = false) {
 		if (!account) {
 			holdings = null;
 			holdingsFor = null;
 			return;
 		}
-		if (holdingsFor === account.account_id) return;
+		if (!force && holdingsFor === account.account_id) return;
 		holdingsFor = account.account_id;
-		const cached = holdingsCache.get(account.account_id);
-		if (cached) {
-			holdings = cached;
-			return;
+		if (!force) {
+			const cached = holdingsCache.get(account.account_id);
+			if (cached) {
+				holdings = cached;
+				return;
+			}
 		}
 		holdings = null;
 		holdingsLoading = true;
@@ -334,6 +349,16 @@
 			if (holdingsFor === account.account_id) holdings = null;
 		} finally {
 			holdingsLoading = false;
+		}
+	}
+
+	/** Drop cached holdings for accounts touched by a transfer and refetch the panel. */
+	async function invalidateHoldings(...accountIds: Array<number | null | undefined>) {
+		const ids = [...new Set(accountIds.filter((id): id is number => id != null))];
+		for (const id of ids) holdingsCache.delete(id);
+		const current = balanceAccount;
+		if (current && ids.includes(current.account_id)) {
+			await loadHoldings(current, true);
 		}
 	}
 
@@ -396,6 +421,9 @@
 			resetWithdrawPreview();
 			expanded = created.id;
 			await loadTransfers();
+			if (created.status === 'completed') {
+				await invalidateHoldings(created.from_account_id);
+			}
 		} catch (e) {
 			formError = e instanceof ApiError ? e.message : 'Withdrawal failed to start';
 		} finally {

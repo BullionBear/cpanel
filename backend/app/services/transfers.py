@@ -31,7 +31,12 @@ Failure model, by step type:
 
 A transfer with no state change for TRANSFER_STUCK_MINUTES is flagged stuck
 by :func:`flag_stuck_transfers` — surfaced, but still polled.
+
+On completion, affected accounts are re-snapshotted best-effort so the
+portfolio/transfers UI does not wait for the hourly capture job. Snapshot
+failures never reopen a completed transfer.
 """
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -42,6 +47,7 @@ from sqlalchemy.orm import selectinload
 
 from app.connectors.base import Capability, Credential, ExchangeConnector
 from app.connectors.types import (
+    Balance,
     Deposit,
     DepositStatus,
     WalletType,
@@ -49,13 +55,19 @@ from app.connectors.types import (
 )
 from app.core.config import settings
 from app.models.account import Account
+from app.models.snapshot import BalanceSnapshot
 from app.models.transfer import Transfer, TransferStep
 from app.services.accounts import (
     AccountError,
     decrypt_credential,
     get_active_credential,
 )
-from app.services.snapshots import _price_map, _value_in_quote
+from app.services.snapshots import (
+    _price_map,
+    _value_in_quote,
+    capture_snapshots,
+    latest_batch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +109,10 @@ WITHDRAWAL_STEPS = ["validate", "submit_withdrawal", "await_withdrawal"]
 _MONEY_MOVING_STEPS = {"submit", "submit_withdrawal"}
 # Steps that poll for an asynchronous outcome and may legitimately wait.
 _WAITING_STEPS = {"await_withdrawal", "await_deposit"}
+
+# Venue balance endpoints can lag a transfer ACK; one short retry is enough.
+_POST_TRANSFER_BALANCE_RETRY_SECONDS = 0.5
+_POST_TRANSFER_AMOUNT_TOLERANCE = Decimal("0.00000001")
 
 # Sentinel a handler returns while its outcome is still pending.
 _WAIT = object()
@@ -890,7 +906,115 @@ async def advance_transfer(
     transfer.completed_at = _utcnow()
     transfer.updated_at = _utcnow()
     await db.commit()
+    await _refresh_balances_after_transfer(db, transfer, get_connector)
     return transfer
+
+
+async def _latest_wallet_free(
+    db: AsyncSession, account_id: int, wallet: str, asset: str
+) -> Decimal | None:
+    """Free amount of ``asset`` in ``wallet`` from the latest snapshot, or None."""
+    batch = await latest_batch(db, account_id)
+    if batch is None:
+        return None
+    batch_id, _ = batch
+    free = (
+        await db.execute(
+            select(BalanceSnapshot.free).where(
+                BalanceSnapshot.batch_id == batch_id,
+                BalanceSnapshot.account_id == account_id,
+                BalanceSnapshot.wallet == wallet,
+                BalanceSnapshot.asset == asset,
+            )
+        )
+    ).scalar_one_or_none()
+    return Decimal("0") if free is None else free
+
+
+def _wallet_free(balances: list[Balance], wallet: str, asset: str) -> Decimal:
+    for balance in balances:
+        if balance.wallet.value == wallet and balance.asset == asset:
+            return balance.free
+    return Decimal("0")
+
+
+def _source_debit_reflected(
+    balances: list[Balance], transfer: Transfer, baseline: Decimal
+) -> bool:
+    """True when the source wallet free balance has dropped by ~transfer.amount."""
+    if not transfer.from_wallet:
+        return True
+    free = _wallet_free(balances, transfer.from_wallet, transfer.asset)
+    return free <= baseline - transfer.amount + _POST_TRANSFER_AMOUNT_TOLERANCE
+
+
+async def _refresh_account_after_transfer(
+    db: AsyncSession,
+    connector: ExchangeConnector,
+    account: Account,
+    transfer: Transfer,
+) -> None:
+    """Fetch venue balances (with one lag retry) and write a snapshot batch."""
+    credential = await get_active_credential(db, account)
+    decrypted = decrypt_credential(credential)
+
+    balances: list[Balance] = []
+    if connector.supports(Capability.BALANCES):
+        balances = await connector.fetch_balances(decrypted)
+
+    is_source = account.id == transfer.from_account_id
+    if (
+        is_source
+        and transfer.from_wallet
+        and connector.supports(Capability.BALANCES)
+    ):
+        baseline = await _latest_wallet_free(
+            db, account.id, transfer.from_wallet, transfer.asset
+        )
+        if baseline is not None and not _source_debit_reflected(
+            balances, transfer, baseline
+        ):
+            await asyncio.sleep(_POST_TRANSFER_BALANCE_RETRY_SECONDS)
+            balances = await connector.fetch_balances(decrypted)
+
+    positions = []
+    if connector.supports(Capability.POSITIONS):
+        positions = await connector.fetch_positions(decrypted)
+
+    await capture_snapshots(
+        db, connector, account, balances=balances, positions=positions
+    )
+
+
+async def _refresh_balances_after_transfer(
+    db: AsyncSession, transfer: Transfer, get_connector
+) -> None:
+    """Best-effort re-snapshot of accounts touched by a completed transfer.
+
+    Failures are logged only — the transfer stays completed. The hourly
+    snapshot job remains the fallback.
+    """
+    account_ids = [transfer.from_account_id]
+    if (
+        transfer.to_account_id is not None
+        and transfer.to_account_id != transfer.from_account_id
+    ):
+        account_ids.append(transfer.to_account_id)
+
+    for account_id in account_ids:
+        try:
+            account = await db.get(Account, account_id)
+            if account is None:
+                continue
+            connector = get_connector(account.exchange)
+            await _refresh_account_after_transfer(db, connector, account, transfer)
+        except Exception:
+            logger.warning(
+                "Post-transfer snapshot failed for account %s (transfer %s)",
+                account_id,
+                transfer.id,
+                exc_info=True,
+            )
 
 
 async def _fail(

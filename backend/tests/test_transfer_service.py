@@ -1,15 +1,19 @@
 """Transfer state machine tests against the fake connector."""
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 
 from app.connectors.fake import FakeConnector
 from app.connectors.types import AssetNetwork, WalletType
 from app.core.config import settings
+from app.models.snapshot import BalanceSnapshot
 from app.models.transfer import Transfer, TransferStep
 from app.services import accounts as accounts_svc
+from app.services import snapshots as snapshots_svc
 from app.services.transfers import (
     CROSS_STEPS,
     TransferGuardrailError,
@@ -72,6 +76,85 @@ async def test_wallet_move_completes(db, fake, main_account):
     assert transfer.completed_at is not None
     assert fake.transfers[0]["from_wallet"] == WalletType.SPOT
     assert fake.transfers[0]["to_wallet"] == WalletType.FUNDING
+
+
+async def test_wallet_move_refreshes_balance_snapshot(db, fake, main_account):
+    """Completed intra transfer writes a new snapshot reflecting venue balances."""
+    await snapshots_svc.capture_snapshots(db, fake, main_account)
+    before = await snapshots_svc.latest_batch(db, main_account.id)
+    assert before is not None
+
+    transfer = await create_intra_transfer(
+        db, fake, main_account, main_account, "USDT", Decimal("100"),
+        from_wallet=WalletType.SPOT, to_wallet=WalletType.FUNDING,
+    )
+    assert transfer.status == "completed"
+
+    after = await snapshots_svc.latest_batch(db, main_account.id)
+    assert after is not None
+    assert after[0] != before[0]
+
+    rows = {
+        (b.wallet, b.asset): b
+        for b in (
+            await db.execute(
+                select(BalanceSnapshot).where(BalanceSnapshot.batch_id == after[0])
+            )
+        ).scalars()
+    }
+    assert rows[("SPOT", "USDT")].free == Decimal("9900")
+    assert rows[("FUNDING", "USDT")].free == Decimal("100")
+
+
+async def test_post_transfer_snapshot_failure_keeps_completed(
+    db, fake, main_account, monkeypatch
+):
+    """A failed post-transfer snapshot must not reopen or fail the transfer."""
+    monkeypatch.setattr(
+        "app.services.transfers.capture_snapshots",
+        AsyncMock(side_effect=RuntimeError("venue balance timeout")),
+    )
+    transfer = await create_intra_transfer(
+        db, fake, main_account, main_account, "USDT", Decimal("25"),
+        from_wallet=WalletType.SPOT, to_wallet=WalletType.FUNDING,
+    )
+    assert transfer.status == "completed"
+    assert transfer.completed_at is not None
+    assert transfer.error is None
+
+
+async def test_post_transfer_retries_when_source_balance_lags(
+    db, fake, main_account, monkeypatch
+):
+    """One retry when the first balance fetch still shows the pre-transfer amount."""
+    await snapshots_svc.capture_snapshots(db, fake, main_account)
+    fake.transfer_balance_lag_fetches = 1
+    slept: list[float] = []
+
+    async def _fake_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr("app.services.transfers.asyncio.sleep", _fake_sleep)
+
+    transfer = await create_intra_transfer(
+        db, fake, main_account, main_account, "USDT", Decimal("100"),
+        from_wallet=WalletType.SPOT, to_wallet=WalletType.FUNDING,
+    )
+    assert transfer.status == "completed"
+    assert slept == [0.5]
+
+    batch = await snapshots_svc.latest_batch(db, main_account.id)
+    assert batch is not None
+    rows = {
+        (b.wallet, b.asset): b
+        for b in (
+            await db.execute(
+                select(BalanceSnapshot).where(BalanceSnapshot.batch_id == batch[0])
+            )
+        ).scalars()
+    }
+    assert rows[("SPOT", "USDT")].free == Decimal("9900")
+    assert rows[("FUNDING", "USDT")].free == Decimal("100")
 
 
 async def test_main_to_sub_uses_master_credential(db, fake, main_account, sub_account):
