@@ -67,7 +67,12 @@
 	// The open "Create key" dialog, or null when closed.
 	let keyDialog: KeyDialog | null = null;
 	// Secret shown once right after a key is created (from the create response).
-	let createdSecret: { api_key: string; secret: string; passphrase?: string | null } | null = null;
+	let createdSecret: {
+		api_key: string;
+		secret: string;
+		passphrase?: string | null;
+		ips: string[];
+	} | null = null;
 	// The API key whose full detail dialog is open, or null when closed.
 	let detail: { account: AccountInfo; cred: Credential } | null = null;
 
@@ -79,8 +84,17 @@
 	};
 
 	const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString() : '—');
-	const fmtPermissions = (p: Record<string, unknown> | null) =>
-		p && Object.keys(p).length ? JSON.stringify(p, null, 2) : '';
+	/** IP allowlist persisted under permissions.ips at key creation. */
+	const credentialIps = (p: Record<string, unknown> | null): string[] => {
+		const ips = p?.ips;
+		return Array.isArray(ips) ? ips.filter((x): x is string => typeof x === 'string') : [];
+	};
+	/** Permissions JSON for display — exclude ips (shown as its own row). */
+	const fmtPermissions = (p: Record<string, unknown> | null) => {
+		if (!p) return '';
+		const { ips: _ips, ...rest } = p;
+		return Object.keys(rest).length ? JSON.stringify(rest, null, 2) : '';
+	};
 
 	// Revealed secrets, keyed by credential id
 	let revealed: Record<number, { api_key: string; secret: string; passphrase?: string | null }> =
@@ -278,7 +292,8 @@
 			createdSecret = {
 				api_key: result.credential.api_key,
 				secret: result.secret,
-				passphrase: result.passphrase
+				passphrase: result.passphrase,
+				ips: credentialIps(result.credential.permissions)
 			};
 			keyDialog = null;
 		});
@@ -728,6 +743,9 @@
 				{#if createdSecret.passphrase}
 					<div><span>Passphrase</span><code>{createdSecret.passphrase}</code></div>
 				{/if}
+				{#if createdSecret.ips.length}
+					<div><span>IP allowlist</span><code>{createdSecret.ips.join(', ')}</code></div>
+				{/if}
 			</div>
 			<div class="dialog-actions">
 				<button class="btn" on:click={() => (createdSecret = null)}>Done</button>
@@ -755,6 +773,14 @@
 				<div class="detail-row">
 					<span class="k">Withdraw</span>
 					<span class="v">{detail.cred.can_withdraw ? 'Enabled' : 'Disabled'}</span>
+				</div>
+				<div class="detail-row">
+					<span class="k">IP allowlist</span>
+					<span class="v">
+						{#if credentialIps(detail.cred.permissions).length}
+							{credentialIps(detail.cred.permissions).join(', ')}
+						{:else}—{/if}
+					</span>
 				</div>
 				<div class="detail-row">
 					<span class="k">Tags</span>

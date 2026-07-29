@@ -157,12 +157,33 @@ async def test_create_sub_api_key_passes_options(db, connector):
     )
     assert credential.read_only is True
     assert credential.label == "ro key"
-    assert credential.permissions == {"granted": ["spot", "wallet"]}
+    assert credential.permissions == {
+        "granted": ["spot", "wallet"],
+        "ips": ["1.2.3.4"],
+    }
 
     created = connector.created_keys[-1]
     assert created["read_only"] is True
     assert created["ips"] == ["1.2.3.4"]
     assert created["note"] == "ro key"
+
+
+async def test_modify_sub_api_key_preserves_ips(db, connector):
+    main = await make_main(db)
+    await svc.add_credential(db, connector, main, "HMAC", "k", "s" * 8)
+    sub = await svc.create_subaccount(db, connector, main, "iota")
+    credential, _ = await svc.create_sub_api_key(
+        db, connector, main, sub, ["spot"], ips=["1.2.3.4", "5.6.7.8"],
+    )
+
+    updated = await svc.modify_sub_api_key(
+        db, connector, main, credential, permissions=["wallet"], read_only=True,
+    )
+    assert updated.permissions == {
+        "granted": ["wallet"],
+        "ips": ["1.2.3.4", "5.6.7.8"],
+    }
+    assert updated.read_only is True
 
 
 async def test_revoke_sub_key_hits_venue(db, connector):

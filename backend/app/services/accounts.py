@@ -351,6 +351,11 @@ async def create_sub_api_key(
         raise AccountError(str(message).strip() or "Venue rejected API key creation") from exc
     if not key.api_key or not key.secret:
         raise AccountError("Venue created a key but returned no api key/secret")
+    # Persist the allowlist alongside granted scopes so detail/list UIs can
+    # show it later — venues accept ips at create but we do not re-fetch them.
+    perms: dict = {"granted": key.permissions}
+    if ips:
+        perms["ips"] = list(ips)
     credential = ApiCredential(
         account_id=sub_account.id,
         scheme=key.scheme.value,
@@ -360,7 +365,7 @@ async def create_sub_api_key(
             SecretBox().encrypt(key.passphrase) if key.passphrase else None
         ),
         label=note or "created by cpanel",
-        permissions={"granted": key.permissions},
+        permissions=perms,
         read_only=read_only,
         can_withdraw=False,
         tags=list(tags or []),
@@ -398,7 +403,10 @@ async def modify_sub_api_key(
     if read_only is not None:
         credential.read_only = read_only
     if permissions is not None:
+        existing_ips = (credential.permissions or {}).get("ips")
         credential.permissions = {"granted": permissions}
+        if existing_ips:
+            credential.permissions["ips"] = existing_ips
     await db.commit()
     await db.refresh(credential)
     return credential
