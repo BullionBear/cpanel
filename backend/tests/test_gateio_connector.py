@@ -860,7 +860,11 @@ async def test_create_api_key_maps_scopes(monkeypatch):
     async def raw(credential, user_id, body):
         captured["user_id"] = user_id
         captured["body"] = body
-        return {"key": "new-key", "secret": "new-secret"}
+        return {
+            "key": "new-key",
+            "secret": "new-secret",
+            "ip_whitelist": ["1.2.3.4"],
+        }
 
     monkeypatch.setattr(c, "_create_sub_key_raw", raw)
     result = await c.create_api_key(
@@ -881,6 +885,7 @@ async def test_create_api_key_maps_scopes(monkeypatch):
     assert result.api_key == "new-key"
     assert result.secret == "new-secret"
     assert result.scheme == KeyScheme.HMAC
+    assert result.ips == ["1.2.3.4"]
 
 
 async def test_create_api_key_rejects_non_hmac():
@@ -890,6 +895,26 @@ async def test_create_api_key_rejects_non_hmac():
             {"api_key": "k", "secret": "s"}, subaccount="10001",
             scheme=KeyScheme.ED25519, permissions=["spot"],
         )
+
+
+async def test_list_api_keys_subaccount(monkeypatch):
+    c = GateIOConnector()
+
+    async def call(func, *args, **kwargs):
+        return [
+            {
+                "key": "sub-key-1",
+                "name": "prom",
+                "ip_whitelist": ["10.0.0.1", "10.0.0.2"],
+            }
+        ]
+
+    monkeypatch.setattr(c, "_call", call)
+    keys = await c.list_api_keys({"api_key": "k", "secret": "s"}, subaccount="58053587")
+    assert len(keys) == 1
+    assert keys[0].api_key == "sub-key-1"
+    assert keys[0].ips == ["10.0.0.1", "10.0.0.2"]
+    assert keys[0].label == "prom"
 
 
 def _gate_error(status: int, label: str, message: str):
@@ -948,6 +973,7 @@ async def test_verify_parses_main_keys_list(monkeypatch):
                     {"name": "wallet", "read_only": False},
                     {"name": "withdraw", "read_only": True},
                 ],
+                "ip_whitelist": ["1.2.3.4", "5.6.7.8"],
             },
         ])
 
@@ -971,6 +997,7 @@ async def test_verify_parses_main_keys_list(monkeypatch):
         "wallet": "read-write",
         "withdraw": "read",
     }
+    assert info.ips == ["1.2.3.4", "5.6.7.8"]
 
 
 async def test_verify_surfaces_real_rejection(monkeypatch):

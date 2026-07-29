@@ -69,6 +69,7 @@ from app.connectors.base import (
 from app.connectors.errors import credential_error_reason
 from app.connectors.symbols import InvalidUniversalSymbol, build_universal_symbol
 from app.connectors.types import (
+    ApiKeyInfo,
     ApiKeyResult,
     AssetNetwork,
     Balance,
@@ -782,6 +783,7 @@ class GateIOConnector(ExchangeConnector):
 
         read_only = can_trade = can_withdraw = is_master = None
         permissions = None
+        ips = None
         key_info = await self._fetch_own_key_info(credential)
         if key_info is not None:
             is_master = True  # /account/main_keys answers only for main keys
@@ -794,6 +796,9 @@ class GateIOConnector(ExchangeConnector):
             can_trade = bool(writable & {"spot", "futures", "delivery", "options", "unified"})
             # "withdraw" is its own scope on Gate; "wallet" only covers transfers.
             can_withdraw = "withdraw" in writable
+            # Always surface the field (empty = unrestricted) so the panel can
+            # tell "unknown" apart from "no allowlist".
+            ips = [str(ip) for ip in (key_info.get("ip_whitelist") or [])]
         return CredentialInfo(
             valid=True,
             native_uid=str(detail.get("user_id", "")) or None,
@@ -802,6 +807,7 @@ class GateIOConnector(ExchangeConnector):
             can_trade=can_trade,
             can_withdraw=can_withdraw,
             permissions=permissions,
+            ips=ips,
         )
 
     # -- account state ----------------------------------------------------------
@@ -1265,12 +1271,51 @@ class GateIOConnector(ExchangeConnector):
         if ips:
             body.ip_whitelist = ips
         raw = await self._create_sub_key_raw(credential, int(subaccount), body)
+        raw_ips = raw.get("ip_whitelist")
         return ApiKeyResult(
             api_key=raw["key"],
             secret=raw["secret"],
             scheme=KeyScheme.HMAC,
             permissions=permissions,
+            ips=[str(ip) for ip in raw_ips] if raw_ips is not None else list(ips or []),
         )
+
+    async def list_api_keys(
+        self, credential: Credential, subaccount: str | None = None
+    ) -> list[ApiKeyInfo]:
+        """Main keys via /account/main_keys; sub keys via list_sub_account_keys."""
+        if subaccount:
+            rows = dump_gate_model(
+                await self._call(
+                    self._sub_api(credential).list_sub_account_keys, int(subaccount)
+                )
+            )
+            if isinstance(rows, dict):
+                rows = [rows]
+            return [
+                ApiKeyInfo(
+                    api_key=str(row.get("key") or ""),
+                    ips=[str(ip) for ip in (row.get("ip_whitelist") or [])],
+                    label=row.get("name"),
+                )
+                for row in rows or []
+                if row.get("key")
+            ]
+
+        api = gate_api.AccountApi(self._auth_client(credential))
+        response = await self._call(api.get_account_main_keys, _preload_content=False)
+        rows = json.loads(response.data)
+        if isinstance(rows, dict):
+            rows = [rows]
+        return [
+            ApiKeyInfo(
+                api_key=str(row.get("key") or ""),
+                ips=[str(ip) for ip in (row.get("ip_whitelist") or [])],
+                label=row.get("name"),
+            )
+            for row in rows or []
+            if row.get("key")
+        ]
 
     async def modify_api_key(
         self,

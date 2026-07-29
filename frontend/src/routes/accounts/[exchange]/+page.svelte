@@ -84,10 +84,13 @@
 	};
 
 	const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString() : '—');
-	/** IP allowlist persisted under permissions.ips at key creation. */
-	const credentialIps = (p: Record<string, unknown> | null): string[] => {
-		const ips = p?.ips;
-		return Array.isArray(ips) ? ips.filter((x): x is string => typeof x === 'string') : [];
+	/** IP allowlist from credential.ips or permissions.ips. */
+	const credentialIps = (cred: Credential | Record<string, unknown> | null): string[] => {
+		if (!cred) return [];
+		const top = (cred as Credential).ips;
+		if (Array.isArray(top)) return top.filter((x): x is string => typeof x === 'string');
+		const nested = (cred as Credential).permissions?.ips ?? (cred as Record<string, unknown>).ips;
+		return Array.isArray(nested) ? nested.filter((x): x is string => typeof x === 'string') : [];
 	};
 	/** Permissions JSON for display — exclude ips (shown as its own row). */
 	const fmtPermissions = (p: Record<string, unknown> | null) => {
@@ -293,7 +296,7 @@
 				api_key: result.credential.api_key,
 				secret: result.secret,
 				passphrase: result.passphrase,
-				ips: credentialIps(result.credential.permissions)
+				ips: credentialIps(result.credential)
 			};
 			keyDialog = null;
 		});
@@ -777,8 +780,8 @@
 				<div class="detail-row">
 					<span class="k">IP allowlist</span>
 					<span class="v">
-						{#if credentialIps(detail.cred.permissions).length}
-							{credentialIps(detail.cred.permissions).join(', ')}
+						{#if credentialIps(detail.cred).length}
+							{credentialIps(detail.cred).join(', ')}
 						{:else}—{/if}
 					</span>
 				</div>

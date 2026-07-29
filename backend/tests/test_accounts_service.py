@@ -186,6 +186,40 @@ async def test_modify_sub_api_key_preserves_ips(db, connector):
     assert updated.read_only is True
 
 
+async def test_sync_refreshes_sub_key_ip_allowlist(db, connector):
+    main = await make_main(db)
+    await svc.add_credential(db, connector, main, "HMAC", "k", "s" * 8)
+    sub = await svc.create_subaccount(db, connector, main, "kappa")
+    credential, _ = await svc.create_sub_api_key(
+        db, connector, main, sub, ["spot"], ips=["1.1.1.1"],
+    )
+    # Simulate a venue-side allowlist change.
+    connector.created_keys[-1]["ips"] = ["9.9.9.9"]
+    # Drop the stored field so refresh must repopulate it.
+    credential.permissions = {"granted": ["spot"]}
+    await db.commit()
+
+    await svc.sync_subaccounts(db, connector, main)
+    await db.refresh(credential)
+    assert credential.permissions["ips"] == ["9.9.9.9"]
+
+
+async def test_backfill_missing_ip_allowlists(db, connector):
+    main = await make_main(db)
+    await svc.add_credential(db, connector, main, "HMAC", "k", "s" * 8)
+    sub = await svc.create_subaccount(db, connector, main, "lambda")
+    credential, _ = await svc.create_sub_api_key(
+        db, connector, main, sub, ["spot"], ips=["8.8.8.8"],
+    )
+    credential.permissions = {"granted": ["spot"]}
+    await db.commit()
+
+    updated = await svc.backfill_missing_ip_allowlists(db, lambda _ex: connector)
+    assert updated >= 1
+    await db.refresh(credential)
+    assert credential.permissions["ips"] == ["8.8.8.8"]
+
+
 async def test_revoke_sub_key_hits_venue(db, connector):
     main = await make_main(db)
     await svc.add_credential(db, connector, main, "HMAC", "k", "s" * 8)

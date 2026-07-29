@@ -10,6 +10,7 @@ from decimal import Decimal
 
 from app.connectors.base import Capability, Credential, ExchangeConnector
 from app.connectors.types import (
+    ApiKeyInfo,
     ApiKeyResult,
     AssetNetwork,
     Balance,
@@ -259,6 +260,11 @@ class FakeConnector(ExchangeConnector):
 
     async def verify_credential(self, credential: Credential) -> CredentialInfo:
         valid = not str(credential.get("secret", "")).startswith("wrong")
+        ips: list[str] = []
+        for row in self.created_keys:
+            if row.get("api_key") == credential.get("api_key"):
+                ips = list(row.get("ips") or [])
+                break
         return CredentialInfo(
             valid=valid,
             native_uid="uid-1" if valid else None,
@@ -267,6 +273,7 @@ class FakeConnector(ExchangeConnector):
             can_trade=True,
             can_withdraw=True,
             permissions={"note": "fake"} if valid else None,
+            ips=ips if valid else None,
         )
 
     async def list_subaccounts(self, credential: Credential) -> list[SubaccountInfo]:
@@ -288,21 +295,38 @@ class FakeConnector(ExchangeConnector):
         note: str | None = None,
     ) -> ApiKeyResult:
         n = next(self._ids)
+        api_key = f"fake-key-{n}"
+        stored_ips = list(ips or [])
         self.created_keys.append(
             {
+                "api_key": api_key,
                 "subaccount": subaccount,
                 "permissions": permissions,
                 "read_only": read_only,
-                "ips": ips,
+                "ips": stored_ips,
                 "note": note,
             }
         )
         return ApiKeyResult(
-            api_key=f"fake-key-{n}",
+            api_key=api_key,
             secret=f"fake-secret-{n}",
             scheme=scheme,
             permissions=permissions,
+            ips=stored_ips,
         )
+
+    async def list_api_keys(
+        self, credential: Credential, subaccount: str | None = None
+    ) -> list[ApiKeyInfo]:
+        return [
+            ApiKeyInfo(
+                api_key=row["api_key"],
+                ips=list(row.get("ips") or []),
+                label=row.get("note"),
+            )
+            for row in self.created_keys
+            if row.get("api_key") and row.get("subaccount") == subaccount
+        ]
 
     async def modify_api_key(
         self,

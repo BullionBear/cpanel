@@ -5,16 +5,20 @@ connector call needs to be signed. Credentials are verified against the
 venue when registered; the venue's reported permissions are captured on the
 credential row for display.
 """
+import logging
 from datetime import datetime, timezone
+from typing import Callable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.connectors.base import Credential, ExchangeConnector
+from app.connectors.base import Credential, ExchangeConnector, NotSupported
 from app.connectors.types import CredentialInfo
 from app.core.crypto import SecretBox
 from app.models.account import Account, ApiCredential
+
+logger = logging.getLogger(__name__)
 
 
 class AccountError(Exception):
@@ -23,6 +27,33 @@ class AccountError(Exception):
 
 class CredentialInvalid(AccountError):
     pass
+
+
+def _permissions_with_ips(
+    permissions: dict | None, ips: list[str] | None
+) -> dict | None:
+    """Merge an IP allowlist into the stored permissions blob.
+
+    ``ips`` is always written when provided (including ``[]`` = unrestricted)
+    so callers can distinguish "not yet fetched" from "no allowlist".
+    """
+    if permissions is None and ips is None:
+        return None
+    perms = dict(permissions or {})
+    if ips is not None:
+        perms["ips"] = list(ips)
+    return perms
+
+
+def _has_ips_field(credential: ApiCredential) -> bool:
+    perms = credential.permissions
+    return isinstance(perms, dict) and "ips" in perms
+
+
+def _set_credential_ips(credential: ApiCredential, ips: list[str]) -> None:
+    perms = dict(credential.permissions or {})
+    perms["ips"] = list(ips)
+    credential.permissions = perms
 
 
 def decrypt_credential(credential: ApiCredential) -> Credential:
@@ -110,7 +141,7 @@ async def add_credential(
         secret_enc=SecretBox().encrypt(secret),
         passphrase_enc=SecretBox().encrypt(passphrase) if passphrase else None,
         label=label,
-        permissions=info.permissions,
+        permissions=_permissions_with_ips(info.permissions, info.ips),
         read_only=info.read_only,
         can_withdraw=info.can_withdraw,
         tags=list(tags or []),
@@ -175,7 +206,7 @@ async def register_account_with_credential(
         secret_enc=SecretBox().encrypt(secret),
         passphrase_enc=SecretBox().encrypt(passphrase) if passphrase else None,
         label=cred_label,
-        permissions=info.permissions,
+        permissions=_permissions_with_ips(info.permissions, info.ips),
         read_only=info.read_only,
         can_withdraw=info.can_withdraw,
         tags=list(tags or []),
@@ -279,8 +310,135 @@ async def sync_subaccounts(
                 credential.status = "revoked"
         removed += 1
 
+    await _refresh_key_allowlists(db, connector, account)
     await db.commit()
     return created, removed
+
+
+async def _refresh_key_allowlists(
+    db: AsyncSession, connector: ExchangeConnector, main_account: Account
+) -> None:
+    """Pull IP allowlists from the venue onto local credentials (best-effort)."""
+    try:
+        master = await get_active_credential(db, main_account)
+    except AccountError:
+        return
+    decrypted = decrypt_credential(master)
+
+    # Eager-load: async sessions cannot lazy-load relationships on attribute access.
+    main_creds = (
+        await db.execute(
+            select(ApiCredential).where(
+                ApiCredential.account_id == main_account.id,
+                ApiCredential.status == "active",
+            )
+        )
+    ).scalars().all()
+
+    # Main-account keys: re-verify (Gate reports ip_whitelist on main_keys).
+    for cred in main_creds:
+        try:
+            info = await connector.verify_credential(decrypt_credential(cred))
+        except Exception:  # noqa: BLE001 — refresh must not fail sync
+            logger.warning(
+                "Failed to refresh allowlist for %s key %s…",
+                main_account.exchange, cred.api_key[:8],
+                exc_info=True,
+            )
+            continue
+        if not info.valid:
+            continue
+        # When the venue does not report allowlists (ips is None), keep any
+        # existing value; otherwise overwrite (including [] = unrestricted).
+        if info.ips is not None:
+            cred.permissions = _permissions_with_ips(info.permissions, info.ips)
+        elif info.permissions is not None:
+            existing = (cred.permissions or {}).get("ips")
+            cred.permissions = _permissions_with_ips(
+                info.permissions,
+                existing if isinstance(existing, list) else None,
+            )
+        if info.read_only is not None:
+            cred.read_only = info.read_only
+        if info.can_withdraw is not None:
+            cred.can_withdraw = info.can_withdraw
+        cred.verified_at = datetime.now(timezone.utc)
+
+    # Subaccount keys: list via the master credential when the venue supports it.
+    result = await db.execute(
+        select(Account)
+        .where(Account.parent_id == main_account.id, Account.status != "removed")
+        .options(selectinload(Account.credentials))
+    )
+    subs = list(result.scalars())
+    for sub in subs:
+        if not sub.native_uid:
+            continue
+        try:
+            venue_keys = await connector.list_api_keys(decrypted, sub.native_uid)
+        except NotSupported:
+            return
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Failed to list keys for %s sub %s",
+                main_account.exchange, sub.label,
+                exc_info=True,
+            )
+            continue
+        by_key = {k.api_key: k for k in venue_keys}
+        for cred in sub.credentials:
+            if cred.status != "active":
+                continue
+            meta = by_key.get(cred.api_key)
+            if meta is not None:
+                _set_credential_ips(cred, meta.ips)
+
+
+async def backfill_missing_ip_allowlists(
+    db: AsyncSession,
+    get_connector: Callable[[str], ExchangeConnector],
+) -> int:
+    """One-time-ish fill of permissions.ips for credentials that lack it.
+
+    Runs on tree load so existing keys pick up venue allowlists without a
+    manual sync. Credentials that already have an ``ips`` field are skipped
+    (including ``[]`` = confirmed unrestricted).
+    """
+    tree = await load_account_tree(db)
+    updated = 0
+    for main in tree:
+        needs = [
+            c for c in main.credentials
+            if c.status == "active" and not _has_ips_field(c)
+        ]
+        for sub in main.children:
+            needs.extend(
+                c for c in sub.credentials
+                if c.status == "active" and not _has_ips_field(c)
+            )
+        if not needs:
+            continue
+        try:
+            connector = get_connector(main.exchange)
+        except KeyError:
+            continue
+        try:
+            await _refresh_key_allowlists(db, connector, main)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "IP allowlist backfill failed for %s:%s",
+                main.exchange, main.label,
+                exc_info=True,
+            )
+        # Stamp anything still missing so tree load does not retry forever
+        # on venues that never report allowlists.
+        for cred in needs:
+            if not _has_ips_field(cred):
+                _set_credential_ips(cred, [])
+            updated += 1
+    if updated:
+        await db.commit()
+    return updated
 
 
 async def create_subaccount(
@@ -351,11 +509,9 @@ async def create_sub_api_key(
         raise AccountError(str(message).strip() or "Venue rejected API key creation") from exc
     if not key.api_key or not key.secret:
         raise AccountError("Venue created a key but returned no api key/secret")
-    # Persist the allowlist alongside granted scopes so detail/list UIs can
-    # show it later — venues accept ips at create but we do not re-fetch them.
-    perms: dict = {"granted": key.permissions}
-    if ips:
-        perms["ips"] = list(ips)
+    # Prefer the venue echo; fall back to the allowlist we requested.
+    stored_ips = list(key.ips) if key.ips else (list(ips) if ips else [])
+    perms = _permissions_with_ips({"granted": key.permissions}, stored_ips)
     credential = ApiCredential(
         account_id=sub_account.id,
         scheme=key.scheme.value,

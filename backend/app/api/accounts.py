@@ -6,9 +6,10 @@ GET /accounts/exchanges tells the frontend what each venue supports, so the
 per-exchange pages render only the operations that actually exist there.
 """
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -25,6 +26,15 @@ router = APIRouter(
 )
 
 
+def _ips_from_permissions_blob(permissions: Any) -> list[str]:
+    if not isinstance(permissions, dict):
+        return []
+    raw = permissions.get("ips")
+    if not isinstance(raw, list):
+        return []
+    return [x for x in raw if isinstance(x, str)]
+
+
 # -- schemas ----------------------------------------------------------------
 
 class CredentialOut(BaseModel):
@@ -36,6 +46,8 @@ class CredentialOut(BaseModel):
     read_only: bool | None
     can_withdraw: bool | None
     tags: list[str] = []
+    # IP allowlist mirrored from the venue (also nested under permissions.ips).
+    ips: list[str] = []
     status: str
     verified_at: datetime | None
     created_at: datetime
@@ -46,6 +58,20 @@ class CredentialOut(BaseModel):
     @classmethod
     def _tags_default(cls, v):
         return v or []
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _populate_ips(cls, values: Any, handler):
+        if hasattr(values, "permissions") and not isinstance(values, dict):
+            ips = _ips_from_permissions_blob(values.permissions)
+            obj = handler(values)
+            return obj if obj.ips else obj.model_copy(update={"ips": ips})
+        if isinstance(values, dict) and not values.get("ips"):
+            values = {
+                **values,
+                "ips": _ips_from_permissions_blob(values.get("permissions")),
+            }
+        return handler(values)
 
 
 class AccountOut(BaseModel):
@@ -226,6 +252,8 @@ def _require(connector: ExchangeConnector, capability: Capability) -> None:
 
 @router.get("/tree", response_model=list[AccountNode])
 async def account_tree(db: AsyncSession = Depends(get_db)):
+    # Fill permissions.ips for keys registered before allowlists were stored.
+    await svc.backfill_missing_ip_allowlists(db, connectors.get)
     return [AccountNode.model_validate(a) for a in await svc.load_account_tree(db)]
 
 

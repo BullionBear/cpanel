@@ -9,6 +9,8 @@ export interface Credential {
 	read_only: boolean | null;
 	can_withdraw: boolean | null;
 	tags: string[];
+	/** IP allowlist from the venue (empty = unrestricted / unknown). */
+	ips?: string[];
 	status: string;
 	verified_at: string | null;
 	created_at: string;

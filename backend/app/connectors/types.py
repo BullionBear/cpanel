@@ -182,6 +182,7 @@ class CredentialInfo:
     can_trade: bool | None = None
     can_withdraw: bool | None = None
     permissions: dict | None = None    # venue-specific detail, for display
+    ips: list[str] | None = None       # IP allowlist when the venue reports one
     reason: str | None = None          # why verification failed (when not valid)
 
 
@@ -195,12 +196,21 @@ class SubaccountInfo:
 
 
 @dataclass(frozen=True)
+class ApiKeyInfo:
+    """Metadata for an existing venue API key (no secret)."""
+    api_key: str
+    ips: list[str] = field(default_factory=list)
+    label: str | None = None
+
+
+@dataclass(frozen=True)
 class ApiKeyResult:
     api_key: str
     secret: str                    # plaintext only at creation time
     scheme: KeyScheme
     permissions: list[str] = field(default_factory=list)
     passphrase: str | None = None  # Bitget and similar; plaintext only at creation
+    ips: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,7 @@ from enum import StrEnum
 from typing import Any
 
 from app.connectors.types import (
+    ApiKeyInfo,
     ApiKeyResult,
     AssetNetwork,
     Balance,
@@ -211,6 +212,15 @@ class ExchangeConnector:
         self, credential: Credential, subaccount: str | None, api_key: str
     ) -> None:
         raise NotSupported(self.exchange, Capability.API_KEY_REVOKE)
+
+    async def list_api_keys(
+        self, credential: Credential, subaccount: str | None = None
+    ) -> list[ApiKeyInfo]:
+        """List existing API keys (no secrets) for the main account or a sub.
+
+        Used to refresh IP allowlists and labels stored on the panel.
+        """
+        raise NotSupported(self.exchange, Capability.API_KEY_CREATE)
 
     # -- transfers ------------------------------------------------------
 
