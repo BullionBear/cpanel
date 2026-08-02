@@ -35,6 +35,14 @@
 				{ id: 'readme', name: 'Readme' },
 				{ id: 'account', name: 'Account' }
 			]
+		},
+		{
+			slug: 'okx',
+			name: 'OKX',
+			tabs: [
+				{ id: 'readme', name: 'Readme' },
+				{ id: 'account', name: 'Account' }
+			]
 		}
 	];
 

@@ -126,6 +126,30 @@ const SPEC = {
 		positionModes: [],
 		contracts: true,
 		hint: 'Coin-margined: quantity is in contracts; one-way position mode.'
+	},
+	okxSpot: {
+		orderTypes: ['LIMIT', 'MARKET'],
+		tif: FULL_TIF,
+		reduceOnly: false,
+		positionModes: [],
+		contracts: false,
+		hint: 'Post-only routes as ordType=post_only. Spot uses tdMode=cash.'
+	},
+	okxPerp: {
+		orderTypes: ['LIMIT', 'MARKET'],
+		tif: FULL_TIF,
+		reduceOnly: true,
+		positionModes: HEDGE,
+		contracts: true,
+		hint: 'USDT/USDC-M perpetual: quantity is in contracts. One-way: BOTH; hedge: LONG/SHORT.'
+	},
+	okxInverse: {
+		orderTypes: ['LIMIT', 'MARKET'],
+		tif: FULL_TIF,
+		reduceOnly: true,
+		positionModes: HEDGE,
+		contracts: true,
+		hint: 'Coin-margined (inverse): quantity is in contracts.'
 	}
 } satisfies Record<string, PanelSpec>;
 
@@ -144,7 +168,8 @@ const SUPPORT: Record<string, Partial<Record<Category, PanelSpec>>> = {
 	BINANCE: { SPOT: SPEC.binanceSpot, PERP: SPEC.binancePerp, CMARGIN: SPEC.binanceCmargin },
 	BYBIT: { SPOT: SPEC.bybitSpot, PERP: SPEC.bybitPerp, CMARGIN: SPEC.bybitInverse },
 	GATEIO: { SPOT: SPEC.gateioSpot, PERP: SPEC.gateioPerp, CMARGIN: SPEC.gateioInverse },
-	BITGET: { SPOT: SPEC.bitgetSpot, PERP: SPEC.bitgetPerp, CMARGIN: SPEC.bitgetInverse }
+	BITGET: { SPOT: SPEC.bitgetSpot, PERP: SPEC.bitgetPerp, CMARGIN: SPEC.bitgetInverse },
+	OKX: { SPOT: SPEC.okxSpot, PERP: SPEC.okxPerp, CMARGIN: SPEC.okxInverse }
 };
 
 export function resolvePanel(exchange: string, category: Category): PanelResolution {
