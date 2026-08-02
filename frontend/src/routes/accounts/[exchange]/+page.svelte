@@ -34,7 +34,7 @@
 	let busy = false;
 
 	$: registrationOnly = caps?.registration_only ?? exchange === 'BINANCE';
-	$: needsPassphrase = exchange === 'BITGET';
+	$: needsPassphrase = exchange === 'BITGET' || exchange === 'OKX';
 	// Every exchange page leads with its Readme.
 	$: tab = $page.url.searchParams.get('tab') ?? 'readme';
 	$: schemes = exchange === 'BINANCE' ? ['HMAC', 'ED25519'] : ['HMAC'];
@@ -828,7 +828,7 @@
 			<p class="muted">
 				For subaccount “{keyDialog.subLabel}” on {exchange}.
 				{#if needsPassphrase}
-					Bitget generates the passphrase automatically — it will be shown after creation.
+					{exchange === 'OKX' ? 'OKX' : 'Bitget'} generates the passphrase automatically — it will be shown after creation.
 				{/if}
 			</p>
 

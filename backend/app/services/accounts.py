@@ -126,8 +126,8 @@ async def add_credential(
     passphrase: str | None = None,
 ) -> tuple[ApiCredential, CredentialInfo]:
     """Encrypt, verify against the venue, and store a credential."""
-    if account.exchange.upper() == "BITGET" and not passphrase:
-        raise CredentialInvalid("Bitget API keys require a passphrase")
+    if account.exchange.upper() in ("BITGET", "OKX") and not passphrase:
+        raise CredentialInvalid(f"{account.exchange} API keys require a passphrase")
     info = await connector.verify_credential(
         _credential_payload(scheme, api_key, secret, passphrase)
     )
@@ -180,8 +180,8 @@ async def register_account_with_credential(
         raise AccountError("Subaccounts must reference a parent account")
     if account_type == "main" and parent_id is not None:
         raise AccountError("Main accounts cannot have a parent")
-    if exchange.upper() == "BITGET" and not passphrase:
-        raise CredentialInvalid("Bitget API keys require a passphrase")
+    if exchange.upper() in ("BITGET", "OKX") and not passphrase:
+        raise CredentialInvalid(f"{exchange} API keys require a passphrase")
 
     info = await connector.verify_credential(
         _credential_payload(scheme, api_key, secret, passphrase)
