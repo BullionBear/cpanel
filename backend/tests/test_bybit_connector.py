@@ -578,7 +578,11 @@ async def test_internal_transfer_between_wallets(monkeypatch):
         calls.append((func.__name__, kwargs))
         return {"result": {"transferId": "uuid-1", "status": "SUCCESS"}}
 
+    async def decimals(credential, asset):
+        return 8
+
     monkeypatch.setattr(c, "_call", call)
+    monkeypatch.setattr(c, "_coin_transfer_decimals", decimals)
     result = await c.transfer(
         {"api_key": "k", "secret": "s"}, "USDT", Decimal("100"),
         from_wallet=WalletType.FUNDING, to_wallet=WalletType.UNIFIED,
@@ -590,6 +594,49 @@ async def test_internal_transfer_between_wallets(monkeypatch):
     assert kwargs["amount"] == "100"
     assert result.status == "confirmed"
     assert result.native_transfer_id == "uuid-1"
+
+
+async def test_transfer_quantizes_to_coin_accuracy(monkeypatch):
+    # ErrCode 131310: amount scale exceeds the coin's transfer accuracy.
+    c = BybitConnector()
+    calls = []
+
+    async def call(func, **kwargs):
+        calls.append((func.__name__, kwargs))
+        return {"result": {"transferId": "uuid-xrp", "status": "SUCCESS"}}
+
+    async def decimals(credential, asset):
+        assert asset == "XRP"
+        return 4
+
+    monkeypatch.setattr(c, "_call", call)
+    monkeypatch.setattr(c, "_coin_transfer_decimals", decimals)
+    await c.transfer(
+        {"api_key": "k", "secret": "s"}, "XRP", Decimal("124457.331681"),
+        from_wallet=WalletType.UNIFIED, to_wallet=WalletType.FUNDING,
+    )
+    assert calls[0][1]["amount"] == "124457.3316"
+
+
+async def test_coin_transfer_decimals_uses_min_accuracy(monkeypatch):
+    c = BybitConnector()
+
+    async def coin_info(credential, asset):
+        return {
+            "coin": asset,
+            "chains": [
+                {"chain": "XRP", "minAccuracy": "6"},
+                {"chain": "ETH", "minAccuracy": "4"},
+            ],
+        }
+
+    monkeypatch.setattr(c, "_fetch_coin_info", coin_info)
+    assert await c._coin_transfer_decimals({"api_key": "k", "secret": "s"}, "XRP") == 4
+    # Cached — second call must not need another fetch.
+    monkeypatch.setattr(
+        c, "_fetch_coin_info", lambda *a, **k: (_ for _ in ()).throw(AssertionError("cache miss"))
+    )
+    assert await c._coin_transfer_decimals({"api_key": "k", "secret": "s"}, "xrp") == 4
 
 
 async def test_internal_transfer_same_wallet_rejected():
@@ -621,7 +668,11 @@ async def test_universal_transfer_resolves_master_uid(monkeypatch):
             return {"result": {"userID": 111}}
         return {"result": {"transferId": "uuid-2", "status": "PENDING"}}
 
+    async def decimals(credential, asset):
+        return 8
+
     monkeypatch.setattr(c, "_call", call)
+    monkeypatch.setattr(c, "_coin_transfer_decimals", decimals)
     result = await c.transfer(
         {"api_key": "k", "secret": "s"}, "USDT", Decimal("5"),
         to_subaccount="222",
@@ -630,7 +681,25 @@ async def test_universal_transfer_resolves_master_uid(monkeypatch):
     assert name == "create_universal_transfer"
     assert kwargs["fromMemberId"] == 111
     assert kwargs["toMemberId"] == 222
+    assert kwargs["amount"] == "5"
     assert result.status == "submitted"
+
+
+async def test_revoke_api_key_uses_lowercase_apikey(monkeypatch):
+    # Bybit delete-sub-api rejects camelCase ``apiKey`` with ErrCode 141001.
+    c = BybitConnector()
+    calls = []
+
+    async def call(func, **kwargs):
+        calls.append((func.__name__, kwargs))
+        return {"result": {}}
+
+    monkeypatch.setattr(c, "_call", call)
+    await c.revoke_api_key({"api_key": "k", "secret": "s"}, "222", "sub-key-abc")
+    name, kwargs = calls[0]
+    assert name == "delete_sub_api_key"
+    assert kwargs == {"apikey": "sub-key-abc"}
+    assert "apiKey" not in kwargs
 
 
 async def test_withdraw_draws_from_fund_wallet(monkeypatch):

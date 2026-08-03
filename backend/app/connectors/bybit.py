@@ -25,7 +25,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from pybit.unified_trading import HTTP
 
@@ -503,6 +503,8 @@ class BybitConnector(ExchangeConnector):
         self._session = HTTP(timeout=30, domain=self._domain, tld=self._tld)
         self._native_map: dict[tuple[MarketType, str], str] = {}
         self._universal_map: dict[str, tuple[MarketType, str]] = {}
+        # asset → max decimal places allowed on transfers (from coin-info minAccuracy)
+        self._transfer_decimals: dict[str, int] = {}
 
     async def _call(self, func, **kwargs):
         if self._bucket is not None:
@@ -932,8 +934,10 @@ class BybitConnector(ExchangeConnector):
     async def revoke_api_key(
         self, credential: Credential, subaccount: str | None, api_key: str
     ) -> None:
+        # Bybit's delete-sub-api expects lowercase ``apikey`` (same as
+        # update-sub-api). Passing ``apiKey`` yields ErrCode 141001.
         session = self._auth_session(credential)
-        await self._call(session.delete_sub_api_key, apiKey=api_key)
+        await self._call(session.delete_sub_api_key, apikey=api_key)
 
     async def set_subaccount_frozen(
         self, credential: Credential, subaccount: str, frozen: bool
@@ -971,6 +975,46 @@ class BybitConnector(ExchangeConnector):
             native_transfer_id=str(result.get("transferId", "")), status=normalized
         )
 
+    async def _coin_transfer_decimals(self, credential: Credential, asset: str) -> int:
+        """Decimal places Bybit accepts for this coin on transfers.
+
+        Derived from ``minAccuracy`` on each chain in coin-info (most
+        restrictive). Falls back to 8 when the venue reports nothing.
+        """
+        key = asset.upper()
+        cached = self._transfer_decimals.get(key)
+        if cached is not None:
+            return cached
+        row = await self._fetch_coin_info(credential, key)
+        accuracies = [
+            int(chain["minAccuracy"])
+            for chain in (row.get("chains") or [])
+            if chain.get("minAccuracy") not in (None, "")
+        ]
+        decimals = min(accuracies) if accuracies else 8
+        self._transfer_decimals[key] = decimals
+        return decimals
+
+    async def _format_transfer_amount(
+        self, credential: Credential, asset: str, amount
+    ) -> str:
+        """ROUND_DOWN to the coin's transfer accuracy (avoids ErrCode 131310)."""
+        value = amount if isinstance(amount, Decimal) else Decimal(str(amount))
+        decimals = await self._coin_transfer_decimals(credential, asset)
+        step = Decimal("1").scaleb(-decimals)
+        quantized = value.quantize(step, rounding=ROUND_DOWN)
+        if quantized <= 0:
+            raise ValueError(
+                f"Transfer amount for {asset} rounds to zero at {decimals} dp "
+                f"(raw={value})"
+            )
+        # Fixed-point string: no scientific notation; trim trailing zeros so we
+        # never report more scale than needed (Bybit ErrCode 131310).
+        text = format(quantized, "f")
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return text
+
     async def transfer(
         self,
         credential: Credential,
@@ -986,6 +1030,11 @@ class BybitConnector(ExchangeConnector):
         dst = _WALLET_ACCOUNT_TYPE.get(to_wallet or WalletType.UNIFIED)
         if src is None or dst is None:
             raise ValueError("Bybit wallets are UNIFIED and FUNDING")
+        if not (from_subaccount or to_subaccount) and src == dst:
+            raise ValueError(
+                "Bybit internal transfers move between FUND and UNIFIED wallets"
+            )
+        amount_str = await self._format_transfer_amount(credential, asset, amount)
         transfer_id = str(uuid.uuid4())
         if from_subaccount or to_subaccount:
             # Universal transfer needs both member ids; a None side is the
@@ -999,22 +1048,18 @@ class BybitConnector(ExchangeConnector):
                 session.create_universal_transfer,
                 transferId=transfer_id,
                 coin=asset,
-                amount=str(amount),
+                amount=amount_str,
                 fromMemberId=int(from_uid),
                 toMemberId=int(to_uid),
                 fromAccountType=src,
                 toAccountType=dst,
             )
         else:
-            if src == dst:
-                raise ValueError(
-                    "Bybit internal transfers move between FUND and UNIFIED wallets"
-                )
             response = await self._call(
                 session.create_internal_transfer,
                 transferId=transfer_id,
                 coin=asset,
-                amount=str(amount),
+                amount=amount_str,
                 fromAccountType=src,
                 toAccountType=dst,
             )
