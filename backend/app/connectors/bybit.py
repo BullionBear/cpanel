@@ -174,6 +174,59 @@ def resolve_venue_endpoint(venue: str) -> tuple[str, str]:
     return endpoint
 
 
+# Fiat transfer accuracy is often stricter than coin-info ``minAccuracy``
+# (withdraw chain precision). Cap these so EUR/USD etc. don't hit 131210.
+_FIAT_TRANSFER_DECIMALS: dict[str, int] = {
+    "EUR": 2,
+    "USD": 2,
+    "GBP": 2,
+    "AUD": 2,
+    "CAD": 2,
+    "CHF": 2,
+    "JPY": 0,
+    "TRY": 2,
+    "BRL": 2,
+    "PLN": 2,
+    "SEK": 2,
+    "NOK": 2,
+    "DKK": 2,
+    "HKD": 2,
+    "SGD": 2,
+    "NZD": 2,
+    "MXN": 2,
+    "ZAR": 2,
+    "AED": 2,
+    "SAR": 2,
+    "CNY": 2,
+    "KRW": 0,
+    "INR": 2,
+}
+
+# Bybit returns these when the amount has too many decimal places.
+_AMOUNT_ACCURACY_CODES = frozenset({131210, 131310})
+
+
+def _is_amount_accuracy_error(exc: BaseException) -> bool:
+    code = getattr(exc, "status_code", None)
+    if code in _AMOUNT_ACCURACY_CODES:
+        return True
+    msg = str(exc)
+    return "131210" in msg or "131310" in msg or "amount accuracy" in msg.lower()
+
+
+def _amount_at_decimals(amount, decimals: int) -> str | None:
+    """ROUND_DOWN ``amount`` to ``decimals`` places; ``None`` if it becomes 0."""
+    value = amount if isinstance(amount, Decimal) else Decimal(str(amount))
+    step = Decimal("1").scaleb(-decimals)
+    quantized = value.quantize(step, rounding=ROUND_DOWN)
+    if quantized <= 0:
+        return None
+    text = format(quantized, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
+
+
 # Normalized wallet -> Bybit v5 accountType. A Unified Trading Account keeps
 # spot, margin, and derivatives collateral in one UNIFIED wallet; FUND is the
 # separate funding wallet (also where on-chain withdrawals draw from).
@@ -979,7 +1032,8 @@ class BybitConnector(ExchangeConnector):
         """Decimal places Bybit accepts for this coin on transfers.
 
         Derived from ``minAccuracy`` on each chain in coin-info (most
-        restrictive). Falls back to 8 when the venue reports nothing.
+        restrictive), then capped for known fiat (EUR/USD/… → 2). Falls
+        back to 8 when the venue reports nothing for a crypto asset.
         """
         key = asset.upper()
         cached = self._transfer_decimals.get(key)
@@ -991,28 +1045,27 @@ class BybitConnector(ExchangeConnector):
             for chain in (row.get("chains") or [])
             if chain.get("minAccuracy") not in (None, "")
         ]
-        decimals = min(accuracies) if accuracies else 8
+        fiat_cap = _FIAT_TRANSFER_DECIMALS.get(key)
+        if accuracies:
+            decimals = min(accuracies)
+            if fiat_cap is not None:
+                decimals = min(decimals, fiat_cap)
+        else:
+            decimals = 8 if fiat_cap is None else fiat_cap
         self._transfer_decimals[key] = decimals
         return decimals
 
     async def _format_transfer_amount(
         self, credential: Credential, asset: str, amount
     ) -> str:
-        """ROUND_DOWN to the coin's transfer accuracy (avoids ErrCode 131310)."""
-        value = amount if isinstance(amount, Decimal) else Decimal(str(amount))
+        """ROUND_DOWN to the coin's transfer accuracy (avoids ErrCode 131210/131310)."""
         decimals = await self._coin_transfer_decimals(credential, asset)
-        step = Decimal("1").scaleb(-decimals)
-        quantized = value.quantize(step, rounding=ROUND_DOWN)
-        if quantized <= 0:
+        text = _amount_at_decimals(amount, decimals)
+        if text is None:
             raise ValueError(
                 f"Transfer amount for {asset} rounds to zero at {decimals} dp "
-                f"(raw={value})"
+                f"(raw={amount})"
             )
-        # Fixed-point string: no scientific notation; trim trailing zeros so we
-        # never report more scale than needed (Bybit ErrCode 131310).
-        text = format(quantized, "f")
-        if "." in text:
-            text = text.rstrip("0").rstrip(".")
         return text
 
     async def transfer(
@@ -1034,36 +1087,61 @@ class BybitConnector(ExchangeConnector):
             raise ValueError(
                 "Bybit internal transfers move between FUND and UNIFIED wallets"
             )
-        amount_str = await self._format_transfer_amount(credential, asset, amount)
-        transfer_id = str(uuid.uuid4())
+
+        # Resolve member ids once; retry only changes the amount string when
+        # Bybit rejects scale (coin-info minAccuracy can be looser than transfer).
+        master_uid = None
+        from_uid = to_uid = None
         if from_subaccount or to_subaccount:
-            # Universal transfer needs both member ids; a None side is the
-            # credential's own (master) account.
-            master_uid = None
             if not from_subaccount or not to_subaccount:
                 master_uid = await self._master_uid(credential)
             from_uid = from_subaccount or master_uid
             to_uid = to_subaccount or master_uid
-            response = await self._call(
-                session.create_universal_transfer,
-                transferId=transfer_id,
-                coin=asset,
-                amount=amount_str,
-                fromMemberId=int(from_uid),
-                toMemberId=int(to_uid),
-                fromAccountType=src,
-                toAccountType=dst,
-            )
-        else:
-            response = await self._call(
-                session.create_internal_transfer,
-                transferId=transfer_id,
-                coin=asset,
-                amount=amount_str,
-                fromAccountType=src,
-                toAccountType=dst,
-            )
-        return self._transfer_result(response.get("result", {}))
+
+        start_decimals = await self._coin_transfer_decimals(credential, asset)
+        last_accuracy_error: BaseException | None = None
+        for decimals in range(start_decimals, -1, -1):
+            amount_str = _amount_at_decimals(amount, decimals)
+            if amount_str is None:
+                break
+            transfer_id = str(uuid.uuid4())
+            try:
+                if from_subaccount or to_subaccount:
+                    response = await self._call(
+                        session.create_universal_transfer,
+                        transferId=transfer_id,
+                        coin=asset,
+                        amount=amount_str,
+                        fromMemberId=int(from_uid),
+                        toMemberId=int(to_uid),
+                        fromAccountType=src,
+                        toAccountType=dst,
+                    )
+                else:
+                    response = await self._call(
+                        session.create_internal_transfer,
+                        transferId=transfer_id,
+                        coin=asset,
+                        amount=amount_str,
+                        fromAccountType=src,
+                        toAccountType=dst,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                if _is_amount_accuracy_error(exc) and decimals > 0:
+                    last_accuracy_error = exc
+                    # Remember the stricter scale for subsequent transfers.
+                    self._transfer_decimals[asset.upper()] = decimals - 1
+                    continue
+                raise
+            # Cache the decimals that actually worked.
+            self._transfer_decimals[asset.upper()] = decimals
+            return self._transfer_result(response.get("result", {}))
+
+        if last_accuracy_error is not None:
+            raise last_accuracy_error
+        raise ValueError(
+            f"Transfer amount for {asset} rounds to zero (raw={amount})"
+        )
 
     async def _fetch_coin_info(self, credential: Credential, asset: str) -> dict:
         session = self._auth_session(credential)

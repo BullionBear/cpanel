@@ -42,6 +42,8 @@ logger = logging.getLogger("sweep_bybit_funds")
 
 DEFAULT_BIND_IP = "47.128.168.131"
 SUB_KEY_PERMISSIONS = ["spot", "derivatives", "wallet"]
+# Sub UIDs skipped during sweep (exclusion list).
+DEFAULT_EXCLUDE_SUB_UIDS = frozenset({"540005691", "540005748"})
 # Brief pause after flatten so wallet balances catch up before transfers.
 _POST_FLATTEN_SLEEP_S = 0.5
 
@@ -293,7 +295,10 @@ async def sweep_subaccount(
 
 
 async def sweep_master(
-    row: dict[str, str], bind_ip: str, dry_run: bool
+    row: dict[str, str],
+    bind_ip: str,
+    dry_run: bool,
+    exclude_uids: frozenset[str],
 ) -> None:
     venue = row["venue"]
     prefix = f"[{venue}] key={row['api_key'][:6]}…"
@@ -322,9 +327,12 @@ async def sweep_master(
     except Exception as exc:  # noqa: BLE001
         _log(prefix, f"list_subaccounts FAILED: {type(exc).__name__}: {exc}")
         return
-    _log(prefix, f"subaccounts={len(subs)}")
+    _log(prefix, f"subaccounts={len(subs)} exclude={sorted(exclude_uids)}")
 
     for sub in subs:
+        if sub.native_uid in exclude_uids:
+            _log(prefix, f"SKIP excluded sub={sub.label}({sub.native_uid})")
+            continue
         try:
             await sweep_subaccount(
                 connector,
@@ -354,11 +362,20 @@ async def sweep_master(
     _log(prefix, "done")
 
 
-async def run(masters: list[dict[str, str]], bind_ip: str, dry_run: bool) -> None:
-    _log("[sweep]", f"masters={len(masters)} bind_ip={bind_ip} dry_run={dry_run}")
+async def run(
+    masters: list[dict[str, str]],
+    bind_ip: str,
+    dry_run: bool,
+    exclude_uids: frozenset[str],
+) -> None:
+    _log(
+        "[sweep]",
+        f"masters={len(masters)} bind_ip={bind_ip} dry_run={dry_run} "
+        f"exclude_uids={sorted(exclude_uids)}",
+    )
     for row in masters:
         try:
-            await sweep_master(row, bind_ip, dry_run)
+            await sweep_master(row, bind_ip, dry_run, exclude_uids)
         except Exception as exc:  # noqa: BLE001
             _log(
                 f"[{row['venue']}] key={row['api_key'][:6]}…",
@@ -375,6 +392,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"IP bound on temporary sub API keys (default {DEFAULT_BIND_IP})",
     )
     parser.add_argument(
+        "--exclude-uid",
+        action="append",
+        default=[],
+        metavar="UID",
+        help=(
+            "Sub UID to skip (repeatable). Defaults to "
+            f"{sorted(DEFAULT_EXCLUDE_SUB_UIDS)} when omitted"
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="List actions without cancelling, trading, transferring, or creating keys",
@@ -388,7 +415,14 @@ def main(argv: list[str] | None = None) -> None:
     if not args.input.is_file():
         raise SystemExit(f"input file not found: {args.input}")
     masters = load_masters(args.input)
-    asyncio.run(run(masters, bind_ip=args.ip, dry_run=args.dry_run))
+    exclude = (
+        frozenset(str(u).strip() for u in args.exclude_uid if str(u).strip())
+        if args.exclude_uid
+        else DEFAULT_EXCLUDE_SUB_UIDS
+    )
+    asyncio.run(
+        run(masters, bind_ip=args.ip, dry_run=args.dry_run, exclude_uids=exclude)
+    )
 
 
 if __name__ == "__main__":

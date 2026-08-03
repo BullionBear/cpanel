@@ -618,6 +618,56 @@ async def test_transfer_quantizes_to_coin_accuracy(monkeypatch):
     assert calls[0][1]["amount"] == "124457.3316"
 
 
+async def test_transfer_fiat_eur_capped_at_two_decimals(monkeypatch):
+    c = BybitConnector()
+    calls = []
+
+    async def call(func, **kwargs):
+        calls.append((func.__name__, kwargs))
+        return {"result": {"transferId": "uuid-eur", "status": "SUCCESS"}}
+
+    async def coin_info(credential, asset):
+        # coin-info can report a looser withdraw accuracy than transfers allow.
+        return {"coin": asset, "chains": [{"chain": "FIAT", "minAccuracy": "8"}]}
+
+    monkeypatch.setattr(c, "_call", call)
+    monkeypatch.setattr(c, "_fetch_coin_info", coin_info)
+    await c.transfer(
+        {"api_key": "k", "secret": "s"}, "EUR", Decimal("12116.58768"),
+        from_wallet=WalletType.UNIFIED, to_wallet=WalletType.FUNDING,
+    )
+    assert calls[0][1]["amount"] == "12116.58"
+
+
+async def test_transfer_retries_on_amount_accuracy_error(monkeypatch):
+    c = BybitConnector()
+    calls = []
+
+    class AccuracyErr(Exception):
+        status_code = 131210
+
+    async def call(func, **kwargs):
+        calls.append((func.__name__, kwargs))
+        # Reject anything with more than 2 decimal places.
+        amount = kwargs.get("amount", "")
+        if "." in amount and len(amount.split(".")[1]) > 2:
+            raise AccuracyErr("amount accuracy err (ErrCode: 131210)")
+        return {"result": {"transferId": "uuid-retry", "status": "SUCCESS"}}
+
+    async def decimals(credential, asset):
+        return 4
+
+    monkeypatch.setattr(c, "_call", call)
+    monkeypatch.setattr(c, "_coin_transfer_decimals", decimals)
+    result = await c.transfer(
+        {"api_key": "k", "secret": "s"}, "XYZ", Decimal("10.1234"),
+        from_wallet=WalletType.UNIFIED, to_wallet=WalletType.FUNDING,
+    )
+    assert [c[1]["amount"] for c in calls] == ["10.1234", "10.123", "10.12"]
+    assert result.native_transfer_id == "uuid-retry"
+    assert c._transfer_decimals["XYZ"] == 2
+
+
 async def test_coin_transfer_decimals_uses_min_accuracy(monkeypatch):
     c = BybitConnector()
 
