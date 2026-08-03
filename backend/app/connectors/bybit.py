@@ -147,6 +147,33 @@ _ORDER_STATUS = {
 
 _PERP_CONTRACT_TYPES = {"LinearPerpetual", "InversePerpetual"}
 
+# Regional / local-site hosts share the same v5 API surface; only the pybit
+# ``domain`` + ``tld`` pair changes (URL shape: ``https://api.{domain}.{tld}``).
+_VENUE_ENDPOINTS: dict[str, tuple[str, str]] = {
+    "bybit": ("bybit", "com"),
+    "bybit_eu": ("bybit", "eu"),
+    "bybit_id": ("bybit", "id"),
+    "bybit_nl": ("bybit", "nl"),
+    "bybit_kz": ("bybit", "kz"),
+    "bybit_ae": ("bybit", "ae"),
+    "bybit_tr": ("bybit-tr", "com"),
+}
+
+
+def resolve_venue_endpoint(venue: str) -> tuple[str, str]:
+    """Map a venue slug to pybit ``(domain, tld)``.
+
+    Raises ``ValueError`` for unknown venues so callers fail fast instead of
+    silently hitting the global host.
+    """
+    key = (venue or "bybit").strip().lower()
+    endpoint = _VENUE_ENDPOINTS.get(key)
+    if endpoint is None:
+        known = ", ".join(sorted(_VENUE_ENDPOINTS))
+        raise ValueError(f"Unknown Bybit venue {venue!r}; expected one of: {known}")
+    return endpoint
+
+
 # Normalized wallet -> Bybit v5 accountType. A Unified Trading Account keeps
 # spot, margin, and derivatives collateral in one UNIFIED wallet; FUND is the
 # separate funding wallet (also where on-chain withdrawals draw from).
@@ -469,9 +496,11 @@ class BybitConnector(ExchangeConnector):
     # in the base coin, queried with no settle filter.
     _LINEAR_SETTLE = ("USDT", "USDC")
 
-    def __init__(self, bucket: TokenBucket | None = None):
+    def __init__(self, bucket: TokenBucket | None = None, venue: str = "bybit"):
         self._bucket = bucket
-        self._session = HTTP(timeout=30)
+        self.venue = (venue or "bybit").strip().lower()
+        self._domain, self._tld = resolve_venue_endpoint(self.venue)
+        self._session = HTTP(timeout=30, domain=self._domain, tld=self._tld)
         self._native_map: dict[tuple[MarketType, str], str] = {}
         self._universal_map: dict[str, tuple[MarketType, str]] = {}
 
@@ -503,12 +532,13 @@ class BybitConnector(ExchangeConnector):
 
     # -- accounts -----------------------------------------------------------
 
-    @staticmethod
-    def _auth_session(credential: Credential) -> HTTP:
+    def _auth_session(self, credential: Credential) -> HTTP:
         return HTTP(
             api_key=credential["api_key"],
             api_secret=credential["secret"],
             timeout=30,
+            domain=self._domain,
+            tld=self._tld,
         )
 
     # -- account state ------------------------------------------------------

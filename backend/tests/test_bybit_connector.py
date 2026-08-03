@@ -17,6 +17,7 @@ from app.connectors.bybit import (
     normalize_trade,
     normalize_wallet_balances,
     normalize_withdrawal_record,
+    resolve_venue_endpoint,
 )
 from app.connectors.types import (
     DepositStatus,
@@ -668,3 +669,56 @@ async def test_fetch_deposit_address_reads_chain(monkeypatch):
     )
     assert resolved.address == "TAbc123"
     assert resolved.tag is None
+
+
+@pytest.mark.parametrize(
+    "venue,domain,tld",
+    [
+        ("bybit", "bybit", "com"),
+        ("BYBIT_EU", "bybit", "eu"),
+        ("bybit_id", "bybit", "id"),
+        ("bybit_nl", "bybit", "nl"),
+        ("bybit_kz", "bybit", "kz"),
+        ("bybit_ae", "bybit", "ae"),
+        ("bybit_tr", "bybit-tr", "com"),
+    ],
+)
+def test_resolve_venue_endpoint(venue, domain, tld):
+    assert resolve_venue_endpoint(venue) == (domain, tld)
+
+
+def test_resolve_venue_endpoint_unknown():
+    with pytest.raises(ValueError, match="Unknown Bybit venue"):
+        resolve_venue_endpoint("bybit_xx")
+
+
+def test_connector_default_venue_is_global():
+    c = BybitConnector()
+    assert c.venue == "bybit"
+    assert c._domain == "bybit"
+    assert c._tld == "com"
+    assert c._session.domain == "bybit"
+    assert c._session.tld == "com"
+
+
+def test_connector_regional_venue_passed_to_http(monkeypatch):
+    calls: list[dict] = []
+
+    class FakeHTTP:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+            self.domain = kwargs.get("domain")
+            self.tld = kwargs.get("tld")
+            self.endpoint = f"https://api.{self.domain}.{self.tld}"
+
+    monkeypatch.setattr("app.connectors.bybit.HTTP", FakeHTTP)
+    c = BybitConnector(venue="bybit_eu")
+    assert c.venue == "bybit_eu"
+    assert calls[0]["domain"] == "bybit"
+    assert calls[0]["tld"] == "eu"
+
+    session = c._auth_session({"api_key": "k", "secret": "s"})
+    assert calls[-1]["api_key"] == "k"
+    assert calls[-1]["domain"] == "bybit"
+    assert calls[-1]["tld"] == "eu"
+    assert session.endpoint == "https://api.bybit.eu"
