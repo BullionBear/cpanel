@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { ApiError } from '$lib/api';
+	import { subscribeBalanceUpdates } from '$lib/events';
 	import { fetchHoldings, fetchOverview, type Holdings, type OverviewItem } from '$lib/portfolio';
 	import {
 		fetchCapabilities,
@@ -36,6 +37,7 @@
 	let listError = '';
 	let expanded: number | null = null;
 	let pollTimer: ReturnType<typeof setInterval> | undefined;
+	let unsubEvents: (() => void) | undefined;
 
 	let mode: Mode = 'transfer';
 
@@ -538,11 +540,22 @@
 		pollTimer = setInterval(() => {
 			if (hasLive) loadTransfers();
 		}, 10_000);
+		unsubEvents = subscribeBalanceUpdates((ev) => {
+			void invalidateHoldings(ev.account_id);
+			void fetchOverview()
+				.then((rows) => {
+					accounts = rows;
+				})
+				.catch(() => {
+					/* keep prior overview */
+				});
+		});
 	});
 
 	onDestroy(() => {
 		clearInterval(pollTimer);
 		clearTimeout(networkFetchTimer);
+		unsubEvents?.();
 	});
 </script>
 

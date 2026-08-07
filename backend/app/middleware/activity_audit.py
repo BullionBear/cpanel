@@ -24,6 +24,7 @@ _SKIP_PREFIXES = (
     "/openapi.json",
     "/auth/discord/login",
     "/auth/discord/callback",
+    "/events",
 )
 
 # Authenticated GETs that are read-only UI chatter.

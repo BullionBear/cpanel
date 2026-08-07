@@ -14,7 +14,7 @@ from app.connectors.registry import connectors
 from app.core.db import get_session_factory
 from app.models.account import Account
 from app.services.accounts import AccountError
-from app.services.snapshots import capture_snapshots
+from app.services.balance_refresh import capture_and_publish
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,9 @@ def make_snapshot_job(exchange: str):
                     account = await db.get(Account, account_id)
                     if account is None:
                         continue
-                    total += await capture_snapshots(db, connector, account)
+                    total += await capture_and_publish(
+                        db, connector, account, "hourly"
+                    )
             except AccountError:
                 # Account has no usable credential yet — nothing to snapshot.
                 continue

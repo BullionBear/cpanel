@@ -445,6 +445,10 @@ async def sync_stream(
         cursor_row.last_synced_at = datetime.now(timezone.utc)
         await db.commit()
         raise
+    if data_kind in ("deposits", "withdrawals") and total > 0:
+        from app.services.balance_refresh import schedule_balance_refresh
+
+        schedule_balance_refresh(account.id, f"history_{data_kind}")
     return total
 
 

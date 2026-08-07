@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { ApiError } from '$lib/api';
+	import { subscribeBalanceUpdates } from '$lib/events';
 	import PieChart from '$lib/PieChart.svelte';
 	import LineChart from '$lib/LineChart.svelte';
 	import type { Slice, Point } from '$lib/charts';
@@ -9,7 +10,7 @@
 		fetchHoldings,
 		fetchHistory,
 		fetchPnlHistory,
-		triggerSnapshot,
+		requestRefresh,
 		type OverviewItem,
 		type Holdings,
 		type HistoryPoint,
@@ -25,7 +26,9 @@
 	let history: HistoryPoint[] = [];
 	let pnlHistory: PnlPoint[] = [];
 	let detailLoading = false;
-	let snapshotting = false;
+	let refreshing = false;
+	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+	let unsubEvents: (() => void) | undefined;
 
 	$: totalValue = overview.reduce((sum, item) => sum + Number(item.total_value || 0), 0);
 	$: byExchange = overview.reduce<Record<string, OverviewItem[]>>((acc, item) => {
@@ -158,19 +161,23 @@
 		return `${Math.round(hrs / 24)}d ago`;
 	}
 
-	async function loadOverview() {
-		loading = true;
-		error = '';
+	async function loadOverview(quiet = false) {
+		if (!quiet) {
+			loading = true;
+			error = '';
+		}
 		try {
 			overview = await fetchOverview();
 		} catch (e) {
-			overview = [];
-			error =
-				e instanceof ApiError && e.status === 401
-					? 'Please log in to view the portfolio.'
-					: 'Failed to load portfolio.';
+			if (!quiet) {
+				overview = [];
+				error =
+					e instanceof ApiError && e.status === 401
+						? 'Please log in to view the portfolio.'
+						: 'Failed to load portfolio.';
+			}
 		} finally {
-			loading = false;
+			if (!quiet) loading = false;
 		}
 	}
 
@@ -193,27 +200,62 @@
 		}
 	}
 
-	async function snapshotNow() {
+	function clearRefreshing() {
+		refreshing = false;
+		clearTimeout(refreshTimer);
+		refreshTimer = undefined;
+	}
+
+	async function refreshSelected() {
 		if (selected === null) return;
 		const item = overview.find((o) => o.account_id === selected);
 		if (!item) return;
-		snapshotting = true;
+		refreshing = true;
+		error = '';
+		clearTimeout(refreshTimer);
+		refreshTimer = setTimeout(() => {
+			void onBalanceUpdated(item.account_id);
+		}, 15_000);
 		try {
-			holdings = await triggerSnapshot(item.exchange, item.label);
-			[history, pnlHistory] = await Promise.all([
-				fetchHistory(item.exchange, item.label),
-				fetchPnlHistory(item.exchange, item.label)
-			]);
-			await loadOverview();
+			await requestRefresh(item.exchange, item.label);
 		} catch (e) {
-			error =
-				e instanceof ApiError ? e.message : 'Snapshot failed.';
-		} finally {
-			snapshotting = false;
+			error = e instanceof ApiError ? e.message : 'Refresh failed.';
+			clearRefreshing();
 		}
 	}
 
-	onMount(loadOverview);
+	async function onBalanceUpdated(accountId: number) {
+		await loadOverview(true);
+		if (selected !== accountId) return;
+		const item = overview.find((o) => o.account_id === accountId);
+		if (!item) {
+			clearRefreshing();
+			return;
+		}
+		try {
+			[holdings, history, pnlHistory] = await Promise.all([
+				fetchHoldings(item.exchange, item.label),
+				fetchHistory(item.exchange, item.label),
+				fetchPnlHistory(item.exchange, item.label)
+			]);
+		} catch {
+			/* keep prior holdings */
+		} finally {
+			clearRefreshing();
+		}
+	}
+
+	onMount(() => {
+		loadOverview();
+		unsubEvents = subscribeBalanceUpdates((ev) => {
+			void onBalanceUpdated(ev.account_id);
+		});
+	});
+
+	onDestroy(() => {
+		unsubEvents?.();
+		clearTimeout(refreshTimer);
+	});
 </script>
 
 <svelte:head>
@@ -248,7 +290,10 @@
 								on:click={() => select(item)}
 							>
 								<span class="acct-label">{item.label}</span>
-								<span class="acct-val">{money(item.total_value)}</span>
+								<span class="acct-meta">
+									<span class="acct-val">{money(item.total_value)}</span>
+									<span class="acct-age">{ago(item.taken_at)}</span>
+								</span>
 							</button>
 						{/each}
 					</div>
@@ -271,15 +316,15 @@
 						</div>
 						<div class="detail-head-right">
 							<span class="detail-total">{money(holdings.total_value)} {holdings.quote_asset}</span>
-							<button class="btn" on:click={snapshotNow} disabled={snapshotting}>
-								{snapshotting ? 'Snapshotting…' : 'Snapshot now'}
+							<button class="btn" on:click={refreshSelected} disabled={refreshing}>
+								{refreshing ? 'Refreshing…' : 'Refresh'}
 							</button>
 						</div>
 					</div>
 
 					{#if holdings.balances.length === 0 && holdings.positions.length === 0}
 						<div class="notice">
-							No snapshot data yet. Use “Snapshot now” to capture the current state.
+							No snapshot data yet. Use “Refresh” to capture the current state from the exchange.
 						</div>
 					{:else}
 						<div class="charts">
@@ -479,10 +524,21 @@
 		padding-left: 0.75rem;
 		color: var(--text-muted);
 	}
+	.acct-meta {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 0.1rem;
+	}
 	.acct-val {
 		font-family: var(--mono);
 		font-variant-numeric: tabular-nums;
 		color: var(--text-muted);
+	}
+	.acct-age {
+		font-size: 0.7rem;
+		color: var(--text-dim, var(--text-muted));
+		opacity: 0.85;
 	}
 
 	.detail {

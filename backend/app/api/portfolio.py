@@ -2,8 +2,10 @@
 
 Reads are served from the local snapshot history (never a live venue call):
 the latest batch per account is "current holdings", older batches are history.
-The one write here is an on-demand snapshot, which is audited like any other
-state-changing action and captures a fresh batch through the connector.
+
+Freshness is driven by background hooks (order sync, history, transfers, the
+hourly job) plus ``POST .../refresh``, which enqueues a debounced capture.
+``POST .../snapshot`` remains for agents/ops but is deprecated for the UI.
 """
 from datetime import datetime
 from decimal import Decimal
@@ -18,6 +20,7 @@ from app.connectors.registry import connectors
 from app.core.audit import Actor, audit, current_actor
 from app.core.db import get_db
 from app.models.account import Account
+from app.services import balance_refresh
 from app.services import snapshots as svc
 
 router = APIRouter(
@@ -182,14 +185,71 @@ async def account_pnl_history(
     return [PnlPoint(taken_at=taken_at, pnl=pnl) for _, taken_at, pnl in points]
 
 
-@router.post("/{exchange}/{label}/snapshot", response_model=HoldingsOut, status_code=201)
+class RefreshOut(BaseModel):
+    account_id: int
+    exchange: str
+    label: str
+    scheduled: bool = True
+
+
+@router.post(
+    "/{exchange}/{label}/refresh",
+    response_model=RefreshOut,
+    status_code=202,
+)
+async def request_refresh(
+    exchange: str,
+    label: str,
+    actor: Actor = Depends(current_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Enqueue a debounced balance/position capture (does not await the venue).
+
+    The UI should keep reading ``GET`` holdings from the database and wait for
+    a ``balance.updated`` SSE (or poll ``taken_at``) after calling this.
+    """
+    account = await _account_by_ref(db, exchange, label)
+    connector = _get_connector(account.exchange)
+    if not (
+        connector.supports(Capability.BALANCES)
+        or connector.supports(Capability.POSITIONS)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f"{connector.exchange} does not support balance/position reads",
+        )
+    async with audit(
+        db, actor, "snapshots.refresh",
+        target=f"{account.exchange}:{account.label}",
+    ):
+        balance_refresh.schedule_balance_refresh(
+            account.id, "manual", debounce_seconds=0.5
+        )
+    return RefreshOut(
+        account_id=account.id,
+        exchange=account.exchange,
+        label=account.label,
+        scheduled=True,
+    )
+
+
+@router.post(
+    "/{exchange}/{label}/snapshot",
+    response_model=HoldingsOut,
+    status_code=201,
+    deprecated=True,
+)
 async def trigger_snapshot(
     exchange: str,
     label: str,
     actor: Actor = Depends(current_actor),
     db: AsyncSession = Depends(get_db),
 ):
-    """Capture a fresh snapshot for one account on demand."""
+    """Deprecated: synchronous live capture for agents/ops only.
+
+    The panel UI should use ``POST .../refresh`` and read holdings from the DB
+    after the ``balance.updated`` SSE notification.
+    """
     account = await _account_by_ref(db, exchange, label)
     connector = _get_connector(account.exchange)
     if not (
@@ -205,7 +265,9 @@ async def trigger_snapshot(
         target=f"{account.exchange}:{account.label}",
     ) as entry:
         try:
-            written = await svc.capture_snapshots(db, connector, account)
+            written = await balance_refresh.capture_and_publish(
+                db, connector, account, "manual_sync"
+            )
         except svc.AccountError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         entry.params = {"rows": written}

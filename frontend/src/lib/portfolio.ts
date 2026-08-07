@@ -70,6 +70,13 @@ export const fetchHistory = (exchange: string, label: string) =>
 export const fetchPnlHistory = (exchange: string, label: string) =>
 	apiGet<PnlPoint[]>(`${portfolioPath(exchange, label)}/pnl-history`);
 
-/** Capture a fresh snapshot for one account on demand. */
-export const triggerSnapshot = (exchange: string, label: string) =>
-	apiPost<Holdings>(`${portfolioPath(exchange, label)}/snapshot`);
+export interface RefreshResult {
+	account_id: number;
+	exchange: string;
+	label: string;
+	scheduled: boolean;
+}
+
+/** Enqueue a debounced balance refresh; re-GET holdings after SSE ``balance.updated``. */
+export const requestRefresh = (exchange: string, label: string) =>
+	apiPost<RefreshResult>(`${portfolioPath(exchange, label)}/refresh`);

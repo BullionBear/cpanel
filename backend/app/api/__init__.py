@@ -1,6 +1,17 @@
 from fastapi import APIRouter
 
-from app.api import accounts, audit, auth, history, jobs, orders, portfolio, symbols, transfers
+from app.api import (
+    accounts,
+    audit,
+    auth,
+    events,
+    history,
+    jobs,
+    orders,
+    portfolio,
+    symbols,
+    transfers,
+)
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
@@ -12,6 +23,7 @@ api_router.include_router(portfolio.router)
 api_router.include_router(orders.router)
 api_router.include_router(history.router)
 api_router.include_router(transfers.router)
+api_router.include_router(events.router)
 
 
 @api_router.get("/ping")

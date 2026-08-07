@@ -62,10 +62,10 @@ from app.services.accounts import (
     decrypt_credential,
     get_active_credential,
 )
+from app.services.balance_refresh import capture_and_publish
 from app.services.snapshots import (
     _price_map,
     _value_in_quote,
-    capture_snapshots,
     latest_batch,
 )
 
@@ -981,8 +981,13 @@ async def _refresh_account_after_transfer(
     if connector.supports(Capability.POSITIONS):
         positions = await connector.fetch_positions(decrypted)
 
-    await capture_snapshots(
-        db, connector, account, balances=balances, positions=positions
+    await capture_and_publish(
+        db,
+        connector,
+        account,
+        "transfer",
+        balances=balances,
+        positions=positions,
     )
 
 

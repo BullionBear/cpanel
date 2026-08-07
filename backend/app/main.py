@@ -12,7 +12,9 @@ from app.connectors.okx import OkxConnector
 from app.connectors.registry import connectors
 from app.core.config import settings
 from app.core.db import dispose_engine, get_session_factory
+from app.core.events import event_hub
 from app.core.ratelimit import rate_limiters
+from app.services import balance_refresh
 from app.jobs.history import make_history_sync_job
 from app.jobs.orders import make_open_order_poll_job
 from app.jobs.scheduler import JobDefinition, scheduler
@@ -96,12 +98,16 @@ async def lifespan(app: FastAPI):
     setup_connectors()
     setup_jobs()
     if settings.DATABASE_URL:
-        app.state.session_factory = get_session_factory()
+        factory = get_session_factory()
+        app.state.session_factory = factory
+        balance_refresh.configure(factory)
     if settings.SCHEDULER_ENABLED and settings.DATABASE_URL:
         await scheduler.start(get_session_factory())
     yield
     if scheduler.running:
         await scheduler.stop()
+    await balance_refresh.shutdown()
+    event_hub.clear()
     await dispose_engine()
     app.state.session_factory = None
 

@@ -111,7 +111,7 @@ async def test_post_transfer_snapshot_failure_keeps_completed(
 ):
     """A failed post-transfer snapshot must not reopen or fail the transfer."""
     monkeypatch.setattr(
-        "app.services.transfers.capture_snapshots",
+        "app.services.transfers.capture_and_publish",
         AsyncMock(side_effect=RuntimeError("venue balance timeout")),
     )
     transfer = await create_intra_transfer(

@@ -40,6 +40,7 @@ from app.services.accounts import (
     decrypt_credential,
     get_active_credential,
 )
+from app.services.balance_refresh import schedule_balance_refresh
 
 logger = logging.getLogger(__name__)
 
@@ -350,6 +351,7 @@ async def sync_open_orders(
     by_client = {o.client_order_id: o for o in local if o.client_order_id}
 
     changed = 0
+    balance_touch = False
     seen_ids: set[str] = set()
     for vo in venue_orders:
         seen_ids.add(vo.native_order_id)
@@ -359,20 +361,36 @@ async def sync_open_orders(
         if row is None:
             db.add(_external_row(account, vo))
             changed += 1
+            if vo.filled_qty and vo.filled_qty > 0:
+                balance_touch = True
             continue
+        fill_or_status = (
+            row.status != vo.status.value or row.filled_qty != vo.filled_qty
+        )
         if _apply_if_changed(row, vo):
             changed += 1
+            if fill_or_status:
+                balance_touch = True
 
     # Local opens the venue no longer reports: resolve to a terminal state.
     for row in local:
         if row.native_order_id in seen_ids:
             continue
         terminal = await _resolve_terminal(connector, credential, row)
-        if terminal is not None and _apply_if_changed(row, terminal):
-            changed += 1
+        if terminal is not None:
+            fill_or_status = (
+                row.status != terminal.status.value
+                or row.filled_qty != terminal.filled_qty
+            )
+            if _apply_if_changed(row, terminal):
+                changed += 1
+                if fill_or_status:
+                    balance_touch = True
 
     if changed:
         await db.commit()
+    if balance_touch:
+        schedule_balance_refresh(account.id, "order_sync")
     return changed
 
 
