@@ -384,8 +384,9 @@ async def test_fetch_trades_walks_native_pages_then_window(connector, monkeypatc
     async def history_page(credential, method, category, start, end, limit, native):
         calls.append((method, category, start, end, limit, native))
         if native is None:
-            return [EXECUTION], "tok-2"
-        return [dict(EXECUTION, execId="exec-2")], None
+            # Full page + token → follow the venue cursor within the window.
+            return [dict(EXECUTION, execId=f"exec-{i}") for i in range(limit)], "tok-2"
+        return [dict(EXECUTION, execId="exec-last")], None
 
     monkeypatch.setattr(connector, "_fetch_history_page", history_page)
     cred = {"api_key": "k", "secret": "s"}
@@ -394,7 +395,7 @@ async def test_fetch_trades_walks_native_pages_then_window(connector, monkeypatc
     start_ms = now_ms - 2 * 24 * 60 * 60 * 1000
     cursor = json.dumps({"start": start_ms})
 
-    # Page 1: venue returns a native token → cursor keeps the window, adds token.
+    # Page 1: full page with native token → cursor keeps the window, adds token.
     page1 = await connector.fetch_trades(cred, "linear", cursor)
     assert page1.items[0].universal_symbol == "BYBIT_PERP_ETHUSDT"
     assert json.loads(page1.next_cursor) == {"start": start_ms, "cursor": "tok-2"}
@@ -405,6 +406,44 @@ async def test_fetch_trades_walks_native_pages_then_window(connector, monkeypatc
     page2 = await connector.fetch_trades(cred, "linear", page1.next_cursor)
     assert calls[1][5] == "tok-2"
     assert json.loads(page2.next_cursor) == {"start": start_ms + 24 * 60 * 60 * 1000}
+
+
+async def test_fetch_trades_ignores_spurious_short_page_cursor(connector, monkeypatch):
+    """Bybit may return nextPageCursor on a short page; do not follow it."""
+
+    async def history_page(credential, method, category, start, end, limit, native):
+        assert native is None
+        return [EXECUTION], "spurious-tok"
+
+    monkeypatch.setattr(connector, "_fetch_history_page", history_page)
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    start_ms = now_ms - 2 * 24 * 60 * 60 * 1000
+    page = await connector.fetch_trades(
+        {"api_key": "k", "secret": "s"}, "linear", json.dumps({"start": start_ms})
+    )
+    assert len(page.items) == 1
+    # Short page → ignore token and slide the window forward.
+    assert json.loads(page.next_cursor) == {"start": start_ms + 24 * 60 * 60 * 1000}
+
+
+async def test_fetch_trades_clears_dead_page_token_in_live_window(connector, monkeypatch):
+    """Exhausted page token in the current window must not stick forever."""
+
+    async def history_page(credential, method, category, start, end, limit, native):
+        assert native == "dead-tok"
+        return [], None
+
+    monkeypatch.setattr(connector, "_fetch_history_page", history_page)
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    start_ms = now_ms - 60_000  # live (incomplete) 24h window
+    page = await connector.fetch_trades(
+        {"api_key": "k", "secret": "s"},
+        "linear",
+        json.dumps({"start": start_ms, "cursor": "dead-tok"}),
+    )
+    assert page.items == []
+    # Cleared token so the next sync re-queries from window start.
+    assert json.loads(page.next_cursor) == {"start": start_ms}
 
 
 async def test_fetch_trades_caught_up(connector, monkeypatch):

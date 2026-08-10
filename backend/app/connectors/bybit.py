@@ -808,12 +808,27 @@ class BybitConnector(ExchangeConnector):
 
     @staticmethod
     def _next_history_cursor(
-        start_ms: int, end_ms: int, now_ms: int, native: str | None
+        start_ms: int,
+        end_ms: int,
+        now_ms: int,
+        native: str | None,
+        *,
+        page_len: int,
+        limit: int,
+        had_native: bool,
     ) -> str | None:
-        if native:
+        # Only follow a venue page token when the page was full. Bybit can
+        # return nextPageCursor on short pages; following those often yields
+        # an empty page and would wedge the stored cursor on a dead token.
+        if native and page_len >= limit:
             return json.dumps({"start": start_ms, "cursor": native})
         if end_ms < now_ms:
             return json.dumps({"start": end_ms})
+        # Live window exhausted. If we arrived via a page token, clear it so
+        # the next sync re-queries from window start — returning None would
+        # leave the stale token in sync_cursor and permanently skip new rows.
+        if had_native:
+            return json.dumps({"start": start_ms})
         return None
 
     async def _fetch_history_page(
@@ -868,7 +883,15 @@ class BybitConnector(ExchangeConnector):
             items.append(normalize(raw, universal))
         return Page(
             items=items,
-            next_cursor=self._next_history_cursor(start_ms, end_ms, now_ms, next_native),
+            next_cursor=self._next_history_cursor(
+                start_ms,
+                end_ms,
+                now_ms,
+                next_native,
+                page_len=len(rows),
+                limit=limit,
+                had_native=bool(native),
+            ),
         )
 
     async def fetch_trades(
@@ -1325,7 +1348,15 @@ class BybitConnector(ExchangeConnector):
             items = [normalize_withdrawal_record(raw) for raw in rows]
         return Page(
             items=items,
-            next_cursor=self._next_history_cursor(start_ms, end_ms, now_ms, next_native),
+            next_cursor=self._next_history_cursor(
+                start_ms,
+                end_ms,
+                now_ms,
+                next_native,
+                page_len=len(rows),
+                limit=limit,
+                had_native=bool(native),
+            ),
         )
 
     async def fetch_deposits_history(
@@ -1393,7 +1424,15 @@ class BybitConnector(ExchangeConnector):
             items.append(normalize_funding_fee(raw, universal))
         return Page(
             items=items,
-            next_cursor=self._next_history_cursor(start_ms, end_ms, now_ms, next_native),
+            next_cursor=self._next_history_cursor(
+                start_ms,
+                end_ms,
+                now_ms,
+                next_native,
+                page_len=len(rows),
+                limit=limit,
+                had_native=bool(native),
+            ),
         )
 
     # -- connector interface --------------------------------------------------
