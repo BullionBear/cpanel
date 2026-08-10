@@ -37,15 +37,20 @@ jobs:
       - name: Deploy to production server
         id: deploy
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         with:
           host: ${{ env.SERVER_HOST }}
           username: ${{ env.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: GHCR_TOKEN
           script: |
             set -euo pipefail
             cd ${{ env.DEPLOY_PATH }}
             source env.sh
             export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-cpanel}"
+            echo "Logging in to GHCR..."
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u yitech --password-stdin
             echo "Pulling latest images..."
             # Fail the job if GHCR pull is denied — otherwise we silently
             # "deploy" stale local images and Discord reports success.
