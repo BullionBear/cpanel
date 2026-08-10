@@ -42,11 +42,14 @@ jobs:
           username: ${{ env.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            set -euo pipefail
             cd ${{ env.DEPLOY_PATH }}
             source env.sh
             export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-cpanel}"
             echo "Pulling latest images..."
-            docker compose -p "$COMPOSE_PROJECT_NAME" pull backend frontend || echo "WARN: registry pull failed; continuing with local images"
+            # Fail the job if GHCR pull is denied — otherwise we silently
+            # "deploy" stale local images and Discord reports success.
+            docker compose -p "$COMPOSE_PROJECT_NAME" pull backend frontend
             echo "Restarting services..."
             COMPOSE_PULL_POLICY=never docker compose -p "$COMPOSE_PROJECT_NAME" up -d --pull never --remove-orphans backend frontend
             echo "Cleaning up old images..."
