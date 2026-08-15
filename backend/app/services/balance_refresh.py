@@ -4,7 +4,8 @@ Callers that observe balance-affecting activity (fills, deposits, transfers,
 manual refresh) schedule a refresh. Multiple schedules for the same account
 coalesce into one venue capture after ``debounce_seconds``. After a successful
 ``capture_snapshots``, a ``balance.updated`` event is published so the UI can
-re-GET holdings from the database.
+re-GET holdings from the database. Failures publish ``balance.refresh_failed``
+so the UI is not left waiting forever on a silent error.
 """
 from __future__ import annotations
 
@@ -17,7 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.connectors.base import Capability, ExchangeConnector
 from app.connectors.registry import connectors
 from app.connectors.types import Balance, Position
-from app.core.events import BalanceUpdatedEvent, event_hub
+from app.core.events import (
+    BalanceRefreshFailedEvent,
+    BalanceUpdatedEvent,
+    event_hub,
+)
 from app.models.account import Account
 from app.services.accounts import AccountError
 from app.services.snapshots import capture_snapshots, latest_batch
@@ -30,6 +35,7 @@ __all__ = [
     "schedule_balance_refresh",
     "capture_and_publish",
     "publish_balance_updated",
+    "publish_balance_refresh_failed",
     "DEFAULT_DEBOUNCE_SECONDS",
 ]
 
@@ -70,6 +76,22 @@ def publish_balance_updated(
             label=account.label,
             reason=reason,
             taken_at=taken_at,
+        )
+    )
+
+
+def publish_balance_refresh_failed(
+    account: Account,
+    reason: str,
+    error: str,
+) -> None:
+    event_hub.publish(
+        BalanceRefreshFailedEvent(
+            account_id=account.id,
+            exchange=account.exchange,
+            label=account.label,
+            reason=reason,
+            error=error[:500],
         )
     )
 
@@ -163,8 +185,16 @@ async def _run_scheduled(account_id: int, reason: str) -> None:
             return
         try:
             await capture_and_publish(db, connector, account, reason)
-        except AccountError:
+        except AccountError as exc:
             logger.info(
                 "Balance refresh skipped for account %s — no usable credential",
                 account_id,
             )
+            publish_balance_refresh_failed(account, reason, str(exc))
+        except Exception as exc:
+            logger.exception(
+                "Balance refresh failed for account %s (%s)",
+                account_id,
+                reason,
+            )
+            publish_balance_refresh_failed(account, reason, str(exc))

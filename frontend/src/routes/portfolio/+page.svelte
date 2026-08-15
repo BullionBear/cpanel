@@ -248,6 +248,13 @@
 	onMount(() => {
 		loadOverview();
 		unsubEvents = subscribeBalanceUpdates((ev) => {
+			if (ev.type === 'balance.refresh_failed') {
+				if (selected === ev.account_id || refreshing) {
+					error = `Refresh failed (${ev.exchange}:${ev.label}): ${ev.error}`;
+					clearRefreshing();
+				}
+				return;
+			}
 			void onBalanceUpdated(ev.account_id);
 		});
 	});
@@ -271,12 +278,13 @@
 	</div>
 
 	{#if error}
-		<div class="notice">{error}</div>
-	{:else if loading}
+		<div class="notice error-banner" role="alert">{error}</div>
+	{/if}
+	{#if loading}
 		<div class="notice">Loading…</div>
-	{:else if overview.length === 0}
+	{:else if overview.length === 0 && !error}
 		<div class="notice">No accounts registered yet. Register one to start snapshotting.</div>
-	{:else}
+	{:else if overview.length > 0}
 		<div class="layout">
 			<aside class="accounts">
 				{#each Object.entries(byExchange) as [exchange, accounts]}
@@ -670,6 +678,14 @@
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
 		box-shadow: var(--inset-hi);
+	}
+
+	.notice.error-banner {
+		padding: 0.75rem 1rem;
+		margin-bottom: 0.75rem;
+		text-align: left;
+		color: var(--danger, #b42318);
+		border-color: color-mix(in srgb, var(--danger, #b42318) 35%, var(--border));
 	}
 
 	.table-wrap {

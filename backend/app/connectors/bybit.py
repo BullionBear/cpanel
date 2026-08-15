@@ -623,19 +623,55 @@ class BybitConnector(ExchangeConnector):
         return response.get("result", {}).get("balance", [])
 
     async def fetch_balances(self, credential: Credential) -> list[Balance]:
-        return [
-            *normalize_wallet_balances(await self._fetch_wallet_coins(credential)),
-            *normalize_fund_balances(await self._fetch_fund_coins(credential)),
-        ]
+        """Fetch UNIFIED + FUND; skip a wallet the key cannot read.
+
+        The two accountTypes are independent Bybit APIs. A FUND-only
+        permission gap (or transient FUND outage) must not wipe an otherwise
+        successful UNIFIED snapshot, and vice versa.
+        """
+        balances: list[Balance] = []
+        errors: list[Exception] = []
+
+        async def _extend(label: str, rows_coro, normalize) -> None:
+            try:
+                balances.extend(normalize(await rows_coro))
+            except Exception as exc:
+                logger.warning("Bybit %s balances unavailable: %s", label, exc)
+                errors.append(exc)
+
+        await _extend(
+            "unified", self._fetch_wallet_coins(credential), normalize_wallet_balances
+        )
+        await _extend("funding", self._fetch_fund_coins(credential), normalize_fund_balances)
+        if not balances and errors:
+            raise errors[-1]
+        return balances
 
     async def fetch_positions(self, credential: Credential) -> list[Position]:
         if not self._native_map:
             await self.fetch_instruments()
         rows: list[dict] = []
+        errors: list[Exception] = []
+        attempts = 0
+
+        async def _extend(label: str, category: str, settle_coin: str | None = None) -> None:
+            nonlocal attempts
+            attempts += 1
+            try:
+                rows.extend(
+                    await self._fetch_positions(credential, category, settle_coin)
+                )
+            except Exception as exc:
+                logger.warning("Bybit %s positions unavailable: %s", label, exc)
+                errors.append(exc)
+
         for settle in self._LINEAR_SETTLE:
-            rows.extend(await self._fetch_positions(credential, "linear", settle))
-        rows.extend(await self._fetch_positions(credential, "inverse"))
-        return normalize_positions(rows, self._native_map)
+            await _extend(f"linear:{settle}", "linear", settle)
+        await _extend("inverse", "inverse")
+        positions = normalize_positions(rows, self._native_map)
+        if not positions and errors and len(errors) == attempts:
+            raise errors[-1]
+        return positions
 
     # -- orders -------------------------------------------------------------
 

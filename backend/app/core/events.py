@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "BalanceUpdatedEvent",
+    "BalanceRefreshFailedEvent",
+    "PanelEvent",
     "EventHub",
     "event_hub",
 ]
@@ -37,24 +39,40 @@ class BalanceUpdatedEvent:
         return payload
 
 
+@dataclass(frozen=True)
+class BalanceRefreshFailedEvent:
+    account_id: int
+    exchange: str
+    label: str
+    reason: str
+    error: str
+    type: str = "balance.refresh_failed"
+
+    def as_sse_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+PanelEvent = BalanceUpdatedEvent | BalanceRefreshFailedEvent
+
+
 class EventHub:
     def __init__(self, *, queue_size: int = 64) -> None:
         self._queue_size = queue_size
-        self._subs: set[asyncio.Queue[BalanceUpdatedEvent]] = set()
+        self._subs: set[asyncio.Queue[PanelEvent]] = set()
 
-    def subscribe(self) -> asyncio.Queue[BalanceUpdatedEvent]:
-        queue: asyncio.Queue[BalanceUpdatedEvent] = asyncio.Queue(maxsize=self._queue_size)
+    def subscribe(self) -> asyncio.Queue[PanelEvent]:
+        queue: asyncio.Queue[PanelEvent] = asyncio.Queue(maxsize=self._queue_size)
         self._subs.add(queue)
         return queue
 
-    def unsubscribe(self, queue: asyncio.Queue[BalanceUpdatedEvent]) -> None:
+    def unsubscribe(self, queue: asyncio.Queue[PanelEvent]) -> None:
         self._subs.discard(queue)
 
     def subscriber_count(self) -> int:
         return len(self._subs)
 
-    def publish(self, event: BalanceUpdatedEvent) -> None:
-        dead: list[asyncio.Queue[BalanceUpdatedEvent]] = []
+    def publish(self, event: PanelEvent) -> None:
+        dead: list[asyncio.Queue[PanelEvent]] = []
         for queue in self._subs:
             try:
                 queue.put_nowait(event)

@@ -9,16 +9,31 @@ export interface BalanceUpdatedEvent {
 	taken_at: string | null;
 }
 
-export type BalanceUpdateHandler = (event: BalanceUpdatedEvent) => void;
+export interface BalanceRefreshFailedEvent {
+	type: 'balance.refresh_failed';
+	account_id: number;
+	exchange: string;
+	label: string;
+	reason: string;
+	error: string;
+}
+
+export type BalanceEvent = BalanceUpdatedEvent | BalanceRefreshFailedEvent;
+
+export type BalanceEventHandler = (event: BalanceEvent) => void;
+
+/** @deprecated Use BalanceEventHandler */
+export type BalanceUpdateHandler = BalanceEventHandler;
 
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30_000;
 
 /**
- * Subscribe to authenticated SSE ``balance.updated`` events.
+ * Subscribe to authenticated SSE balance events
+ * (``balance.updated`` / ``balance.refresh_failed``).
  * Returns an unsubscribe function that aborts the stream and stops reconnects.
  */
-export function subscribeBalanceUpdates(onEvent: BalanceUpdateHandler): () => void {
+export function subscribeBalanceUpdates(onEvent: BalanceEventHandler): () => void {
 	let stopped = false;
 	let controller: AbortController | null = null;
 	let backoff = INITIAL_BACKOFF_MS;
@@ -65,7 +80,7 @@ export function subscribeBalanceUpdates(onEvent: BalanceUpdateHandler): () => vo
 
 async function readStream(
 	body: ReadableStream<Uint8Array>,
-	onEvent: BalanceUpdateHandler,
+	onEvent: BalanceEventHandler,
 	isStopped: () => boolean
 ) {
 	const reader = body.getReader();
@@ -84,7 +99,7 @@ async function readStream(
 	}
 }
 
-function parseSseFrame(frame: string): BalanceUpdatedEvent | null {
+function parseSseFrame(frame: string): BalanceEvent | null {
 	let eventType = 'message';
 	const dataLines: string[] = [];
 	for (const line of frame.split('\n')) {
@@ -95,10 +110,18 @@ function parseSseFrame(frame: string): BalanceUpdatedEvent | null {
 			dataLines.push(line.slice(5).trim());
 		}
 	}
-	if (eventType !== 'balance.updated' || dataLines.length === 0) return null;
+	if (
+		(eventType !== 'balance.updated' && eventType !== 'balance.refresh_failed') ||
+		dataLines.length === 0
+	) {
+		return null;
+	}
 	try {
-		const parsed = JSON.parse(dataLines.join('\n')) as BalanceUpdatedEvent;
-		if (parsed?.type !== 'balance.updated' || typeof parsed.account_id !== 'number') {
+		const parsed = JSON.parse(dataLines.join('\n')) as BalanceEvent;
+		if (parsed?.type !== eventType || typeof parsed.account_id !== 'number') {
+			return null;
+		}
+		if (parsed.type === 'balance.refresh_failed' && typeof parsed.error !== 'string') {
 			return null;
 		}
 		return parsed;

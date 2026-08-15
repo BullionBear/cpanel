@@ -19,7 +19,11 @@ from app.connectors.types import (
 )
 from app.core.audit import Actor, current_actor
 from app.core.db import get_db
-from app.core.events import BalanceUpdatedEvent, event_hub
+from app.core.events import (
+    BalanceRefreshFailedEvent,
+    BalanceUpdatedEvent,
+    event_hub,
+)
 from app.main import app
 from app.services import accounts as accounts_svc
 from app.services import balance_refresh
@@ -262,4 +266,31 @@ async def test_deprecated_snapshot_still_works_and_publishes(portfolio_client):
     event = queue.get_nowait()
     assert event.account_id == portfolio_client.account_id
     assert event.reason == "manual_sync"
+    event_hub.unsubscribe(queue)
+
+
+async def test_scheduled_refresh_failure_publishes_sse(configured, monkeypatch):
+    connector = FakeConnector()
+    connectors.register(connector)
+    queue = event_hub.subscribe()
+
+    async with configured() as db:
+        account = await _account(db, connector)
+
+    async def _boom(db, conn, account, reason, **kwargs):
+        raise RuntimeError("venue exploded")
+
+    monkeypatch.setattr(balance_refresh, "capture_and_publish", _boom)
+
+    balance_refresh.schedule_balance_refresh(
+        account.id, "manual", debounce_seconds=0.05
+    )
+    await asyncio.sleep(0.2)
+
+    event = queue.get_nowait()
+    assert isinstance(event, BalanceRefreshFailedEvent)
+    assert event.type == "balance.refresh_failed"
+    assert event.account_id == account.id
+    assert event.reason == "manual"
+    assert "venue exploded" in event.error
     event_hub.unsubscribe(queue)

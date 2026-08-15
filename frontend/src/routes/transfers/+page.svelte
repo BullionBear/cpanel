@@ -541,6 +541,7 @@
 			if (hasLive) loadTransfers();
 		}, 10_000);
 		unsubEvents = subscribeBalanceUpdates((ev) => {
+			if (ev.type !== 'balance.updated') return;
 			void invalidateHoldings(ev.account_id);
 			void fetchOverview()
 				.then((rows) => {

@@ -17,10 +17,10 @@ _HEARTBEAT_SECONDS = 15.0
 
 @router.get("/stream")
 async def event_stream(actor: Actor = Depends(current_actor)):
-    """Authenticated SSE stream. Currently emits ``balance.updated`` events.
+    """Authenticated SSE stream for portfolio balance notifications.
 
-    Clients should re-GET portfolio holdings from the database on each event;
-    the payload is a notification, not a balance ledger.
+    Emits ``balance.updated`` (re-GET holdings) and ``balance.refresh_failed``
+    (show the error; do not treat as a successful capture).
     """
     queue = event_hub.subscribe()
 

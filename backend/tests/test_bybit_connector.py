@@ -295,6 +295,30 @@ async def test_fetch_balances(connector, monkeypatch):
     assert {b.wallet for b in balances} == {WalletType.UNIFIED, WalletType.FUNDING}
 
 
+async def test_fetch_balances_skips_failed_funding_wallet(connector, monkeypatch):
+    async def wallet_coins(cred):
+        return WALLET_COINS
+
+    async def fund_coins(cred):
+        raise RuntimeError("FUND permission denied")
+
+    monkeypatch.setattr(connector, "_fetch_wallet_coins", wallet_coins)
+    monkeypatch.setattr(connector, "_fetch_fund_coins", fund_coins)
+    balances = await connector.fetch_balances({"api_key": "k", "secret": "s"})
+    assert {b.wallet for b in balances} == {WalletType.UNIFIED}
+    assert {b.asset for b in balances} == {"USDT", "BTC"}
+
+
+async def test_fetch_balances_raises_when_every_wallet_fails(connector, monkeypatch):
+    async def boom(cred):
+        raise RuntimeError("all wallets down")
+
+    monkeypatch.setattr(connector, "_fetch_wallet_coins", boom)
+    monkeypatch.setattr(connector, "_fetch_fund_coins", boom)
+    with pytest.raises(RuntimeError, match="all wallets down"):
+        await connector.fetch_balances({"api_key": "k", "secret": "s"})
+
+
 async def test_fetch_positions(connector, monkeypatch):
     async def positions(cred, category, settle_coin=None):
         if category == "linear" and settle_coin == "USDT":
@@ -309,6 +333,19 @@ async def test_fetch_positions(connector, monkeypatch):
         "BYBIT_PERP_ETHUSDT",
         "BYBIT_CMARGIN_BTCUSD",
     }
+
+
+async def test_fetch_positions_skips_failed_surface(connector, monkeypatch):
+    async def positions(cred, category, settle_coin=None):
+        if category == "inverse":
+            raise RuntimeError("inverse denied")
+        if category == "linear" and settle_coin == "USDT":
+            return LINEAR_POSITIONS
+        return []
+
+    monkeypatch.setattr(connector, "_fetch_positions", positions)
+    result = await connector.fetch_positions({"api_key": "k", "secret": "s"})
+    assert [p.universal_symbol for p in result] == ["BYBIT_PERP_ETHUSDT"]
 
 
 async def test_cursor_pagination_walked(monkeypatch):

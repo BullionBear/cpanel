@@ -711,24 +711,53 @@ class BinanceConnector(ExchangeConnector):
         return data if isinstance(data, list) else [data]
 
     async def fetch_balances(self, credential: Credential) -> list[Balance]:
-        return [
-            *normalize_spot_balances(await self._fetch_spot_balances(credential)),
-            *normalize_funding_balances(await self._fetch_funding_balances(credential)),
-            *normalize_futures_balances(await self._fetch_um_balances(credential)),
-            *normalize_futures_balances(await self._fetch_cm_balances(credential)),
-        ]
+        """Fetch every wallet; skip surfaces the key cannot read.
+
+        Spot / funding / UM / CM are independent Binance APIs. A key without
+        futures permission (or an IP-restricted futures call) must not wipe
+        an otherwise successful spot/funding snapshot.
+        """
+        balances: list[Balance] = []
+        errors: list[Exception] = []
+
+        async def _extend(label: str, rows_coro, normalize) -> None:
+            try:
+                balances.extend(normalize(await rows_coro))
+            except Exception as exc:
+                logger.warning("Binance %s balances unavailable: %s", label, exc)
+                errors.append(exc)
+
+        await _extend("spot", self._fetch_spot_balances(credential), normalize_spot_balances)
+        await _extend(
+            "funding", self._fetch_funding_balances(credential), normalize_funding_balances
+        )
+        await _extend("um-futures", self._fetch_um_balances(credential), normalize_futures_balances)
+        await _extend("cm-futures", self._fetch_cm_balances(credential), normalize_futures_balances)
+        if not balances and errors:
+            raise errors[-1]
+        return balances
 
     async def fetch_positions(self, credential: Credential) -> list[Position]:
         if not self._native_map:
             await self.fetch_instruments()
-        return [
-            *normalize_positions(
-                await self._fetch_um_positions(credential), MarketType.PERP, self._native_map
-            ),
-            *normalize_positions(
-                await self._fetch_cm_positions(credential), MarketType.CMARGIN, self._native_map
-            ),
-        ]
+        positions: list[Position] = []
+        errors: list[Exception] = []
+
+        async def _extend(label: str, market_type: MarketType, rows_coro) -> None:
+            try:
+                positions.extend(
+                    normalize_positions(await rows_coro, market_type, self._native_map)
+                )
+            except Exception as exc:
+                logger.warning("Binance %s positions unavailable: %s", label, exc)
+                errors.append(exc)
+
+        await _extend("um", MarketType.PERP, self._fetch_um_positions(credential))
+        await _extend("cm", MarketType.CMARGIN, self._fetch_cm_positions(credential))
+        if not positions and errors and len(errors) == 2:
+            # Both surfaces failed — propagate so callers can surface the error.
+            raise errors[-1]
+        return positions
 
     # -- orders -------------------------------------------------------------
 

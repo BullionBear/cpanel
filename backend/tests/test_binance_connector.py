@@ -334,6 +334,45 @@ async def test_fetch_balances_merges_wallets(connector, monkeypatch):
     assert {b.asset for b in futures} == {"USDT", "BTC"}
 
 
+async def test_fetch_balances_skips_failed_futures_wallet(connector, monkeypatch):
+    """A key without futures permission must still return spot/funding."""
+
+    async def spot_balances(cred):
+        return SPOT_BALANCES
+
+    async def funding_balances(cred):
+        return [{"asset": "USDT", "free": "1000", "locked": "0"}]
+
+    async def um_balances(cred):
+        raise RuntimeError("(-2015, 'Invalid API-key, IP, or permissions for action')")
+
+    async def cm_balances(cred):
+        raise RuntimeError("(-2015, 'Invalid API-key, IP, or permissions for action')")
+
+    monkeypatch.setattr(connector, "_fetch_spot_balances", spot_balances)
+    monkeypatch.setattr(connector, "_fetch_funding_balances", funding_balances)
+    monkeypatch.setattr(connector, "_fetch_um_balances", um_balances)
+    monkeypatch.setattr(connector, "_fetch_cm_balances", cm_balances)
+
+    balances = await connector.fetch_balances({"api_key": "k", "secret": "s"})
+    assert {b.wallet for b in balances} == {WalletType.SPOT, WalletType.FUNDING}
+    funding = next(b for b in balances if b.wallet == WalletType.FUNDING)
+    assert funding.free == Decimal("1000")
+
+
+async def test_fetch_balances_raises_when_every_wallet_fails(connector, monkeypatch):
+    async def boom(cred):
+        raise RuntimeError("all wallets down")
+
+    monkeypatch.setattr(connector, "_fetch_spot_balances", boom)
+    monkeypatch.setattr(connector, "_fetch_funding_balances", boom)
+    monkeypatch.setattr(connector, "_fetch_um_balances", boom)
+    monkeypatch.setattr(connector, "_fetch_cm_balances", boom)
+
+    with pytest.raises(RuntimeError, match="all wallets down"):
+        await connector.fetch_balances({"api_key": "k", "secret": "s"})
+
+
 async def test_fetch_positions_across_surfaces(connector, monkeypatch):
     async def um_positions(cred):
         return UM_POSITIONS
@@ -349,6 +388,20 @@ async def test_fetch_positions_across_surfaces(connector, monkeypatch):
         "BINANCE_PERP_ETHUSDT",
         "BINANCE_CMARGIN_SOLUSD",
     }
+
+
+async def test_fetch_positions_skips_failed_surface(connector, monkeypatch):
+    async def um_positions(cred):
+        return UM_POSITIONS
+
+    async def cm_positions(cred):
+        raise RuntimeError("cm denied")
+
+    monkeypatch.setattr(connector, "_fetch_um_positions", um_positions)
+    monkeypatch.setattr(connector, "_fetch_cm_positions", cm_positions)
+
+    positions = await connector.fetch_positions({"api_key": "k", "secret": "s"})
+    assert [p.universal_symbol for p in positions] == ["BINANCE_PERP_ETHUSDT"]
 
 
 # -- history ------------------------------------------------------------------
