@@ -6,6 +6,11 @@ inserts a fresh set of rows sharing a ``batch_id`` and ``taken_at``. Nothing is
 ever updated in place, so history accumulates and the latest batch is the
 current holdings.
 
+Every pass also writes one ``snapshot_batch`` row, including a pass that finds
+nothing to record. An account drained to zero produces no balance or position
+rows at all, so without that row the "latest batch" would still be its last
+funded one and the account would appear frozen at a holding it no longer has.
+
 Valuation into a common quote asset (USDT) uses the reference prices the
 symbol module keeps on ``universal_ticker`` — no extra venue calls, and prices
 are already refreshed on a short cadence so they are close to snapshot time.
@@ -20,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.connectors.base import Capability, ExchangeConnector
 from app.connectors.types import Balance, Position
 from app.models.account import Account
-from app.models.snapshot import BalanceSnapshot, PositionSnapshot
+from app.models.snapshot import BalanceSnapshot, PositionSnapshot, SnapshotBatch
 from app.models.universal_ticker import UniversalTicker
 from app.services.accounts import AccountError, decrypt_credential, get_active_credential
 
@@ -105,6 +110,16 @@ async def capture_snapshots(
     batch_id = uuid.uuid4().hex
     taken_at = datetime.now(timezone.utc)
 
+    # Recorded unconditionally: an empty account still captured successfully.
+    db.add(
+        SnapshotBatch(
+            batch_id=batch_id,
+            account_id=account.id,
+            exchange=account.exchange,
+            taken_at=taken_at,
+        )
+    )
+
     written = 0
     for balance in balances:
         value = _value_in_quote(balance.asset, balance.total, prices)
@@ -170,20 +185,49 @@ def holdings_total(balances, positions) -> Decimal:
 
 
 async def latest_batch(db: AsyncSession, account_id: int) -> tuple[str, datetime] | None:
-    """(batch_id, taken_at) of the most recent capture for an account, or None."""
-    latest: tuple[str, datetime] | None = None
-    for model in (BalanceSnapshot, PositionSnapshot):
-        row = (
-            await db.execute(
-                select(model.batch_id, model.taken_at)
-                .where(model.account_id == account_id)
-                .order_by(model.taken_at.desc(), model.id.desc())
-                .limit(1)
-            )
-        ).first()
-        if row is not None and (latest is None or row.taken_at > latest[1]):
-            latest = (row.batch_id, row.taken_at)
-    return latest
+    """(batch_id, taken_at) of the most recent capture for an account, or None.
+
+    Read from ``snapshot_batch`` rather than from the snapshot rows, so a
+    capture that found an empty account still advances the account's view.
+    ``None`` means the account has never been captured — distinct from a
+    capture that found nothing.
+    """
+    batches = await _recent_batches(db, account_id, limit=1)
+    return batches[0] if batches else None
+
+
+async def _recent_batches(
+    db: AsyncSession, account_id: int, limit: int
+) -> list[tuple[str, datetime]]:
+    """The account's most recent capture batches, newest first."""
+    rows = (
+        await db.execute(
+            select(SnapshotBatch.batch_id, SnapshotBatch.taken_at)
+            .where(SnapshotBatch.account_id == account_id)
+            .order_by(SnapshotBatch.taken_at.desc(), SnapshotBatch.batch_id.desc())
+            .limit(limit)
+        )
+    ).all()
+    return [(row.batch_id, row.taken_at) for row in rows]
+
+
+async def _sum_by_batch(
+    db: AsyncSession, model, column, batch_ids: list[str]
+) -> dict[str, Decimal]:
+    """Sum ``model.column`` per batch, in Python.
+
+    ``PreciseDecimal`` is TEXT on SQLite, where a SQL ``sum()`` would go
+    through float, so the addition happens here on exact Decimals instead.
+    """
+    if not batch_ids:
+        return {}
+    rows = await db.execute(
+        select(model.batch_id, column).where(model.batch_id.in_(batch_ids))
+    )
+    totals: dict[str, Decimal] = {}
+    for batch_id, value in rows:
+        totals[batch_id] = totals.get(batch_id, Decimal("0")) + (value or Decimal("0"))
+    return totals
 
 
 async def get_holdings(
@@ -245,37 +289,25 @@ async def value_history(
     """Per-batch total asset value in the quote asset, most recent first.
 
     One point per capture batch: that batch's spot balance value plus its
-    positions' unrealized PnL. Unpriced rows contribute nothing.
+    positions' unrealized PnL. Unpriced rows contribute nothing, and a batch
+    that captured an empty account is a genuine zero rather than a gap.
     """
-    totals: dict[str, tuple[datetime, Decimal]] = {}
-
-    def _add(batch_id: str, taken_at: datetime, amount: Decimal | None) -> None:
-        prev = totals.get(batch_id)
-        running = (prev[1] if prev else Decimal("0")) + (amount or Decimal("0"))
-        totals[batch_id] = (taken_at, running)
-
-    balances = await db.execute(
-        select(
-            BalanceSnapshot.batch_id, BalanceSnapshot.taken_at, BalanceSnapshot.value_quote
-        ).where(BalanceSnapshot.account_id == account_id)
+    batches = await _recent_batches(db, account_id, limit)
+    batch_ids = [batch_id for batch_id, _ in batches]
+    balances = await _sum_by_batch(
+        db, BalanceSnapshot, BalanceSnapshot.value_quote, batch_ids
     )
-    for batch_id, taken_at, value in balances:
-        _add(batch_id, taken_at, value)
-    positions = await db.execute(
-        select(
-            PositionSnapshot.batch_id,
-            PositionSnapshot.taken_at,
-            PositionSnapshot.unrealized_pnl,
-        ).where(PositionSnapshot.account_id == account_id)
+    positions = await _sum_by_batch(
+        db, PositionSnapshot, PositionSnapshot.unrealized_pnl, batch_ids
     )
-    for batch_id, taken_at, pnl in positions:
-        _add(batch_id, taken_at, pnl)
-
-    points = [
-        (batch_id, taken_at, total) for batch_id, (taken_at, total) in totals.items()
+    return [
+        (
+            batch_id,
+            taken_at,
+            balances.get(batch_id, Decimal("0")) + positions.get(batch_id, Decimal("0")),
+        )
+        for batch_id, taken_at in batches
     ]
-    points.sort(key=lambda p: p[1], reverse=True)
-    return points[:limit]
 
 
 async def pnl_history(
@@ -283,24 +315,16 @@ async def pnl_history(
 ) -> list[tuple[str, datetime, Decimal]]:
     """Per-batch total position unrealized PnL, most recent first.
 
-    One point per capture batch that had positions: the summed
-    ``unrealized_pnl`` of that batch. PnL can be negative.
+    One point per capture batch: the summed ``unrealized_pnl`` of that batch.
+    PnL can be negative, and a batch with no open positions is zero — closing
+    a book flattens the line rather than ending it.
     """
-    totals: dict[str, tuple[datetime, Decimal]] = {}
-    positions = await db.execute(
-        select(
-            PositionSnapshot.batch_id,
-            PositionSnapshot.taken_at,
-            PositionSnapshot.unrealized_pnl,
-        ).where(PositionSnapshot.account_id == account_id)
+    batches = await _recent_batches(db, account_id, limit)
+    batch_ids = [batch_id for batch_id, _ in batches]
+    positions = await _sum_by_batch(
+        db, PositionSnapshot, PositionSnapshot.unrealized_pnl, batch_ids
     )
-    for batch_id, taken_at, pnl in positions:
-        prev = totals.get(batch_id)
-        running = (prev[1] if prev else Decimal("0")) + (pnl or Decimal("0"))
-        totals[batch_id] = (taken_at, running)
-
-    points = [
-        (batch_id, taken_at, total) for batch_id, (taken_at, total) in totals.items()
+    return [
+        (batch_id, taken_at, positions.get(batch_id, Decimal("0")))
+        for batch_id, taken_at in batches
     ]
-    points.sort(key=lambda p: p[1], reverse=True)
-    return points[:limit]

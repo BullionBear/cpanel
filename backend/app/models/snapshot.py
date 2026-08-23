@@ -3,7 +3,8 @@
 Snapshots are never updated or deleted — each capture appends a fresh set of
 rows. Every row from one capture pass of one account shares a ``batch_id`` and
 ``taken_at`` so a cross-account portfolio view compares like with like (see
-ARCHITECTURE.md "Asset Snapshots").
+ARCHITECTURE.md "Asset Snapshots"). ``snapshot_batch`` records the pass itself,
+so a capture of an account holding nothing is still a capture.
 
 Two questions are answered from the same history:
 - "what do we hold now" — the rows of the latest batch per account, and
@@ -23,6 +24,32 @@ from app.models.audit_log import BigIntPk
 from app.models.base import Base, PreciseDecimal
 
 Num = PreciseDecimal()
+
+
+class SnapshotBatch(Base):
+    """One capture pass of one account — the durable record that it happened.
+
+    Balance and position rows carry this ``batch_id``, but a capture of an
+    empty account writes none of them. Without a row here the current batch
+    would have to be inferred from the snapshot rows, which pins an emptied
+    account to its last funded capture forever instead of reporting that it
+    now holds nothing.
+    """
+
+    __tablename__ = "snapshot_batch"
+    __table_args__ = (
+        Index("ix_snapshot_batch_account_taken", "account_id", "taken_at"),
+    )
+
+    batch_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("account.id"), nullable=False, index=True
+    )
+    exchange: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+
+    taken_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
 
 
 class BalanceSnapshot(Base):

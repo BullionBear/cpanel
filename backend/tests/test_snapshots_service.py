@@ -149,3 +149,59 @@ async def test_capture_requires_active_credential(db, connector):
     account = await accounts_svc.register_account(db, "FAKE", "keyless", "main")
     with pytest.raises(svc.AccountError):
         await svc.capture_snapshots(db, connector, account)
+
+
+async def test_empty_capture_records_a_batch(db, connector):
+    """An account drained to zero must report zero, not its last funded state."""
+    await _seed_prices(db, connector)
+    account = await _account_with_key(db, connector)
+    await svc.capture_snapshots(db, connector, account)
+    funded_at = (await svc.latest_batch(db, account.id))[1]
+
+    # Everything moved out: the venue now returns nothing at all.
+    connector.balances = []
+    connector.positions = []
+    written = await svc.capture_snapshots(db, connector, account)
+    assert written == 0
+
+    batch = await svc.latest_batch(db, account.id)
+    assert batch is not None
+    assert batch[1] > funded_at  # the view advanced past the funded capture
+
+    balances, positions, taken_at = await svc.get_holdings(db, account.id)
+    assert balances == [] and positions == []
+    assert taken_at == batch[1]
+
+    stamped_at, total = await svc.account_value(db, account.id)
+    assert total == Decimal("0")
+    assert stamped_at == batch[1]
+
+
+async def test_never_captured_account_has_no_batch(db, connector):
+    """No capture at all stays distinguishable from a capture that found none."""
+    await _seed_prices(db, connector)
+    account = await _account_with_key(db, connector)
+
+    assert await svc.latest_batch(db, account.id) is None
+    assert await svc.get_holdings(db, account.id) == ([], [], None)
+    assert await svc.account_value(db, account.id) == (None, Decimal("0"))
+
+
+async def test_history_includes_empty_batches_as_zero(db, connector):
+    await _seed_prices(db, connector)
+    account = await _account_with_key(db, connector)
+    await svc.capture_snapshots(db, connector, account)
+
+    connector.balances = []
+    connector.positions = []
+    await svc.capture_snapshots(db, connector, account)
+
+    # Newest first: the empty capture is a zero point, not a missing one.
+    assert [total for _, _, total in await svc.value_history(db, account.id)] == [
+        Decimal("0"),
+        Decimal("40200"),
+    ]
+    assert [pnl for _, _, pnl in await svc.pnl_history(db, account.id)] == [
+        Decimal("0"),
+        Decimal("200"),
+    ]

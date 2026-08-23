@@ -250,6 +250,7 @@ account's history is complete and only incremental sync remains.
 Balance and position snapshots are deliberately simple: on schedule (and on
 demand), fetch the current state through the connector and append it.
 
+- `snapshot_batch`: account, exchange, taken_at — one row per capture pass
 - `balance_snapshot`: account, wallet type, asset, free/locked/total, taken_at
 - `position_snapshot`: account, universal symbol, direction, size, entry
   price, mark price, unrealized PnL, margin, taken_at
@@ -259,6 +260,13 @@ account) and "what did the book look like last Tuesday" (snapshot at time).
 Valuation in a common quote asset uses reference prices captured close to the
 snapshot time. All snapshots for an account are stamped with the same capture
 batch so a cross-exchange portfolio view compares like with like.
+
+The batch is recorded separately from the rows because zero balances are
+dropped at normalization, so a capture of an emptied account writes no rows at
+all. Reading the current batch from `snapshot_batch` keeps "captured, holds
+nothing" (latest batch with no rows — value 0) distinct from "never captured"
+(no batch — value unknown). Inferring the batch from the rows instead pins a
+drained account to its last funded capture indefinitely.
 
 ## Transfer Orchestration
 
