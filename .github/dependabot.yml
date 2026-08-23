@@ -1,0 +1,52 @@
+# Dependency scanning. Without this file GitHub only scans what it discovers
+# by default (npm), so backend/ and migration/ went unscanned entirely.
+#
+# Note on the pip ecosystems: both requirements.txt files use `>=` floors and
+# there is no lockfile, so every newer release already satisfies them. That
+# means routine version-update PRs will not fire for Python — but *security*
+# updates still do, by raising the floor to the patched version. That is the
+# reason these two entries exist.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # The build toolchain moves together; one PR beats five.
+      frontend-build:
+        patterns:
+          - "vite"
+          - "@sveltejs/*"
+          - "svelte"
+          - "svelte-check"
+          - "typescript"
+
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      exchange-sdks:
+        patterns:
+          - "binance-sdk-*"
+          - "pybit"
+          - "gate-api"
+
+  - package-ecosystem: pip
+    directory: /migration
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns:
+          - "*"
