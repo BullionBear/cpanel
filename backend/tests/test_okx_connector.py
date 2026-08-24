@@ -41,6 +41,20 @@ SPOT_BTC = {
     "tickSz": "0.1",
     "lotSz": "0.00001",
     "minSz": "0.00001",
+    "maxLmtSz": "9999999999",
+    "state": "live",
+}
+
+# A low-priced pair whose minSz is a large base-asset quantity — the shape that
+# makes reusing minSz as a notional floor reject every realistic order.
+SPOT_SHIB = {
+    "instId": "SHIB-USDT",
+    "baseCcy": "SHIB",
+    "quoteCcy": "USDT",
+    "tickSz": "0.000000001",
+    "lotSz": "1",
+    "minSz": "100000",
+    "maxLmtSz": "9999999999",
     "state": "live",
 }
 
@@ -57,6 +71,7 @@ USDT_SWAP = {
     "tickSz": "0.01",
     "lotSz": "1",
     "minSz": "1",
+    "maxLmtSz": "100000000",
     "state": "live",
 }
 
@@ -71,6 +86,7 @@ COIN_SWAP = {
     "tickSz": "0.1",
     "lotSz": "1",
     "minSz": "1",
+    "maxLmtSz": "100000000",
     "state": "live",
 }
 
@@ -84,7 +100,20 @@ def test_normalize_spot_instrument():
     assert inst.native_symbol == "BTC-USDT"
     assert inst.filters.price_tick == Decimal("0.1")
     assert inst.filters.qty_step == Decimal("0.00001")
+    assert inst.filters.min_qty == Decimal("0.00001")
+    assert inst.filters.max_qty == Decimal("9999999999")
     assert inst.status == "active"
+
+
+def test_spot_min_sz_is_not_a_notional():
+    """minSz is a base-asset quantity, so it must not leak into min_notional.
+
+    SHIB-USDT asks for 100000 SHIB (a few cents). Treating that as a notional
+    floor would reject every order under $100000.
+    """
+    inst = normalize_spot_instrument(SPOT_SHIB)
+    assert inst.filters.min_qty == Decimal("100000")
+    assert inst.filters.min_notional is None
 
 
 def test_halted_spot_instrument():
@@ -96,9 +125,12 @@ def test_normalize_swap_instruments():
     assert perp.universal_symbol == "OKX_PERP_ETHUSDT"
     assert perp.settle_asset == "USDT"
     assert perp.contract_size == Decimal("0.1")
+    assert perp.filters.max_qty == Decimal("100000000")
+    assert perp.filters.min_notional is None
     inv = normalize_swap_instrument(COIN_SWAP)
     assert inv.universal_symbol == "OKX_CMARGIN_BTCUSD"
     assert inv.settle_asset == "BTC"
+    assert inv.filters.max_qty == Decimal("100000000")
     assert normalize_swap_instrument(UNKNOWN_SWAP) is None
 
 
@@ -112,16 +144,18 @@ def connector(monkeypatch):
             if params.get("instType") == "SPOT":
                 return [SPOT_BTC, SPOT_HALTED]
             return [USDT_SWAP, COIN_SWAP, UNKNOWN_SWAP]
-        if path == "/api/v5/public/tickers":
-            if params.get("instType") == "SPOT":
-                return [{"instId": "BTC-USDT", "last": "62600.5"}]
-            return [
-                {"instId": "ETH-USDT-SWAP", "last": "3301"},
-                {"instId": "BTC-USD-SWAP", "last": "62601"},
-            ]
         return []
 
+    async def tickers(inst_type):
+        if inst_type == "SPOT":
+            return [{"instId": "BTC-USDT", "last": "62600.5"}]
+        return [
+            {"instId": "ETH-USDT-SWAP", "last": "3301"},
+            {"instId": "BTC-USD-SWAP", "last": "62601"},
+        ]
+
     monkeypatch.setattr(c, "_api", api)
+    monkeypatch.setattr(c, "_fetch_tickers", tickers)
     return c
 
 
@@ -140,6 +174,20 @@ async def test_reference_prices(connector):
     assert prices["OKX_SPOT_BTCUSDT"] == Decimal("62600.5")
     assert prices["OKX_PERP_ETHUSDT"] == Decimal("3301")
     assert prices["OKX_CMARGIN_BTCUSD"] == Decimal("62601")
+
+
+async def test_tickers_use_market_endpoint(monkeypatch):
+    """Tickers live under /market, not /public — /public/tickers is a 404."""
+    c = OkxConnector()
+    seen = []
+
+    async def api(method, path, **kwargs):
+        seen.append((method, path, kwargs.get("params")))
+        return []
+
+    monkeypatch.setattr(c, "_api", api)
+    await c._fetch_tickers("SWAP")
+    assert seen == [("GET", "/api/v5/market/tickers", {"instType": "SWAP"})]
 
 
 def test_normalize_balances_drop_zero():
@@ -337,8 +385,22 @@ async def test_verify_requires_passphrase(connector):
     assert info.valid is False
 
 
-async def test_place_spot_limit_shapes_request(connector, monkeypatch):
-    calls = []
+CRED = {"api_key": "k", "secret": "s", "passphrase": "p"}
+
+FILLED_SWAP_ORDER = {
+    "ordId": "55",
+    "instId": "ETH-USDT-SWAP",
+    "side": "buy",
+    "ordType": "limit",
+    "state": "live",
+    "sz": "1",
+    "accFillSz": "0",
+    "px": "3000",
+}
+
+
+def _order_api(calls, config):
+    """Stub _api for order placement against an account with `config`."""
 
     async def api(method, path, **kwargs):
         calls.append((method, path, kwargs.get("body"), kwargs.get("params")))
@@ -347,15 +409,28 @@ async def test_place_spot_limit_shapes_request(connector, monkeypatch):
             if params.get("instType") == "SPOT":
                 return [SPOT_BTC]
             return [USDT_SWAP, COIN_SWAP]
+        if path == "/api/v5/account/config":
+            return [config]
         if path == "/api/v5/trade/order" and method == "POST":
             return [{"ordId": "99", "clOrdId": "cid-1"}]
         if path == "/api/v5/trade/order" and method == "GET":
             return [{**ORDER_RAW, "ordId": "99", "state": "live"}]
         return []
 
-    monkeypatch.setattr(connector, "_api", api)
+    return api
+
+
+def _posted_body(calls):
+    return next(
+        c[2] for c in calls if c[0] == "POST" and c[1] == "/api/v5/trade/order"
+    )
+
+
+async def test_place_spot_limit_shapes_request(connector, monkeypatch):
+    calls = []
+    monkeypatch.setattr(connector, "_api", _order_api(calls, {"acctLv": "2"}))
     order = await connector.place_order(
-        {"api_key": "k", "secret": "s", "passphrase": "p"},
+        CRED,
         OrderRequest(
             universal_symbol="OKX_SPOT_BTCUSDT",
             side=OrderSide.BUY,
@@ -366,46 +441,65 @@ async def test_place_spot_limit_shapes_request(connector, monkeypatch):
             time_in_force=TimeInForce.POST_ONLY,
         ),
     )
-    post = next(c for c in calls if c[0] == "POST" and c[1] == "/api/v5/trade/order")
-    body = post[2]
+    body = _posted_body(calls)
     assert body["ordType"] == "post_only"
     assert body["tdMode"] == "cash"
     assert body["clOrdId"] == "cid-1"
     assert body["px"] == "60000"
     assert body["instId"] == "BTC-USDT"
+    # tgtCcy only disambiguates market orders.
+    assert "tgtCcy" not in body
     assert order.native_order_id == "99"
+
+
+async def test_spot_market_buy_sizes_in_base_asset(connector, monkeypatch):
+    """Without tgtCcy, OKX reads a market buy's sz as a quote amount."""
+    calls = []
+    monkeypatch.setattr(connector, "_api", _order_api(calls, {"acctLv": "2"}))
+    await connector.place_order(
+        CRED,
+        OrderRequest(
+            universal_symbol="OKX_SPOT_BTCUSDT",
+            side=OrderSide.BUY,
+            type=OrderType.MARKET,
+            qty=Decimal("0.01"),
+        ),
+    )
+    body = _posted_body(calls)
+    assert body["ordType"] == "market"
+    assert body["sz"] == "0.01"
+    assert body["tgtCcy"] == "base_ccy"
+
+
+async def test_spot_uses_cross_in_margin_account(connector, monkeypatch):
+    """Multi-currency Margin (acctLv 3) rejects tdMode=cash for spot."""
+    calls = []
+    monkeypatch.setattr(connector, "_api", _order_api(calls, {"acctLv": "3"}))
+    await connector.place_order(
+        CRED,
+        OrderRequest(
+            universal_symbol="OKX_SPOT_BTCUSDT",
+            side=OrderSide.BUY,
+            type=OrderType.LIMIT,
+            qty=Decimal("0.01"),
+            price=Decimal("60000"),
+        ),
+    )
+    assert _posted_body(calls)["tdMode"] == "cross"
 
 
 async def test_place_perp_hedge_pos_side(connector, monkeypatch):
     calls = []
+    api = _order_api(calls, {"acctLv": "2", "posMode": "long_short_mode"})
 
-    async def api(method, path, **kwargs):
-        calls.append((method, path, kwargs.get("body")))
-        if path == "/api/v5/public/instruments":
-            params = kwargs.get("params") or {}
-            if params.get("instType") == "SPOT":
-                return [SPOT_BTC]
-            return [USDT_SWAP, COIN_SWAP]
-        if path == "/api/v5/trade/order" and method == "POST":
-            return [{"ordId": "55"}]
+    async def wrapped(method, path, **kwargs):
         if path == "/api/v5/trade/order" and method == "GET":
-            return [
-                {
-                    "ordId": "55",
-                    "instId": "ETH-USDT-SWAP",
-                    "side": "buy",
-                    "ordType": "limit",
-                    "state": "live",
-                    "sz": "1",
-                    "accFillSz": "0",
-                    "px": "3000",
-                }
-            ]
-        return []
+            return [FILLED_SWAP_ORDER]
+        return await api(method, path, **kwargs)
 
-    monkeypatch.setattr(connector, "_api", api)
+    monkeypatch.setattr(connector, "_api", wrapped)
     await connector.place_order(
-        {"api_key": "k", "secret": "s", "passphrase": "p"},
+        CRED,
         OrderRequest(
             universal_symbol="OKX_PERP_ETHUSDT",
             side=OrderSide.BUY,
@@ -416,10 +510,94 @@ async def test_place_perp_hedge_pos_side(connector, monkeypatch):
             reduce_only=True,
         ),
     )
-    body = next(c[2] for c in calls if c[0] == "POST" and c[1] == "/api/v5/trade/order")
+    body = _posted_body(calls)
     assert body["tdMode"] == "cross"
     assert body["posSide"] == "long"
     assert body["reduceOnly"] is True
+
+
+async def test_perp_rejects_hedge_side_on_net_mode_account(connector, monkeypatch):
+    """Position mode is account-wide and UI-only, so a mismatch can only be reported."""
+    calls = []
+    monkeypatch.setattr(
+        connector, "_api", _order_api(calls, {"acctLv": "2", "posMode": "net_mode"})
+    )
+    with pytest.raises(ValueError, match="one-way mode"):
+        await connector.place_order(
+            CRED,
+            OrderRequest(
+                universal_symbol="OKX_PERP_ETHUSDT",
+                side=OrderSide.BUY,
+                type=OrderType.LIMIT,
+                qty=Decimal("1"),
+                price=Decimal("3000"),
+                position_side=PositionSide.LONG,
+            ),
+        )
+    assert not [c for c in calls if c[0] == "POST"]
+
+
+async def test_perp_requires_a_side_on_hedge_mode_account(connector, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        connector,
+        "_api",
+        _order_api(calls, {"acctLv": "2", "posMode": "long_short_mode"}),
+    )
+    with pytest.raises(ValueError, match="hedge mode"):
+        await connector.place_order(
+            CRED,
+            OrderRequest(
+                universal_symbol="OKX_PERP_ETHUSDT",
+                side=OrderSide.BUY,
+                type=OrderType.LIMIT,
+                qty=Decimal("1"),
+                price=Decimal("3000"),
+                position_side=PositionSide.BOTH,
+            ),
+        )
+
+
+async def test_unknown_config_trusts_the_request(connector, monkeypatch):
+    """An unreachable config must not assert a mode we never observed."""
+    calls = []
+
+    async def api(method, path, **kwargs):
+        if path == "/api/v5/account/config":
+            raise OkxAPIError("boom", code="50011", status_code=429)
+        return await _order_api(calls, {})(method, path, **kwargs)
+
+    monkeypatch.setattr(connector, "_api", api)
+    await connector.place_order(
+        CRED,
+        OrderRequest(
+            universal_symbol="OKX_SPOT_BTCUSDT",
+            side=OrderSide.BUY,
+            type=OrderType.LIMIT,
+            qty=Decimal("0.01"),
+            price=Decimal("60000"),
+        ),
+    )
+    assert _posted_body(calls)["tdMode"] == "cash"
+
+
+async def test_config_cached_per_api_key(connector, monkeypatch):
+    """The connector is shared across accounts, so the cache must not bleed."""
+    fetches = []
+
+    async def api(method, path, **kwargs):
+        assert path == "/api/v5/account/config"
+        key = kwargs["credential"]["api_key"]
+        fetches.append(key)
+        return [{"acctLv": "3" if key == "margin" else "2"}]
+
+    monkeypatch.setattr(connector, "_api", api)
+    for _ in range(2):
+        cash = await connector._cached_config({**CRED, "api_key": "cash"})
+        margin = await connector._cached_config({**CRED, "api_key": "margin"})
+    assert cash["acctLv"] == "2"
+    assert margin["acctLv"] == "3"
+    assert fetches == ["cash", "margin"]
 
 
 async def test_transfer_wallet_legs(connector, monkeypatch):

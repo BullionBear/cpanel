@@ -25,8 +25,13 @@ Design decisions and venue quirks:
   Create-sub and key mutations require an IP-bound master key; some
   accounts reject create-sub with code ``59518`` (use the web UI).
   Sub keys minted via API get ``read_only`` / ``trade`` only (no withdraw).
-- **Spot** orders use ``tdMode=cash``; swap orders default to ``cross``.
-  One-way uses ``posSide=net``; hedge mode passes ``long``/``short``.
+- **Order shaping** depends on two account-wide settings read from
+  ``/api/v5/account/config`` and cached per API key: ``acctLv`` decides
+  whether spot trades as ``cash`` or ``cross`` (the margin account levels
+  reject ``cash``), and ``posMode`` decides whether ``posSide`` may be
+  ``net`` or must be ``long``/``short``. Neither is settable over the API.
+  Spot market orders pass ``tgtCcy=base_ccy`` because OKX otherwise reads a
+  market buy's ``sz`` as a quote amount.
 """
 from __future__ import annotations
 
@@ -39,6 +44,7 @@ import logging
 import re
 import secrets
 import string
+import time
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -137,6 +143,14 @@ _HISTORY_WINDOW_MS = 24 * 60 * 60 * 1000
 _HISTORY_STREAMS = ("spot", "swap:linear", "swap:inverse")
 
 _SUBACCT_RE = re.compile(r"^[A-Za-z0-9]{6,20}$")
+
+# acctLv values that route spot/margin through cross margin instead of cash:
+# 3 = Multi-currency Margin, 4 = Portfolio Margin (1 = Spot, 2 = Futures mode).
+_MARGIN_ACCT_LEVELS = {"3", "4"}
+
+# Account level and position mode only change from the OKX web UI, but they
+# decide tdMode/posSide on every order, so cache rather than refetch per order.
+_CONFIG_TTL_SECONDS = 300.0
 
 
 class OkxAPIError(Exception):
@@ -249,7 +263,9 @@ def normalize_spot_instrument(info: dict) -> Instrument | None:
             price_tick=tick,
             qty_step=lot,
             min_qty=min_sz,
-            min_notional=_opt_dec(info.get("minSz")),
+            max_qty=_opt_dec(info.get("maxLmtSz")),
+            # OKX publishes no spot notional floor. minSz is a base-asset
+            # quantity, so it must not be reused as min_notional.
         ),
         status=_inst_status(str(info.get("state") or "")),
     )
@@ -288,6 +304,7 @@ def normalize_swap_instrument(info: dict) -> Instrument | None:
             price_tick=tick,
             qty_step=lot,
             min_qty=min_sz,
+            max_qty=_opt_dec(info.get("maxLmtSz")),
         ),
         status=_inst_status(str(info.get("state") or "")),
         contract_size=_opt_dec(info.get("ctVal")),
@@ -501,6 +518,17 @@ def _scope_perm(permissions: list[str], read_only: bool) -> str:
     return "read_only"
 
 
+def _spot_td_mode(acct_lv: str) -> str:
+    """Trade mode for a spot order, given the account's ``acctLv``.
+
+    Spot mode and Futures mode trade spot as ``cash``; the margin account
+    levels reject ``cash`` and expect spot to route through cross margin.
+    An unknown level falls back to ``cash``, which covers both non-margin
+    levels.
+    """
+    return "cross" if acct_lv in _MARGIN_ACCT_LEVELS else "cash"
+
+
 class OkxConnector(ExchangeConnector):
     exchange = "OKX"
     capabilities = frozenset(
@@ -530,6 +558,9 @@ class OkxConnector(ExchangeConnector):
         self._bucket = bucket
         self._native_map: dict[tuple[MarketType, str], str] = {}
         self._universal_map: dict[str, tuple[MarketType, str]] = {}
+        # Keyed by api_key: this connector is a singleton shared by every
+        # account, and acctLv/posMode differ per account.
+        self._config_cache: dict[str, tuple[float, dict]] = {}
 
     async def _call(self, func, *args, **kwargs):
         if self._bucket is not None:
@@ -637,14 +668,17 @@ class OkxConnector(ExchangeConnector):
         self._universal_map = universal_map
         return instruments
 
+    async def _fetch_tickers(self, inst_type: str) -> list[dict]:
+        return await self._api(
+            "GET", "/api/v5/market/tickers", params={"instType": inst_type}
+        ) or []
+
     async def fetch_reference_prices(self) -> dict[str, Decimal]:
         if not self._native_map:
             await self.fetch_instruments()
         prices: dict[str, Decimal] = {}
         for inst_type in ("SPOT", "SWAP"):
-            rows = await self._api(
-                "GET", "/api/v5/public/tickers", params={"instType": inst_type}
-            )
+            rows = await self._fetch_tickers(inst_type)
             for raw in rows or []:
                 native = raw.get("instId") or ""
                 last = raw.get("last")
@@ -688,6 +722,30 @@ class OkxConnector(ExchangeConnector):
             can_withdraw=can_withdraw if perms else None,
             permissions={"perm": sorted(perms)} if perms else info,
         )
+
+    async def _account_config(self, credential: Credential) -> dict:
+        rows = await self._api("GET", "/api/v5/account/config", credential=credential)
+        return (rows or [{}])[0]
+
+    async def _cached_config(self, credential: Credential) -> dict:
+        """Account-wide trading settings, cached briefly per API key.
+
+        Returns an empty mapping when the venue call fails, which callers must
+        read as "unknown" rather than as a specific mode — guessing here is
+        what silently mis-shapes orders.
+        """
+        key = credential.get("api_key") or ""
+        now = time.monotonic()
+        cached = self._config_cache.get(key)
+        if cached is not None and now - cached[0] < _CONFIG_TTL_SECONDS:
+            return cached[1]
+        try:
+            config = await self._account_config(credential)
+        except OkxAPIError as exc:
+            logger.warning("OKX account config unavailable: %s", exc)
+            return {}
+        self._config_cache[key] = (now, config)
+        return config
 
     # -- balances / positions ---------------------------------------------------
 
@@ -766,10 +824,29 @@ class OkxConnector(ExchangeConnector):
             return "fok"
         return "limit"
 
-    def _pos_side(self, request: OrderRequest, market_type: MarketType) -> str | None:
+    def _pos_side(
+        self, request: OrderRequest, market_type: MarketType, pos_mode: str
+    ) -> str | None:
+        """Map the requested position side onto OKX's ``posSide``.
+
+        Position mode is account-wide and only settable from the OKX UI, so a
+        mismatch can only be reported, not corrected. An empty ``pos_mode``
+        means the account config was unreachable — trust the request rather
+        than assert a mode we never observed.
+        """
         if market_type == MarketType.SPOT:
             return None
         side = request.position_side or PositionSide.BOTH
+        if pos_mode == "long_short_mode" and side == PositionSide.BOTH:
+            raise ValueError(
+                "This OKX account is in hedge mode — the order must target the "
+                "LONG or SHORT position"
+            )
+        if pos_mode == "net_mode" and side != PositionSide.BOTH:
+            raise ValueError(
+                "This OKX account is in one-way mode — it holds a single net "
+                "position, so LONG/SHORT cannot be targeted"
+            )
         if side == PositionSide.LONG:
             return "long"
         if side == PositionSide.SHORT:
@@ -779,23 +856,33 @@ class OkxConnector(ExchangeConnector):
     async def place_order(self, credential: Credential, request: OrderRequest) -> Order:
         await self._ensure_maps()
         market_type, native = self._resolve(request.universal_symbol)
+        config = await self._cached_config(credential)
+        is_spot = market_type == MarketType.SPOT
         body: dict[str, Any] = {
             "instId": native,
-            "tdMode": "cash" if market_type == MarketType.SPOT else "cross",
+            "tdMode": (
+                _spot_td_mode(str(config.get("acctLv") or "")) if is_spot else "cross"
+            ),
             "side": "buy" if request.side == OrderSide.BUY else "sell",
             "ordType": self._ord_type(request),
             "sz": str(request.qty),
         }
+        if is_spot and request.type == OrderType.MARKET:
+            # Our sz is always a base-asset quantity, but OKX reads an
+            # unqualified market *buy* size as a quote amount.
+            body["tgtCcy"] = "base_ccy"
         if request.type == OrderType.LIMIT:
             if request.price is None:
                 raise ValueError("Limit orders require a price")
             body["px"] = str(request.price)
         if request.client_order_id:
             body["clOrdId"] = request.client_order_id
-        pos_side = self._pos_side(request, market_type)
+        pos_side = self._pos_side(
+            request, market_type, str(config.get("posMode") or "")
+        )
         if pos_side:
             body["posSide"] = pos_side
-        if request.reduce_only and market_type != MarketType.SPOT:
+        if request.reduce_only and not is_spot:
             body["reduceOnly"] = True
         raw = await self._api(
             "POST", "/api/v5/trade/order", credential=credential, body=body
@@ -1237,10 +1324,6 @@ class OkxConnector(ExchangeConnector):
         return out
 
     # -- transfers / withdrawals / deposits -----------------------------------
-
-    async def _account_config(self, credential: Credential) -> dict:
-        rows = await self._api("GET", "/api/v5/account/config", credential=credential)
-        return (rows or [{}])[0]
 
     async def _resolve_sub_acct(
         self, credential: Credential, native_uid: str | None

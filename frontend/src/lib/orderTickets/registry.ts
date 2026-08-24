@@ -133,7 +133,7 @@ const SPEC = {
 		reduceOnly: false,
 		positionModes: [],
 		contracts: false,
-		hint: 'Post-only routes as ordType=post_only. Spot uses tdMode=cash.'
+		hint: 'Post-only routes as ordType=post_only. Market orders are sized in the base asset.'
 	},
 	okxPerp: {
 		orderTypes: ['LIMIT', 'MARKET'],
