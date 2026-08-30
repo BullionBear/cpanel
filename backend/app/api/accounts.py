@@ -107,7 +107,7 @@ class ExchangeCapabilities(BaseModel):
     # e.g. Binance): the operator brings keys/subaccounts made on the venue.
     registration_only: bool
     # The venue's wallet structure, in display order (e.g. Binance
-    # SPOT/FUNDING/FUTURES, Bybit UNIFIED/FUNDING).
+    # SPOT/FUNDING/UMARGIN/CMARGIN, Bybit UNIFIED/FUNDING).
     wallets: list[str] = []
 
 

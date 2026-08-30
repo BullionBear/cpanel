@@ -170,8 +170,13 @@ def test_normalize_funding_and_futures_balances():
         [{"marginCoin": "USDT", "available": "100", "locked": "20"}],
         "USDT-FUTURES",
     )
-    assert futures[0].wallet == WalletType.FUTURES
+    assert futures[0].wallet == WalletType.UMARGIN
     assert futures[0].free == Decimal("100")
+    coin = normalize_futures_balances(
+        [{"marginCoin": "BTC", "available": "1", "locked": "0"}],
+        "COIN-FUTURES",
+    )
+    assert coin[0].wallet == WalletType.CMARGIN
 
 
 def test_normalize_positions():
@@ -348,7 +353,7 @@ async def test_fetch_balances(connector, monkeypatch):
     assert {(b.wallet, b.asset) for b in bals} == {
         (WalletType.SPOT, "USDT"),
         (WalletType.FUNDING, "USDT"),
-        (WalletType.FUTURES, "USDT"),
+        (WalletType.UMARGIN, "USDT"),
     }
 
 
@@ -447,6 +452,30 @@ async def test_transfer_wallet_legs(connector, monkeypatch):
 async def test_transfer_rejects_unknown_wallet(connector):
     with pytest.raises(ValueError, match="wallets"):
         connector._wallet_leg(WalletType.UNIFIED)
+
+
+def test_wallet_leg_follows_wallet_not_asset(connector):
+    assert connector._wallet_leg(WalletType.UMARGIN) == "usdt_futures"
+    assert connector._wallet_leg(WalletType.CMARGIN) == "coin_futures"
+
+
+async def test_transfer_umargin_to_cmargin(connector, monkeypatch):
+    calls = []
+
+    async def api(method, path, **kwargs):
+        calls.append(kwargs.get("body"))
+        return {"transferId": "tr2"}
+
+    monkeypatch.setattr(connector, "_api", api)
+    await connector.transfer(
+        {"api_key": "k", "secret": "s", "passphrase": "p"},
+        "BTC",
+        Decimal("1"),
+        from_wallet=WalletType.UMARGIN,
+        to_wallet=WalletType.CMARGIN,
+    )
+    assert calls[0]["fromType"] == "usdt_futures"
+    assert calls[0]["toType"] == "coin_futures"
 
 
 def test_history_stream_keys(connector):

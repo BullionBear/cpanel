@@ -210,13 +210,15 @@ def test_normalize_spot_balances_drops_zero():
 
 
 def test_normalize_futures_balance_locks_margin():
-    balances = normalize_futures_balance(FUTURES_ACCOUNT)
+    balances = normalize_futures_balance(FUTURES_ACCOUNT, WalletType.UMARGIN)
     assert len(balances) == 1
-    assert balances[0].wallet == WalletType.FUTURES
+    assert balances[0].wallet == WalletType.UMARGIN
     assert balances[0].free == Decimal("800")
     assert balances[0].locked == Decimal("200")
-    assert normalize_futures_balance({}) == []
-    assert normalize_futures_balance({"currency": "BTC", "total": "0", "available": "0"}) == []
+    assert normalize_futures_balance({}, WalletType.UMARGIN) == []
+    assert normalize_futures_balance(
+        {"currency": "BTC", "total": "0", "available": "0"}, WalletType.CMARGIN
+    ) == []
 
 
 def test_normalize_positions_signed_size():
@@ -242,7 +244,11 @@ async def test_fetch_balances(connector, monkeypatch):
         return SPOT_ACCOUNTS
 
     async def futures_account(cred, settle):
-        return FUTURES_ACCOUNT if settle == "usdt" else {}
+        if settle == "usdt":
+            return FUTURES_ACCOUNT
+        if settle == "btc":
+            return {"currency": "BTC", "total": "2", "available": "1.5"}
+        return {}
 
     monkeypatch.setattr(connector, "_fetch_spot_balances", spot_balances)
     monkeypatch.setattr(connector, "_fetch_futures_account", futures_account)
@@ -250,7 +256,8 @@ async def test_fetch_balances(connector, monkeypatch):
     assert {(b.wallet, b.asset) for b in balances} == {
         (WalletType.SPOT, "USDT"),
         (WalletType.SPOT, "BTC"),
-        (WalletType.FUTURES, "USDT"),
+        (WalletType.UMARGIN, "USDT"),
+        (WalletType.CMARGIN, "BTC"),
     }
 
 
@@ -638,17 +645,44 @@ async def test_internal_transfer_sets_settle(monkeypatch):
     monkeypatch.setattr(c, "_call", call)
     result = await c.transfer(
         {"api_key": "k", "secret": "s"}, "USDT", Decimal("100"),
-        from_wallet=WalletType.SPOT, to_wallet=WalletType.FUTURES,
+        from_wallet=WalletType.SPOT, to_wallet=WalletType.UMARGIN,
     )
     name, args = calls[0]
     assert name == "transfer"
     body = args[0]
     assert body.to_dict()["_from"] == "spot"
     assert body.to == "futures"
-    assert body.settle == "usdt"                 # futures account of the asset
+    assert body.settle == "usdt"                 # UMARGIN → usdt settle
     assert body.amount == "100"
     assert result.status == "confirmed"
     assert result.native_transfer_id == "59636381286"
+
+
+async def test_internal_transfer_cmargin_sets_btc_settle(monkeypatch):
+    c = GateIOConnector()
+    calls = []
+
+    async def call(func, *args, **kwargs):
+        calls.append(args[0])
+        return {"tx_id": 1}
+
+    monkeypatch.setattr(c, "_call", call)
+    await c.transfer(
+        {"api_key": "k", "secret": "s"}, "BTC", Decimal("0.5"),
+        from_wallet=WalletType.SPOT, to_wallet=WalletType.CMARGIN,
+    )
+    body = calls[0]
+    assert body.to == "futures"
+    assert body.settle == "btc"
+
+
+async def test_umargin_cmargin_transfer_rejected():
+    c = GateIOConnector()
+    with pytest.raises(ValueError, match="UMARGIN and CMARGIN"):
+        await c.transfer(
+            {"api_key": "k", "secret": "s"}, "BTC", Decimal("0.1"),
+            from_wallet=WalletType.UMARGIN, to_wallet=WalletType.CMARGIN,
+        )
 
 
 async def test_internal_transfer_same_wallet_rejected():
@@ -661,7 +695,7 @@ async def test_internal_transfer_same_wallet_rejected():
 
 
 async def test_transfer_rejects_foreign_wallet_type():
-    # Gate has no UNIFIED wallet — only SPOT and FUTURES exist.
+    # Gate has no UNIFIED wallet — only SPOT, UMARGIN, and CMARGIN exist.
     c = GateIOConnector()
     with pytest.raises(ValueError):
         await c.transfer(
@@ -697,7 +731,7 @@ async def test_main_side_must_be_spot():
     with pytest.raises(ValueError):
         await c.transfer(
             {"api_key": "k", "secret": "s"}, "USDT", Decimal("5"),
-            from_wallet=WalletType.FUTURES, to_subaccount="10001",
+            from_wallet=WalletType.UMARGIN, to_subaccount="10001",
         )
 
 

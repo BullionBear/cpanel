@@ -16,6 +16,7 @@
 		type HistoryPoint,
 		type PnlPoint
 	} from '$lib/portfolio';
+	import { walletLabel } from '$lib/wallets';
 
 	let overview: OverviewItem[] = [];
 	let loading = true;
@@ -367,7 +368,7 @@
 								<tbody>
 									{#each holdings.balances as b}
 										<tr>
-											<td>{b.wallet}</td>
+											<td>{walletLabel(b.wallet)}</td>
 											<td class="mono strong">{b.asset}</td>
 											<td class="mono right">{num(b.free)}</td>
 											<td class="mono right">{num(b.locked)}</td>

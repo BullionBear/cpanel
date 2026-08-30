@@ -13,11 +13,12 @@ Uses the official ``gate-api`` SDK (synchronous, run in a worker thread).
 
 Design decisions and venue quirks:
 
-- **Wallets**: ``SPOT`` and ``FUTURES``. Gate has no separate funding
-  wallet — deposits credit the spot account and withdrawals draw from it.
-  Both perpetual accounts (usdt- and btc-settled) report under ``FUTURES``;
-  a transfer's futures leg infers its settle currency from the asset
-  (USDT → the usdt account, BTC → the btc account).
+- **Wallets**: ``SPOT``, ``UMARGIN`` (usdt-settled perps), ``CMARGIN``
+  (btc-settled inverse). Gate has no separate funding wallet — deposits
+  credit the spot account and withdrawals draw from it. A transfer's
+  futures settle comes from the futures-side wallet (UMARGIN → usdt,
+  CMARGIN → btc), not from the asset. UMARGIN ↔ CMARGIN is not a single
+  venue call and is rejected.
 - **Client order ids** ride the ``text`` field and must be prefixed
   ``t-`` on the wire; the prefix is stripped when normalizing back.
 - **Spot market buys** are quote-denominated on Gate (no base-qty option).
@@ -118,11 +119,19 @@ _TIF = {
     TimeInForce.POST_ONLY: "poc",
 }
 
-# Normalized wallet -> Gate transfer account name.
+# Normalized wallet -> Gate transfer account name. Both futures wallets use
+# the ``futures`` account type; settle (usdt vs btc) is chosen separately.
 _WALLET_ACCOUNT = {
     WalletType.SPOT: "spot",
-    WalletType.FUTURES: "futures",
+    WalletType.UMARGIN: "futures",
+    WalletType.CMARGIN: "futures",
 }
+
+_WALLET_SETTLE = {
+    WalletType.UMARGIN: "usdt",
+    WalletType.CMARGIN: "btc",
+}
+_SETTLE_WALLET = {settle: wallet for wallet, settle in _WALLET_SETTLE.items()}
 
 # Panel scope tokens -> Gate API key permission names.
 _PERMISSION_SCOPES = {
@@ -349,8 +358,8 @@ def normalize_spot_balances(rows: list[dict]) -> list[Balance]:
     return balances
 
 
-def normalize_futures_balance(account: dict) -> list[Balance]:
-    """One /futures/{settle}/accounts object → a FUTURES balance.
+def normalize_futures_balance(account: dict, wallet: WalletType) -> list[Balance]:
+    """One /futures/{settle}/accounts object → an UMARGIN or CMARGIN balance.
 
     ``total`` is the account balance; ``available`` is what is free of
     position/order margin, so the difference counts as locked.
@@ -366,7 +375,7 @@ def normalize_futures_balance(account: dict) -> list[Balance]:
         locked = Decimal("0")
     return [
         Balance(
-            wallet=WalletType.FUTURES,
+            wallet=wallet,
             asset=account.get("currency") or "",
             free=total - locked,
             locked=locked,
@@ -641,8 +650,8 @@ class GateIOConnector(ExchangeConnector):
         }
     )
     # Gate's classic account: the spot account doubles as the funding wallet
-    # (deposits/withdrawals), FUTURES covers the perpetual accounts.
-    wallets = (WalletType.SPOT, WalletType.FUTURES)
+    # (deposits/withdrawals); the two perpetual accounts are separate wallets.
+    wallets = (WalletType.SPOT, WalletType.UMARGIN, WalletType.CMARGIN)
 
     def __init__(self, bucket: TokenBucket | None = None):
         self._bucket = bucket
@@ -838,9 +847,11 @@ class GateIOConnector(ExchangeConnector):
     async def fetch_balances(self, credential: Credential) -> list[Balance]:
         balances = normalize_spot_balances(await self._fetch_spot_balances(credential))
         for settle, _ in _SETTLES:
+            wallet = _SETTLE_WALLET[settle]
             balances.extend(
                 normalize_futures_balance(
-                    await self._fetch_futures_account(credential, settle)
+                    await self._fetch_futures_account(credential, settle),
+                    wallet,
                 )
             )
         return balances
@@ -1364,18 +1375,25 @@ class GateIOConnector(ExchangeConnector):
     # -- transfers ----------------------------------------------------------------
     #
     # Same-account wallet moves use /wallet/transfers (spot ↔ futures, with
-    # the futures account picked by the settle currency = the asset). Main↔sub
-    # moves use /wallet/sub_account_transfers, where the main side is always
-    # the spot account (venue rule) and both endpoints answer synchronously
-    # with a tx id. Sub↔sub uses the dedicated endpoint. All of these need the
-    # master key — Gate refuses them for sub-account keys.
+    # settle taken from the futures-side wallet). Main↔sub moves use
+    # /wallet/sub_account_transfers, where the main side is always the spot
+    # account (venue rule) and both endpoints answer synchronously with a tx
+    # id. Sub↔sub uses the dedicated endpoint. All of these need the master
+    # key — Gate refuses them for sub-account keys.
 
     @staticmethod
     def _wallet_leg(wallet: WalletType | None) -> str:
         leg = _WALLET_ACCOUNT.get(wallet or WalletType.SPOT)
         if leg is None:
-            raise ValueError("Gate.io wallets are SPOT and FUTURES")
+            raise ValueError("Gate.io wallets are SPOT, UMARGIN, and CMARGIN")
         return leg
+
+    @staticmethod
+    def _reject_um_cm(from_wallet: WalletType | None, to_wallet: WalletType | None) -> None:
+        if {from_wallet, to_wallet} == {WalletType.UMARGIN, WalletType.CMARGIN}:
+            raise ValueError(
+                "Gate.io cannot transfer between UMARGIN and CMARGIN in one call"
+            )
 
     async def transfer(
         self,
@@ -1388,6 +1406,7 @@ class GateIOConnector(ExchangeConnector):
         to_subaccount: str | None = None,
     ) -> TransferResult:
         wallet = self._wallet(credential)
+        self._reject_um_cm(from_wallet, to_wallet)
         if from_subaccount and to_subaccount:
             body = gate_api.SubAccountToSubAccount(
                 currency=asset,
@@ -1423,14 +1442,18 @@ class GateIOConnector(ExchangeConnector):
             dst = self._wallet_leg(to_wallet)
             if src == dst:
                 raise ValueError(
-                    "Gate.io internal transfers move between SPOT and FUTURES wallets"
+                    "Gate.io internal transfers move between SPOT and a futures wallet"
                 )
             body = gate_api.Transfer(
                 currency=asset, _from=src, to=dst, amount=str(amount)
             )
             if "futures" in (src, dst):
-                # The settle currency names which futures account is touched.
-                body.settle = asset.lower()
+                futures_wallet = to_wallet if dst == "futures" else from_wallet
+                if futures_wallet not in _WALLET_SETTLE:
+                    raise ValueError(
+                        "Gate.io futures transfer needs an UMARGIN or CMARGIN wallet"
+                    )
+                body.settle = _WALLET_SETTLE[futures_wallet]
             result = dump_gate_model(await self._call(wallet.transfer, body))
         return TransferResult(
             native_transfer_id=str(result.get("tx_id", "")), status="confirmed"

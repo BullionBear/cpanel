@@ -162,7 +162,7 @@ async def test_internal_transfers_endpoint(client):
             amount=Decimal("91.84137568"),
             status=InternalTransferStatus.CONFIRMED,
             scope=InternalTransferScope.WALLET,
-            from_wallet=WalletType.FUTURES,
+            from_wallet=WalletType.UMARGIN,
             to_wallet=WalletType.SPOT,
         ),
         InternalTransfer(

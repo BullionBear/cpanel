@@ -367,7 +367,7 @@ async def test_operator_fail_marks_running_step(db, fake, main_account, cross):
 
 
 async def test_intra_rejects_wallet_the_exchange_lacks(db, fake, main_account, sub_account):
-    # FakeConnector's wallet structure is SPOT/FUNDING/FUTURES — no UNIFIED.
+    # FakeConnector's wallet structure is SPOT/FUNDING/UMARGIN/CMARGIN — no UNIFIED.
     with pytest.raises(TransferValidationError, match="no UNIFIED wallet"):
         await create_intra_transfer(
             db, fake, main_account, sub_account, "USDT", Decimal("10"),

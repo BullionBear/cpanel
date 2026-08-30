@@ -18,6 +18,7 @@
 		type InternalTransferHistoryRow,
 		type StreamHealth
 	} from '$lib/history';
+	import { walletLabel } from '$lib/wallets';
 	import { fetchOverview, type OverviewItem } from '$lib/portfolio';
 
 	type Tab =
@@ -199,8 +200,8 @@
 
 	/** Where the value went: wallet to wallet, or this account to another one. */
 	function transferRoute(t: InternalTransferHistoryRow): string {
-		const from = t.from_wallet ?? '—';
-		const to = t.to_wallet ?? '—';
+		const from = walletLabel(t.from_wallet);
+		const to = walletLabel(t.to_wallet);
 		if (t.scope !== 'ACCOUNT') return `${from} → ${to}`;
 		const other = t.counterparty ?? 'other account';
 		return t.direction === 'IN' ? `${other} → ${to}` : `${from} → ${other}`;

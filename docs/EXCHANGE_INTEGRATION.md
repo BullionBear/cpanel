@@ -54,9 +54,11 @@ explicitly: each connector declares `wallets: tuple[WalletType, ...]` — the
 wallets that actually exist on that venue, in display order.
 
 - What wallets does the venue have, and which subset does the panel need?
-  (Binance: `SPOT`, `FUNDING`, `FUTURES` out of its six-plus wallets. Bybit
-  UTA: just `UNIFIED` and `FUNDING`.) Extend `WalletType` only if the venue
-  truly has a wallet kind no existing value describes.
+  (Binance/Bitget: `SPOT`, `FUNDING`, `UMARGIN`, `CMARGIN`. Gate.io:
+  `SPOT`, `UMARGIN`, `CMARGIN`. Bybit UTA: just `UNIFIED` and `FUNDING`.)
+  Extend `WalletType` only if the venue truly has a wallet kind no existing
+  value describes. USD-M and coin-M futures are separate wallets whenever
+  the venue keeps them apart.
 - Which endpoint reports balances for each wallet, and what do "free" vs
   "locked" mean in each response?
 - Which wallet do on-chain withdrawals draw from? (Bybit: FUND only.)

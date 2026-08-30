@@ -271,8 +271,8 @@ def test_normalize_spot_balances_drops_zero():
 
 
 def test_normalize_futures_balances_splits_available_and_margin():
-    balances = normalize_futures_balances(UM_BALANCES)
-    assert balances[0].wallet == WalletType.FUTURES
+    balances = normalize_futures_balances(UM_BALANCES, WalletType.UMARGIN)
+    assert balances[0].wallet == WalletType.UMARGIN
     assert balances[0].free == Decimal("4000")
     assert balances[0].locked == Decimal("1000")
     assert balances[0].total == Decimal("5000")
@@ -333,10 +333,12 @@ async def test_fetch_balances_merges_wallets(connector, monkeypatch):
     balances = await connector.fetch_balances({"api_key": "k", "secret": "s"})
     spot = [b for b in balances if b.wallet == WalletType.SPOT]
     funding = [b for b in balances if b.wallet == WalletType.FUNDING]
-    futures = [b for b in balances if b.wallet == WalletType.FUTURES]
+    um = [b for b in balances if b.wallet == WalletType.UMARGIN]
+    cm = [b for b in balances if b.wallet == WalletType.CMARGIN]
     assert {b.asset for b in spot} == {"BTC", "USDT"}
     assert {b.asset for b in funding} == {"USDT"}
-    assert {b.asset for b in futures} == {"USDT", "BTC"}
+    assert {b.asset for b in um} == {"USDT"}
+    assert {b.asset for b in cm} == {"BTC"}
 
 
 async def test_fetch_balances_skips_failed_futures_wallet(connector, monkeypatch):
@@ -703,7 +705,7 @@ async def test_transfer_wallet_to_wallet_builds_type(monkeypatch):
     monkeypatch.setattr(c, "_submit_universal_transfer", submit)
     result = await c.transfer(
         {}, "USDT", Decimal("100"),
-        from_wallet=WalletType.SPOT, to_wallet=WalletType.FUTURES,
+        from_wallet=WalletType.SPOT, to_wallet=WalletType.UMARGIN,
     )
     assert calls == [("MAIN_UMFUTURE", "USDT", 100.0)]
     assert result.native_transfer_id == "13526853623"
@@ -724,6 +726,39 @@ async def test_transfer_main_to_sub_uses_emails(monkeypatch):
     )
     assert calls == [("USDT", 5.0, "SPOT", "SPOT", None, "sub@x.com")]
     assert result.status == "confirmed"
+
+
+async def test_transfer_wallet_to_cmargin_builds_type(monkeypatch):
+    c = BinanceConnector()
+    calls = []
+
+    async def submit(credential, transfer_type, asset, amount):
+        calls.append((transfer_type, asset, amount))
+        return {"tranId": 7}
+
+    monkeypatch.setattr(c, "_submit_universal_transfer", submit)
+    await c.transfer(
+        {}, "BTC", Decimal("0.1"),
+        from_wallet=WalletType.SPOT, to_wallet=WalletType.CMARGIN,
+    )
+    assert calls == [("MAIN_CMFUTURE", "BTC", 0.1)]
+
+
+async def test_transfer_main_to_sub_cmargin(monkeypatch):
+    c = BinanceConnector()
+    calls = []
+
+    async def submit(credential, asset, amount, from_wallet, to_wallet, from_email, to_email):
+        calls.append((asset, amount, from_wallet, to_wallet, from_email, to_email))
+        return {"tranId": 8}
+
+    monkeypatch.setattr(c, "_submit_sub_transfer", submit)
+    await c.transfer(
+        {}, "BTC", Decimal("1"),
+        from_wallet=WalletType.SPOT, to_wallet=WalletType.CMARGIN,
+        to_subaccount="sub@x.com",
+    )
+    assert calls == [("BTC", 1.0, "SPOT", "COIN_FUTURE", None, "sub@x.com")]
 
 
 async def test_fetch_withdrawal_finds_by_id(monkeypatch):
@@ -765,6 +800,15 @@ def test_internal_transfer_streams_depend_on_account_type():
     assert set(main).issubset(set(sub))
     # Both directions are separate streams: subUserHistory defaults to "out".
     assert {"sub_in", "sub_out"}.issubset(set(sub))
+    assert len(main) == 12
+    assert {
+        "MAIN_CMFUTURE",
+        "CMFUTURE_MAIN",
+        "FUNDING_UMFUTURE",
+        "UMFUTURE_FUNDING",
+        "UMFUTURE_CMFUTURE",
+        "CMFUTURE_UMFUTURE",
+    }.issubset(set(main))
 
 
 def test_normalize_wallet_transfer_reads_pair_from_queried_type():
@@ -781,12 +825,21 @@ def test_normalize_wallet_transfer_reads_pair_from_queried_type():
     )
     assert transfer.native_id == "11945860693"
     assert transfer.scope is InternalTransferScope.WALLET
-    assert transfer.from_wallet is WalletType.FUTURES
+    assert transfer.from_wallet is WalletType.UMARGIN
     assert transfer.to_wallet is WalletType.SPOT
     assert transfer.status is InternalTransferStatus.CONFIRMED
     assert transfer.amount == Decimal("91.84137568")
     # WALLET scope needs no direction — the wallet pair already says it.
     assert transfer.direction is None
+
+
+def test_normalize_wallet_transfer_cmargin():
+    transfer = normalize_wallet_transfer(
+        {"tranId": 2, "asset": "BTC", "amount": "0.1", "status": "CONFIRMED"},
+        "CMFUTURE_MAIN",
+    )
+    assert transfer.from_wallet is WalletType.CMARGIN
+    assert transfer.to_wallet is WalletType.SPOT
 
 
 def test_normalize_wallet_transfer_tolerates_unmodelled_legs():
@@ -818,7 +871,7 @@ def test_normalize_sub_transfer_direction_and_counterparty():
     assert out.scope is InternalTransferScope.ACCOUNT
     assert out.direction is InternalTransferDirection.OUT
     assert out.counterparty == "master"
-    assert out.from_wallet is WalletType.FUTURES
+    assert out.from_wallet is WalletType.UMARGIN
     # SUCCESS is the subaccount endpoint's word for CONFIRMED.
     assert out.status is InternalTransferStatus.CONFIRMED
 

@@ -13,9 +13,9 @@ official PyPI SDK — this module signs raw HTTP (httpx) itself.
 
 Design decisions and venue quirks:
 
-- **Wallets**: ``SPOT``, ``FUNDING`` (transfer leg ``p2p``), ``FUTURES``
-  (``usdt_futures`` / ``coin_futures``). Withdrawals draw from the wallet
-  that holds the funds (typically funding or spot).
+- **Wallets**: ``SPOT``, ``FUNDING`` (transfer leg ``p2p``), ``UMARGIN``
+  (``usdt_futures``), ``CMARGIN`` (``coin_futures``). Withdrawals draw from
+  the wallet that holds the funds (typically funding or spot).
 - **Credentials** always include a passphrase (``ACCESS-PASSPHRASE``).
 - **History** is account-wide per surface: streams ``spot``,
   ``mix:USDT-FUTURES``, ``mix:COIN-FUTURES``. Pagination uses ``idLessThan``
@@ -107,7 +107,8 @@ _TIF = {
 _WALLET_ACCOUNT = {
     WalletType.SPOT: "spot",
     WalletType.FUNDING: "p2p",
-    WalletType.FUTURES: "usdt_futures",
+    WalletType.UMARGIN: "usdt_futures",
+    WalletType.CMARGIN: "coin_futures",
 }
 
 _PERMISSION_SCOPES = {
@@ -335,7 +336,8 @@ def normalize_funding_balances(rows: list[dict]) -> list[Balance]:
 
 
 def normalize_futures_balances(rows: list[dict], product_type: str = "") -> list[Balance]:
-    """Mix account rows → FUTURES wallet balances (zeros dropped)."""
+    """Mix account rows → UMARGIN or CMARGIN balances (zeros dropped)."""
+    wallet = WalletType.CMARGIN if product_type == "COIN-FUTURES" else WalletType.UMARGIN
     balances: list[Balance] = []
     for row in rows:
         free = _dec(row.get("available") or row.get("crossedMaxAvailable") or 0)
@@ -352,7 +354,7 @@ def normalize_futures_balances(rows: list[dict], product_type: str = "") -> list
             asset = "USDT" if product_type == "USDT-FUTURES" else ""
         if not asset:
             continue
-        balances.append(Balance(wallet=WalletType.FUTURES, asset=asset, free=free, locked=locked))
+        balances.append(Balance(wallet=wallet, asset=asset, free=free, locked=locked))
     return balances
 
 
@@ -585,7 +587,7 @@ class BitgetConnector(ExchangeConnector):
             Capability.FUNDING_HISTORY,
         }
     )
-    wallets = (WalletType.SPOT, WalletType.FUNDING, WalletType.FUTURES)
+    wallets = (WalletType.SPOT, WalletType.FUNDING, WalletType.UMARGIN, WalletType.CMARGIN)
 
     def __init__(self, bucket: TokenBucket | None = None):
         self._bucket = bucket
@@ -1338,13 +1340,11 @@ class BitgetConnector(ExchangeConnector):
 
     # -- transfers --------------------------------------------------------------
 
-    def _wallet_leg(self, wallet: WalletType | None, asset: str = "USDT") -> str:
+    def _wallet_leg(self, wallet: WalletType | None) -> str:
         wallet = wallet or WalletType.SPOT
-        if wallet == WalletType.FUTURES:
-            return "coin_futures" if asset.upper() not in ("USDT", "USDC") else "usdt_futures"
         leg = _WALLET_ACCOUNT.get(wallet)
         if leg is None:
-            raise ValueError("Bitget wallets are SPOT, FUNDING, and FUTURES")
+            raise ValueError("Bitget wallets are SPOT, FUNDING, UMARGIN, and CMARGIN")
         return leg
 
     async def transfer(
@@ -1360,8 +1360,8 @@ class BitgetConnector(ExchangeConnector):
         asset = asset.upper()
         if from_subaccount or to_subaccount:
             body = {
-                "fromType": self._wallet_leg(from_wallet, asset),
-                "toType": self._wallet_leg(to_wallet, asset),
+                "fromType": self._wallet_leg(from_wallet),
+                "toType": self._wallet_leg(to_wallet),
                 "amount": str(amount),
                 "coin": asset,
                 "fromUserId": from_subaccount or "",
@@ -1379,8 +1379,8 @@ class BitgetConnector(ExchangeConnector):
                 body=body,
             )
         else:
-            src = self._wallet_leg(from_wallet, asset)
-            dst = self._wallet_leg(to_wallet, asset)
+            src = self._wallet_leg(from_wallet)
+            dst = self._wallet_leg(to_wallet)
             if src == dst:
                 raise ValueError("Bitget transfer requires distinct wallet legs")
             data = await self._api(

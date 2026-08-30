@@ -325,7 +325,7 @@ def _wallet_move(native_id, amount, status=InternalTransferStatus.CONFIRMED):
         amount=Decimal(amount),
         status=status,
         scope=InternalTransferScope.WALLET,
-        from_wallet=WalletType.FUTURES,
+        from_wallet=WalletType.UMARGIN,
         to_wallet=WalletType.SPOT,
         created_at=datetime(2026, 7, 30, 13, 45, tzinfo=timezone.utc),
     )
@@ -385,7 +385,7 @@ async def test_sync_internal_transfers_from_venue(db, connector):
     rows = (await db.execute(select(InternalTransferHistory))).scalars().all()
     assert {r.scope for r in rows} == {"WALLET", "ACCOUNT"}
     wallet_row = next(r for r in rows if r.scope == "WALLET")
-    assert wallet_row.from_wallet == "FUTURES"
+    assert wallet_row.from_wallet == "UMARGIN"
     assert wallet_row.to_wallet == "SPOT"
     assert wallet_row.direction is None
     account_row = next(r for r in rows if r.scope == "ACCOUNT")

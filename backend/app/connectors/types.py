@@ -58,10 +58,12 @@ class OrderStatus(StrEnum):
 class WalletType(StrEnum):
     """Venue wallet vocabulary. Wallet structure differs per exchange, so each
     connector declares which of these it actually has (``wallets`` attribute):
-    Binance uses SPOT/FUNDING/FUTURES, Bybit's UTA has only UNIFIED/FUNDING."""
+    Binance/Bitget use SPOT/FUNDING/UMARGIN/CMARGIN; Bybit's UTA has only
+    UNIFIED/FUNDING."""
     SPOT = "SPOT"
     FUNDING = "FUNDING"
-    FUTURES = "FUTURES"
+    UMARGIN = "UMARGIN"    # USD-margined futures (USDT/USDC-M / linear)
+    CMARGIN = "CMARGIN"    # coin-margined / inverse futures
     UNIFIED = "UNIFIED"
 
 

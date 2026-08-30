@@ -28,6 +28,7 @@
 		type TransferRow,
 		type WithdrawPreview
 	} from '$lib/transfers';
+	import { walletLabel } from '$lib/wallets';
 
 	type Mode = 'transfer' | 'withdraw' | 'deposit';
 
@@ -82,7 +83,7 @@
 	let dLoading = false;
 	let dLoaded = false;
 
-	// Wallet structure differs per exchange (Binance: SPOT/FUNDING/FUTURES,
+	// Wallet structure differs per exchange (Binance: SPOT/FUNDING/UMARGIN/CMARGIN,
 	// Bybit: UNIFIED/FUNDING), served by the capabilities endpoint.
 	let walletsByExchange: Record<string, string[]> = {};
 	let exchangeCaps: Record<string, ExchangeCapabilities> = {};
@@ -622,7 +623,7 @@
 					<select bind:value={fromWallet}>
 						<option value="">Default</option>
 						{#each intraWallets as wallet}
-							<option value={wallet}>{wallet}</option>
+							<option value={wallet}>{walletLabel(wallet)}</option>
 						{/each}
 					</select>
 				</label>
@@ -631,7 +632,7 @@
 					<select bind:value={toWallet}>
 						<option value="">Default</option>
 						{#each intraWallets as wallet}
-							<option value={wallet}>{wallet}</option>
+							<option value={wallet}>{walletLabel(wallet)}</option>
 						{/each}
 					</select>
 				</label>
@@ -958,7 +959,7 @@
 									title="Use {b.asset}"
 									on:click={() => useAsset(b.asset)}
 								>
-									<td>{b.wallet}</td>
+									<td>{walletLabel(b.wallet)}</td>
 									<td class="mono strong">{b.asset}</td>
 									<td class="mono right">{num(b.free)}</td>
 									<td class="mono right">{num(b.locked)}</td>
@@ -1007,14 +1008,14 @@
 							<td>{t.kind}</td>
 							<td>
 								{accountLabel(t.from_account_id)}
-								{#if t.from_wallet}<span class="muted">({t.from_wallet})</span>{/if}
+								{#if t.from_wallet}<span class="muted">({walletLabel(t.from_wallet)})</span>{/if}
 								<span class="muted">→</span>
 								{#if t.to_account_id !== null}
 									{accountLabel(t.to_account_id)}
 								{:else}
 									external <span class="mono muted">{shortAddr(t.address)}</span>
 								{/if}
-								{#if t.to_wallet}<span class="muted">({t.to_wallet})</span>{/if}
+								{#if t.to_wallet}<span class="muted">({walletLabel(t.to_wallet)})</span>{/if}
 								{#if t.network}<span class="muted">via {t.network}</span>{/if}
 							</td>
 							<td class="mono right">{num(t.amount)} {t.asset}</td>

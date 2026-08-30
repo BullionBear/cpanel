@@ -11,6 +11,10 @@ So one instrument refresh means three exchange-info calls. The futures
 surfaces also list delivery contracts; only perpetuals are kept for the
 first release (DELIVERY/OPTION come later).
 
+Wallets: ``SPOT``, ``FUNDING``, ``UMARGIN`` (``UMFUTURE`` / ``USDT_FUTURE``),
+``CMARGIN`` (``CMFUTURE`` / ``COIN_FUTURE``). Isolated margin, Earn, and
+trading-bot wallets stay out of scope.
+
 The official SDKs are synchronous, so calls run in a worker thread. All
 normalization works on plain API-shaped dicts (see sdk_util) to keep it
 testable with fixtures from the API docs.
@@ -239,8 +243,8 @@ def normalize_spot_balances(rows: list[dict]) -> list[Balance]:
     return balances
 
 
-def normalize_futures_balances(rows: list[dict]) -> list[Balance]:
-    """USD-M/COIN-M account-balance rows → normalized FUTURES balances.
+def normalize_futures_balances(rows: list[dict], wallet: WalletType) -> list[Balance]:
+    """USD-M/COIN-M account-balance rows → UMARGIN or CMARGIN balances.
 
     ``balance`` is the wallet total; ``availableBalance`` is what is free of
     margin, so the margin currently posted is the difference.
@@ -256,7 +260,7 @@ def normalize_futures_balances(rows: list[dict]) -> list[Balance]:
             locked = Decimal("0")
         balances.append(
             Balance(
-                wallet=WalletType.FUTURES,
+                wallet=wallet,
                 asset=row["asset"],
                 free=total - locked,
                 locked=locked,
@@ -401,15 +405,27 @@ def normalize_trade(raw: dict, universal_symbol: str) -> Trade:
 _UNIVERSAL_TRANSFER_LEG = {
     WalletType.SPOT: "MAIN",
     WalletType.FUNDING: "FUNDING",
-    WalletType.FUTURES: "UMFUTURE",
+    WalletType.UMARGIN: "UMFUTURE",
+    WalletType.CMARGIN: "CMFUTURE",
 }
 
 # Wallet type -> sub-account universal-transfer accountType (no FUNDING leg
 # on this endpoint).
 _SUB_TRANSFER_WALLET = {
     WalletType.SPOT: "SPOT",
-    WalletType.FUTURES: "USDT_FUTURE",
+    WalletType.UMARGIN: "USDT_FUTURE",
+    WalletType.CMARGIN: "COIN_FUTURE",
 }
+
+# /asset/transfer requires an explicit FROM_TO type — every directed pair
+# among the wallets the panel models is its own stream.
+_WALLET_TRANSFER_LEGS = ("MAIN", "FUNDING", "UMFUTURE", "CMFUTURE")
+_WALLET_TRANSFER_STREAMS = tuple(
+    f"{src}_{dst}"
+    for src in _WALLET_TRANSFER_LEGS
+    for dst in _WALLET_TRANSFER_LEGS
+    if src != dst
+)
 
 # Withdraw-history ``status`` int -> normalized lifecycle. 6 = Completed
 # means the venue sent it on-chain.
@@ -641,8 +657,9 @@ class BinanceConnector(ExchangeConnector):
         }
     )
     # Binance has more wallets (Margin, Earn, Trading Bots, …) but the panel
-    # supports the three that matter for moving and holding funds.
-    wallets = (WalletType.SPOT, WalletType.FUNDING, WalletType.FUTURES)
+    # supports the four that matter for moving and holding funds: spot,
+    # funding, and the two futures margin wallets.
+    wallets = (WalletType.SPOT, WalletType.FUNDING, WalletType.UMARGIN, WalletType.CMARGIN)
 
     def __init__(self, bucket: TokenBucket | None = None):
         self._bucket = bucket
@@ -808,8 +825,16 @@ class BinanceConnector(ExchangeConnector):
         await _extend(
             "funding", self._fetch_funding_balances(credential), normalize_funding_balances
         )
-        await _extend("um-futures", self._fetch_um_balances(credential), normalize_futures_balances)
-        await _extend("cm-futures", self._fetch_cm_balances(credential), normalize_futures_balances)
+        await _extend(
+            "um-futures",
+            self._fetch_um_balances(credential),
+            lambda rows: normalize_futures_balances(rows, WalletType.UMARGIN),
+        )
+        await _extend(
+            "cm-futures",
+            self._fetch_cm_balances(credential),
+            lambda rows: normalize_futures_balances(rows, WalletType.CMARGIN),
+        )
         if not balances and errors:
             raise errors[-1]
         return balances
@@ -1113,7 +1138,7 @@ class BinanceConnector(ExchangeConnector):
             dst = _SUB_TRANSFER_WALLET.get(to_wallet or WalletType.SPOT)
             if src is None or dst is None:
                 raise ValueError(
-                    "Binance main↔sub transfers support only SPOT and FUTURES wallets"
+                    "Binance main↔sub transfers support only SPOT, UMARGIN, and CMARGIN wallets"
                 )
             data = await self._submit_sub_transfer(
                 credential, asset, float(amount), src, dst,
@@ -1381,16 +1406,8 @@ class BinanceConnector(ExchangeConnector):
 
     # -- internal transfer history --------------------------------------------
 
-    # /asset/transfer requires an explicit FROM_TO ``type`` — there is no "all
-    # transfers" query — so each direction the panel models is its own stream.
-    # Legs outside the panel's wallet vocabulary (isolated margin, options,
-    # COIN-M) are deliberately not synced.
-    _WALLET_TRANSFER_STREAMS = (
-        "MAIN_UMFUTURE",
-        "UMFUTURE_MAIN",
-        "MAIN_FUNDING",
-        "FUNDING_MAIN",
-    )
+    # Isolated margin and options stay out of the wallet vocabulary.
+    _WALLET_TRANSFER_STREAMS = _WALLET_TRANSFER_STREAMS
 
     # subUserHistory is answerable only by a subaccount key, and defaults to
     # transfers *out* — both directions must be asked for separately.
