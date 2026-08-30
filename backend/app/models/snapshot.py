@@ -1,9 +1,10 @@
-"""Append-only asset snapshots: balances and positions.
+"""Append-only asset snapshots: batches, balances and positions.
 
 Snapshots are never updated or deleted — each capture appends a fresh set of
 rows. Every row from one capture pass of one account shares a ``batch_id`` and
 ``taken_at`` so a cross-account portfolio view compares like with like (see
-ARCHITECTURE.md "Asset Snapshots").
+ARCHITECTURE.md "Asset Snapshots"). ``snapshot_batch`` records the pass itself,
+so a pass that found nothing is still part of the history.
 
 Two questions are answered from the same history:
 - "what do we hold now" — the rows of the latest batch per account, and
@@ -16,13 +17,49 @@ unit (best effort — ``None`` when no reference price was available).
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.audit_log import BigIntPk
 from app.models.base import Base, PreciseDecimal
 
 Num = PreciseDecimal()
+
+
+class SnapshotBatch(Base):
+    """One row per capture pass, including passes that found nothing.
+
+    Balance and position rows only exist for what an account actually holds,
+    so an account that has been emptied writes no rows at all. Without a row
+    here the latest batch would still resolve to the last pass that *did* find
+    something, and the panel would serve a month-old holding as if current.
+    ``balance_rows`` / ``position_rows`` record what the pass wrote, so an
+    empty batch is distinguishable from one whose rows were never inserted.
+    """
+
+    __tablename__ = "snapshot_batch"
+    __table_args__ = (
+        Index("ix_snapshot_batch_account_taken", "account_id", "taken_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPk, primary_key=True, autoincrement=True)
+
+    batch_id: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("account.id"), nullable=False, index=True
+    )
+    exchange: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+
+    balance_rows: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    position_rows: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
+    taken_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
 
 
 class BalanceSnapshot(Base):
