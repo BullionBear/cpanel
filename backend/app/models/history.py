@@ -301,7 +301,10 @@ class SyncCursor(Base):
     )
     exchange: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     # trades | orders | deposits | withdrawals | funding | internal_transfers
-    data_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Sized for the kind names, not for a guessed maximum: "internal_transfers"
+    # is already 18 characters, and SQLite (tests) does not enforce the limit
+    # that PostgreSQL (production) does.
+    data_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     stream_key: Mapped[str] = mapped_column(String(80), nullable=False)
 
     # Opaque; the connector defines its meaning. Advanced only after the

@@ -346,6 +346,30 @@ def _account_move(native_id, amount, status=InternalTransferStatus.CONFIRMED):
     )
 
 
+def test_every_data_kind_fits_its_column():
+    """A kind name longer than the column silently passes on SQLite.
+
+    PostgreSQL raises StringDataRightTruncation instead, which poisons the
+    session and aborts the rest of that account's sync — so the length is
+    asserted here rather than discovered in production.
+    """
+    limit = SyncCursor.__table__.c.data_kind.type.length
+    too_long = [kind for kind in svc.DATA_KINDS if len(kind) > limit]
+    assert not too_long, f"data kinds exceed varchar({limit}): {too_long}"
+
+
+def test_stream_key_lengths_fit_their_column():
+    """Same trap, one column over: connector stream keys are venue-defined."""
+    limit = SyncCursor.__table__.c.stream_key.type.length
+    connector = FakeConnector()
+    keys = [
+        *connector.fund_history_stream_keys(),
+        *connector.funding_history_stream_keys(),
+        *connector.internal_transfer_stream_keys("sub"),
+    ]
+    assert all(len(key) <= limit for key in keys)
+
+
 async def test_sync_internal_transfers_from_venue(db, connector):
     """The two legs that empty a subaccount, neither of which is on a chain."""
     account = await _account_with_key(db, connector)
