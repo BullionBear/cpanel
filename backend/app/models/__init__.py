@@ -10,6 +10,7 @@ from app.models.audit_log import AuditLog
 from app.models.history import (
     DepositHistory,
     FundingFeeHistory,
+    InternalTransferHistory,
     OrderHistory,
     SyncCursor,
     TradeHistory,
@@ -32,6 +33,7 @@ __all__ = [
     "PanelAccessToken",
     "DepositHistory",
     "FundingFeeHistory",
+    "InternalTransferHistory",
     "OrderHistory",
     "SyncCursor",
     "TradeHistory",

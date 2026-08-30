@@ -21,6 +21,7 @@ from app.connectors.types import (
     FundingFee,
     Instrument,
     InstrumentFilters,
+    InternalTransfer,
     KeyScheme,
     MarketType,
     Order,
@@ -100,6 +101,7 @@ class FakeConnector(ExchangeConnector):
         self.networks: dict[str, list[AssetNetwork]] = {}
         self.withdrawals: dict[str, Withdrawal] = {}
         self.deposits: list[Deposit] = []
+        self.internal_transfers: list[InternalTransfer] = []
         self.funding_fees: list[FundingFee] = []
         self.transfer_failure: Exception | None = None  # raised by next transfer()
         # When > 0, transfer_balances returns a pre-transfer copy for that many
@@ -254,6 +256,17 @@ class FakeConnector(ExchangeConnector):
         return Page(
             items=items,
             next_cursor=str(end) if end < len(self.funding_fees) else None,
+        )
+
+    async def fetch_internal_transfers_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        start = int(cursor) if cursor else 0
+        items = self.internal_transfers[start:start + 100]
+        end = start + len(items)
+        return Page(
+            items=items,
+            next_cursor=str(end) if end < len(self.internal_transfers) else None,
         )
 
     # -- accounts and provisioning -----------------------------------------

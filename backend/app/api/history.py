@@ -115,6 +115,25 @@ class FundingFeeHistoryOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class InternalTransferHistoryOut(BaseModel):
+    id: int
+    account_id: int
+    exchange: str
+    native_transfer_id: str
+    scope: str
+    direction: str | None
+    asset: str
+    amount: Decimal
+    status: str
+    from_wallet: str | None
+    to_wallet: str | None
+    counterparty: str | None
+    created_at: datetime | None
+    ingested_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class TradePage(BaseModel):
     total: int
     items: list[TradeOut]
@@ -138,6 +157,11 @@ class WithdrawalHistoryPage(BaseModel):
 class FundingFeeHistoryPage(BaseModel):
     total: int
     items: list[FundingFeeHistoryOut]
+
+
+class InternalTransferHistoryPage(BaseModel):
+    total: int
+    items: list[InternalTransferHistoryOut]
 
 
 class StreamOut(BaseModel):
@@ -296,6 +320,40 @@ async def list_funding_fees(
     )
     return FundingFeeHistoryPage(
         total=total, items=[FundingFeeHistoryOut.model_validate(r) for r in rows]
+    )
+
+
+@router.get("/internal-transfers", response_model=InternalTransferHistoryPage)
+async def list_internal_transfers(
+    exchange: str | None = None,
+    account_id: int | None = None,
+    asset: str | None = None,
+    scope: str | None = Query(default=None, pattern="^(WALLET|ACCOUNT|wallet|account)$"),
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """Off-chain movement: between an account's wallets, or between accounts.
+
+    This is where value that never crossed a chain shows up — the moves that
+    deposit and withdrawal history structurally cannot report.
+    """
+    total, rows = await svc.list_internal_transfers(
+        db,
+        exchange=exchange,
+        account_id=account_id,
+        asset=asset,
+        scope=scope,
+        start=start,
+        end=end,
+        limit=limit,
+        offset=offset,
+    )
+    return InternalTransferHistoryPage(
+        total=total,
+        items=[InternalTransferHistoryOut.model_validate(r) for r in rows],
     )
 
 

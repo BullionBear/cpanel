@@ -199,13 +199,21 @@ This is the part where exchanges differ the most, so the design separates the
 
 ### Generic mechanism
 
-Two append-style tables, `trade_history` and `order_history`, both keyed by
-`(exchange, account, native ID)` and written by **upsert** — re-fetching an
-overlapping window can never create duplicates.
+Append-style tables — `trade_history`, `order_history`, `deposit_history`,
+`withdrawal_history`, `funding_fee_history`, `internal_transfer_history` —
+keyed by `(exchange, account, native ID)` and written by **upsert**, so
+re-fetching an overlapping window can never create duplicates.
+
+Deposits and withdrawals only record value crossing a chain, which leaves a
+blind spot: a subaccount emptied by a wallet move plus a sub-to-master
+transfer shows up in neither. `internal_transfer_history` closes it, with a
+`scope` distinguishing moves between one account's wallets (`WALLET`) from
+moves between accounts under one venue login (`ACCOUNT`). Its upsert key
+includes the scope, because venues number those two record spaces separately.
 
 A `sync_cursor` table records ingestion progress:
 
-- `account`, `data kind` (trades / orders), `stream key` (see below)
+- `account`, `data kind` (trades / orders / …), `stream key` (see below)
 - `cursor value` — whatever the venue paginates by: a trade ID, a timestamp,
   or an opaque pagination token
 - `last_synced_at`, error state
@@ -233,6 +241,12 @@ differently:
   (e.g. max 7 days per request). The strategy walks fixed windows from the
   cursor timestamp forward, and the cursor is the end of the last fully
   ingested window.
+- **Parameter-sharded endpoints.** Some queries cannot ask for "everything":
+  Binance's wallet transfer history requires an explicit `FROM_TO` direction,
+  and its subaccount transfer history must be asked separately for inbound and
+  outbound. Each combination the panel models is then its own stream. Stream
+  sets can also depend on the account itself — only a subaccount can ask the
+  venue about its transfers to and from its master.
 
 The connector declares which strategy it uses; the sync worker is generic and
 just executes "fetch next page for this stream" until it reaches the present.

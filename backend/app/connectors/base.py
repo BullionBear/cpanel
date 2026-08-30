@@ -62,6 +62,7 @@ class Capability(StrEnum):
     WITHDRAWALS = "withdrawals"
     DEPOSITS = "deposits"
     FUNDING_HISTORY = "funding_history"
+    INTERNAL_TRANSFER_HISTORY = "internal_transfer_history"
 
 
 class NotSupported(Exception):
@@ -339,5 +340,29 @@ class ExchangeConnector:
 
         Default is a single ``account`` stream (used by the fake connector).
         Live venues override with their derivatives surfaces.
+        """
+        return ["account"]
+
+    # -- internal transfer history (cursor-based, like deposits/withdrawals) ---
+
+    async def fetch_internal_transfers_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        """Next page of off-chain value movement for one stream.
+
+        Covers what deposit and withdrawal history structurally cannot: moves
+        between an account's own wallets, and moves between accounts under one
+        venue login. Without it a subaccount can be emptied leaving no trace
+        anywhere in the panel.
+        """
+        raise NotSupported(self.exchange, Capability.INTERNAL_TRANSFER_HISTORY)
+
+    def internal_transfer_stream_keys(self, account_type: str) -> list[str]:
+        """Streams to sync for internal-transfer history.
+
+        Takes ``account_type`` ("main" or "sub") because the venue endpoints
+        are not symmetric: a subaccount can read its own transfers to and from
+        its master, which is not a question a master account can ask of itself.
+        Default is a single ``account`` stream (used by the fake connector).
         """
         return ["account"]

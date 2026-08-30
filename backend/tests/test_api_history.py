@@ -131,6 +131,7 @@ async def test_stream_health_listed(client):
         ("deposits", "account"),
         ("withdrawals", "account"),
         ("funding", "account"),
+        ("internal_transfers", "account"),
     }
     for stream in streams:
         assert stream["account_id"] == client.account_id
@@ -140,3 +141,54 @@ async def test_stream_health_listed(client):
 
 async def test_sync_unknown_account_404(client):
     assert (await client.post("/history/sync/9999")).status_code == 404
+
+
+async def test_internal_transfers_endpoint(client):
+    """Off-chain movement is queryable and filterable by scope."""
+    from app.connectors.registry import connectors
+    from app.connectors.types import (
+        InternalTransfer,
+        InternalTransferDirection,
+        InternalTransferScope,
+        InternalTransferStatus,
+        WalletType,
+    )
+
+    fake = connectors.get("FAKE")
+    fake.internal_transfers = [
+        InternalTransfer(
+            native_id="5001",
+            asset="USDT",
+            amount=Decimal("91.84137568"),
+            status=InternalTransferStatus.CONFIRMED,
+            scope=InternalTransferScope.WALLET,
+            from_wallet=WalletType.FUTURES,
+            to_wallet=WalletType.SPOT,
+        ),
+        InternalTransfer(
+            native_id="5002",
+            asset="USDT",
+            amount=Decimal("91.84137568"),
+            status=InternalTransferStatus.CONFIRMED,
+            scope=InternalTransferScope.ACCOUNT,
+            direction=InternalTransferDirection.OUT,
+            counterparty="master@example.com",
+        ),
+    ]
+
+    assert (await client.post(f"/history/sync/{client.account_id}")).status_code == 200
+
+    page = (await client.get("/history/internal-transfers")).json()
+    assert page["total"] == 2
+    assert {r["scope"] for r in page["items"]} == {"WALLET", "ACCOUNT"}
+
+    scoped = (await client.get("/history/internal-transfers?scope=ACCOUNT")).json()
+    assert scoped["total"] == 1
+    row = scoped["items"][0]
+    assert row["direction"] == "OUT"
+    assert row["counterparty"] == "master@example.com"
+    assert Decimal(row["amount"]) == Decimal("91.84137568")
+
+    assert (
+        await client.get("/history/internal-transfers?scope=nonsense")
+    ).status_code == 422

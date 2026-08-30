@@ -7,6 +7,7 @@
 		fetchDepositHistory,
 		fetchWithdrawalHistory,
 		fetchFundingFeeHistory,
+		fetchInternalTransferHistory,
 		fetchStreams,
 		syncAccountHistory,
 		type TradeRow,
@@ -14,11 +15,19 @@
 		type DepositHistoryRow,
 		type WithdrawalHistoryRow,
 		type FundingFeeHistoryRow,
+		type InternalTransferHistoryRow,
 		type StreamHealth
 	} from '$lib/history';
 	import { fetchOverview, type OverviewItem } from '$lib/portfolio';
 
-	type Tab = 'trades' | 'orders' | 'deposits' | 'withdrawals' | 'funding' | 'streams';
+	type Tab =
+		| 'trades'
+		| 'orders'
+		| 'deposits'
+		| 'withdrawals'
+		| 'transfers'
+		| 'funding'
+		| 'streams';
 
 	const PAGE_SIZE = 50;
 
@@ -39,6 +48,7 @@
 	let deposits: DepositHistoryRow[] = [];
 	let withdrawals: WithdrawalHistoryRow[] = [];
 	let fundingFees: FundingFeeHistoryRow[] = [];
+	let internalTransfers: InternalTransferHistoryRow[] = [];
 	let streams: StreamHealth[] = [];
 	let total = 0;
 	let loading = false;
@@ -48,7 +58,7 @@
 	let filterTimer: ReturnType<typeof setTimeout> | undefined;
 
 	function isFundTab(t: Tab): boolean {
-		return t === 'deposits' || t === 'withdrawals';
+		return t === 'deposits' || t === 'withdrawals' || t === 'transfers';
 	}
 
 	function filterParams(): Record<string, string> {
@@ -91,6 +101,10 @@
 				const page = await fetchWithdrawalHistory(filterParams());
 				withdrawals = page.items;
 				total = page.total;
+			} else if (tab === 'transfers') {
+				const page = await fetchInternalTransferHistory(filterParams());
+				internalTransfers = page.items;
+				total = page.total;
 			} else if (tab === 'funding') {
 				const page = await fetchFundingFeeHistory(filterParams());
 				fundingFees = page.items;
@@ -108,6 +122,7 @@
 			deposits = [];
 			withdrawals = [];
 			fundingFees = [];
+			internalTransfers = [];
 			streams = [];
 			total = 0;
 			error =
@@ -182,6 +197,15 @@
 		return value.length > 16 ? `${value.slice(0, 10)}…${value.slice(-4)}` : value;
 	}
 
+	/** Where the value went: wallet to wallet, or this account to another one. */
+	function transferRoute(t: InternalTransferHistoryRow): string {
+		const from = t.from_wallet ?? '—';
+		const to = t.to_wallet ?? '—';
+		if (t.scope !== 'ACCOUNT') return `${from} → ${to}`;
+		const other = t.counterparty ?? 'other account';
+		return t.direction === 'IN' ? `${other} → ${to}` : `${from} → ${other}`;
+	}
+
 	onMount(async () => {
 		try {
 			accounts = await fetchOverview();
@@ -218,6 +242,13 @@
 			on:click={() => switchTab('withdrawals')}
 		>
 			Withdrawals
+		</button>
+		<button
+			class="tab"
+			class:active={tab === 'transfers'}
+			on:click={() => switchTab('transfers')}
+		>
+			Internal transfers
 		</button>
 		<button class="tab" class:active={tab === 'funding'} on:click={() => switchTab('funding')}>
 			Funding
@@ -453,6 +484,44 @@
 								<td class="mono" title={w.address || ''}>{shortHash(w.address)}</td>
 								<td class="mono" title={w.tx_id || ''}>{shortHash(w.tx_id)}</td>
 								<td class="mono">{w.native_withdrawal_id}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	{:else if tab === 'transfers'}
+		{#if internalTransfers.length === 0}
+			<div class="notice">
+				No internal transfers ingested yet. These are the moves that never touch a chain —
+				between an account's own wallets, and between a subaccount and its master.
+			</div>
+		{:else}
+			<div class="table-wrap" class:dim={loading}>
+				<table>
+					<thead>
+						<tr>
+							<th>Time</th>
+							<th>Account</th>
+							<th>Scope</th>
+							<th>Route</th>
+							<th>Asset</th>
+							<th class="right">Amount</th>
+							<th>Status</th>
+							<th>Transfer ID</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each internalTransfers as t (t.id)}
+							<tr>
+								<td class="mono">{ts(t.created_at)}</td>
+								<td>{accountLabel(t.account_id)}</td>
+								<td><span class="badge">{t.scope}</span></td>
+								<td class="mono">{transferRoute(t)}</td>
+								<td class="mono">{t.asset}</td>
+								<td class="mono right">{num(t.amount)}</td>
+								<td><span class="badge">{t.status}</span></td>
+								<td class="mono">{t.native_transfer_id}</td>
 							</tr>
 						{/each}
 					</tbody>
