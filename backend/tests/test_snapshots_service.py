@@ -128,6 +128,54 @@ async def test_pnl_history_one_point_per_batch(db, connector):
     assert all(pnl == Decimal("200") for _, _, pnl in history)
 
 
+async def test_empty_capture_supersedes_the_last_holdings(db, connector):
+    """An emptied account must not keep serving its last non-empty batch."""
+    await _seed_prices(db, connector)
+    account = await _account_with_key(db, connector)
+    await svc.capture_snapshots(db, connector, account)
+    _, before = await svc.account_value(db, account.id)
+    assert before == Decimal("40200")
+
+    # The venue now reports nothing at all — withdrawn, positions closed.
+    connector.balances = []
+    connector.positions = []
+    written = await svc.capture_snapshots(db, connector, account)
+    assert written == 0
+
+    balances, positions, taken_at = await svc.get_holdings(db, account.id)
+    assert balances == []
+    assert positions == []
+    assert taken_at is not None
+
+    stamp, total = await svc.account_value(db, account.id)
+    assert total == Decimal("0")
+    assert stamp == taken_at
+
+    # The empty pass is a 0 point on the curve, not a gap in it.
+    history = await svc.value_history(db, account.id)
+    assert [total for _, _, total in history] == [Decimal("0"), Decimal("40200")]
+
+
+async def test_pnl_history_zeroes_out_when_positions_close(db, connector):
+    await _seed_prices(db, connector)
+    account = await _account_with_key(db, connector)
+    await svc.capture_snapshots(db, connector, account)
+    connector.positions = []
+    await svc.capture_snapshots(db, connector, account)
+
+    history = await svc.pnl_history(db, account.id)
+    assert [pnl for _, _, pnl in history] == [Decimal("0"), Decimal("200")]
+
+
+async def test_pnl_history_empty_for_account_without_positions(db, connector):
+    await _seed_prices(db, connector)
+    account = await _account_with_key(db, connector)
+    connector.positions = []
+    await svc.capture_snapshots(db, connector, account)
+
+    assert await svc.pnl_history(db, account.id) == []
+
+
 async def test_unpriced_asset_has_null_value(db, connector):
     await _seed_prices(db, connector)
     account = await _account_with_key(db, connector)
