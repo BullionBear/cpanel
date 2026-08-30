@@ -19,6 +19,9 @@ history, and snapshotted positions (querying every listed instrument would
 waste the rate budget on thousands of empty calls). Deposit and withdrawal
 history is always account-wide (``fund_history_stream_keys``). Funding-fee
 history is per derivatives surface (``funding_history_stream_keys``).
+Internal-transfer streams additionally depend on whether the account is a
+main or a sub (``internal_transfer_stream_keys``), since only a subaccount
+can ask the venue about its transfers to and from its master.
 """
 import logging
 from datetime import datetime, timezone
@@ -34,6 +37,7 @@ from app.connectors.base import (
 from app.connectors.types import (
     Deposit as ConnDeposit,
     FundingFee as ConnFundingFee,
+    InternalTransfer as ConnInternalTransfer,
     Order as ConnOrder,
     OrderStatus,
     Trade as ConnTrade,
@@ -43,6 +47,7 @@ from app.models.account import Account
 from app.models.history import (
     DepositHistory,
     FundingFeeHistory,
+    InternalTransferHistory,
     OrderHistory,
     SyncCursor,
     TradeHistory,
@@ -66,13 +71,16 @@ __all__ = [
     "list_deposits",
     "list_withdrawals",
     "list_funding_fees",
+    "list_internal_transfers",
     "list_sync_cursors",
 ]
 
 # New accounts (streams without a cursor yet) backfill this far first.
 NEW_STREAM_BACKFILL = DEFAULT_HISTORY_BACKFILL
 
-DATA_KINDS = ("trades", "orders", "deposits", "withdrawals", "funding")
+DATA_KINDS = (
+    "trades", "orders", "deposits", "withdrawals", "funding", "internal_transfers",
+)
 
 # Pages ingested per stream per run. Bounds one scheduler tick; the next run
 # resumes from the stored cursor, so a large backlog just takes several runs.
@@ -388,12 +396,69 @@ async def _upsert_funding_fees(
     return written
 
 
+async def _upsert_internal_transfers(
+    db: AsyncSession, account: Account, transfers: list[ConnInternalTransfer]
+) -> int:
+    """Insert unseen internal transfers; advance the status of known ones.
+
+    Keyed by ``(scope, native id)``: a venue numbers its wallet-level and
+    account-level transfer records separately, so the same id can legitimately
+    appear once in each scope.
+    """
+    if not transfers:
+        return 0
+    transfers = [t for t in transfers if t.native_id]
+    if not transfers:
+        return 0
+    rows = (
+        await db.execute(
+            select(InternalTransferHistory).where(
+                InternalTransferHistory.account_id == account.id,
+                InternalTransferHistory.native_transfer_id.in_(
+                    {t.native_id for t in transfers}
+                ),
+            )
+        )
+    ).scalars()
+    known = {(r.scope, r.native_transfer_id): r for r in rows}
+    changed = 0
+    for transfer in transfers:
+        key = (transfer.scope.value, transfer.native_id)
+        row = known.get(key)
+        if row is None:
+            row = InternalTransferHistory(
+                account_id=account.id,
+                exchange=account.exchange,
+                native_transfer_id=transfer.native_id,
+                scope=transfer.scope.value,
+                direction=transfer.direction.value if transfer.direction else None,
+                asset=transfer.asset,
+                amount=transfer.amount,
+                status=transfer.status.value,
+                from_wallet=transfer.from_wallet.value if transfer.from_wallet else None,
+                to_wallet=transfer.to_wallet.value if transfer.to_wallet else None,
+                counterparty=transfer.counterparty,
+                created_at=transfer.created_at,
+            )
+            db.add(row)
+            known[key] = row
+            changed += 1
+        elif row.status != transfer.status.value:
+            # Only the status can move (a PENDING transfer settling). Amounts
+            # and wallets are fixed at submission; datetimes are not compared
+            # because SQLite round-trips shift tz/µs.
+            row.status = transfer.status.value
+            changed += 1
+    return changed
+
+
 _FETCHERS = {
     "trades": "fetch_trades",
     "orders": "fetch_orders_history",
     "deposits": "fetch_deposits_history",
     "withdrawals": "fetch_withdrawals_history",
     "funding": "fetch_funding_fees_history",
+    "internal_transfers": "fetch_internal_transfers_history",
 }
 
 _UPSERTERS = {
@@ -402,6 +467,7 @@ _UPSERTERS = {
     "deposits": _upsert_deposits,
     "withdrawals": _upsert_withdrawals,
     "funding": _upsert_funding_fees,
+    "internal_transfers": _upsert_internal_transfers,
 }
 
 
@@ -445,7 +511,7 @@ async def sync_stream(
         cursor_row.last_synced_at = datetime.now(timezone.utc)
         await db.commit()
         raise
-    if data_kind in ("deposits", "withdrawals") and total > 0:
+    if data_kind in ("deposits", "withdrawals", "internal_transfers") and total > 0:
         from app.services.balance_refresh import schedule_balance_refresh
 
         schedule_balance_refresh(account.id, f"history_{data_kind}")
@@ -460,6 +526,8 @@ async def sync_account_history(
     Streams are isolated: one failing stream (recorded on its cursor row) does
     not stop the others.
     """
+    plans: list[tuple[str, list[str]]] = []
+
     trade_order_kinds = [
         kind
         for kind, capability in (
@@ -468,6 +536,12 @@ async def sync_account_history(
         )
         if connector.supports(capability)
     ]
+    if trade_order_kinds:
+        # Only resolved when a trade/order stream is actually supported — it
+        # costs three queries to work out which symbols are active.
+        symbol_streams = connector.history_stream_keys(await active_symbols(db, account))
+        plans += [(kind, symbol_streams) for kind in trade_order_kinds]
+
     fund_kinds = [
         kind
         for kind, capability in (
@@ -476,56 +550,33 @@ async def sync_account_history(
         )
         if connector.supports(capability)
     ]
-    funding_kinds = (
-        ["funding"] if connector.supports(Capability.FUNDING_HISTORY) else []
-    )
-    if not trade_order_kinds and not fund_kinds and not funding_kinds:
-        return 0
+    if fund_kinds:
+        fund_streams = connector.fund_history_stream_keys()
+        plans += [(kind, fund_streams) for kind in fund_kinds]
+
+    if connector.supports(Capability.FUNDING_HISTORY):
+        plans.append(("funding", connector.funding_history_stream_keys()))
+
+    if connector.supports(Capability.INTERNAL_TRANSFER_HISTORY):
+        plans.append(
+            (
+                "internal_transfers",
+                connector.internal_transfer_stream_keys(account.account_type),
+            )
+        )
 
     total = 0
-    if trade_order_kinds:
-        streams = connector.history_stream_keys(await active_symbols(db, account))
-        for data_kind in trade_order_kinds:
-            for stream_key in streams:
-                try:
-                    total += await sync_stream(
-                        db, connector, account, data_kind, stream_key
-                    )
-                except AccountError:
-                    raise  # no usable credential — pointless to try other streams
-                except Exception:
-                    logger.exception(
-                        "History sync failed for %s account %s stream %s/%s",
-                        account.exchange, account.id, data_kind, stream_key,
-                    )
-    if fund_kinds:
-        for data_kind in fund_kinds:
-            for stream_key in connector.fund_history_stream_keys():
-                try:
-                    total += await sync_stream(
-                        db, connector, account, data_kind, stream_key
-                    )
-                except AccountError:
-                    raise
-                except Exception:
-                    logger.exception(
-                        "History sync failed for %s account %s stream %s/%s",
-                        account.exchange, account.id, data_kind, stream_key,
-                    )
-    if funding_kinds:
-        for data_kind in funding_kinds:
-            for stream_key in connector.funding_history_stream_keys():
-                try:
-                    total += await sync_stream(
-                        db, connector, account, data_kind, stream_key
-                    )
-                except AccountError:
-                    raise
-                except Exception:
-                    logger.exception(
-                        "History sync failed for %s account %s stream %s/%s",
-                        account.exchange, account.id, data_kind, stream_key,
-                    )
+    for data_kind, stream_keys in plans:
+        for stream_key in stream_keys:
+            try:
+                total += await sync_stream(db, connector, account, data_kind, stream_key)
+            except AccountError:
+                raise  # no usable credential — pointless to try other streams
+            except Exception:
+                logger.exception(
+                    "History sync failed for %s account %s stream %s/%s",
+                    account.exchange, account.id, data_kind, stream_key,
+                )
     return total
 
 
@@ -723,6 +774,46 @@ async def list_funding_fees(
             .order_by(
                 FundingFeeHistory.settled_at.desc().nullslast(),
                 FundingFeeHistory.id.desc(),
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+    ).scalars()
+    return total, list(rows)
+
+
+async def list_internal_transfers(
+    db: AsyncSession,
+    *,
+    exchange: str | None = None,
+    account_id: int | None = None,
+    asset: str | None = None,
+    scope: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[int, list[InternalTransferHistory]]:
+    filters = dict(
+        exchange=exchange, account_id=account_id, asset=asset,
+        start=start, end=end, time_column=InternalTransferHistory.created_at,
+    )
+
+    def _scoped(query):
+        query = _apply_filters(query, InternalTransferHistory, **filters)
+        if scope:
+            query = query.where(InternalTransferHistory.scope == scope.upper())
+        return query
+
+    total = (
+        await db.execute(_scoped(select(func.count(InternalTransferHistory.id))))
+    ).scalar_one()
+    rows = (
+        await db.execute(
+            _scoped(select(InternalTransferHistory))
+            .order_by(
+                InternalTransferHistory.created_at.desc().nullslast(),
+                InternalTransferHistory.id.desc(),
             )
             .limit(limit)
             .offset(offset)

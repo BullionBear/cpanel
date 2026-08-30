@@ -7,10 +7,22 @@ from sqlalchemy import select
 
 from app.connectors.base import ExchangeConnector
 from app.connectors.fake import FakeConnector
-from app.connectors.types import Order, OrderRequest, OrderSide, OrderStatus, OrderType
+from app.connectors.types import (
+    InternalTransfer,
+    InternalTransferDirection,
+    InternalTransferScope,
+    InternalTransferStatus,
+    Order,
+    OrderRequest,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    WalletType,
+)
 from app.models.history import (
     DepositHistory,
     FundingFeeHistory,
+    InternalTransferHistory,
     OrderHistory,
     SyncCursor,
     TradeHistory,
@@ -232,7 +244,9 @@ async def test_sync_account_history_covers_both_kinds(db, connector):
         row.data_kind
         for row in (await db.execute(select(SyncCursor))).scalars().all()
     }
-    assert kinds == {"trades", "orders", "deposits", "withdrawals", "funding"}
+    assert kinds == {
+        "trades", "orders", "deposits", "withdrawals", "funding", "internal_transfers",
+    }
 
 
 async def test_sync_deposits_and_withdrawals_from_venue(db, connector):
@@ -302,6 +316,94 @@ async def test_sync_funding_fees_from_venue(db, connector):
     )
     assert total == 2
     assert listed[0].funding_rate is not None
+
+
+def _wallet_move(native_id, amount, status=InternalTransferStatus.CONFIRMED):
+    return InternalTransfer(
+        native_id=native_id,
+        asset="USDT",
+        amount=Decimal(amount),
+        status=status,
+        scope=InternalTransferScope.WALLET,
+        from_wallet=WalletType.FUTURES,
+        to_wallet=WalletType.SPOT,
+        created_at=datetime(2026, 7, 30, 13, 45, tzinfo=timezone.utc),
+    )
+
+
+def _account_move(native_id, amount, status=InternalTransferStatus.CONFIRMED):
+    return InternalTransfer(
+        native_id=native_id,
+        asset="USDT",
+        amount=Decimal(amount),
+        status=status,
+        scope=InternalTransferScope.ACCOUNT,
+        direction=InternalTransferDirection.OUT,
+        from_wallet=WalletType.SPOT,
+        to_wallet=WalletType.SPOT,
+        counterparty="master@example.com",
+        created_at=datetime(2026, 7, 30, 13, 46, tzinfo=timezone.utc),
+    )
+
+
+async def test_sync_internal_transfers_from_venue(db, connector):
+    """The two legs that empty a subaccount, neither of which is on a chain."""
+    account = await _account_with_key(db, connector)
+    connector.internal_transfers = [
+        _wallet_move("1001", "91.84137568"),
+        _account_move("2001", "91.84137568"),
+    ]
+
+    assert await svc.sync_stream(db, connector, account, "internal_transfers", "account") == 2
+    # Re-ingesting the same window changes nothing.
+    assert await svc.sync_stream(db, connector, account, "internal_transfers", "account") == 0
+
+    rows = (await db.execute(select(InternalTransferHistory))).scalars().all()
+    assert {r.scope for r in rows} == {"WALLET", "ACCOUNT"}
+    wallet_row = next(r for r in rows if r.scope == "WALLET")
+    assert wallet_row.from_wallet == "FUTURES"
+    assert wallet_row.to_wallet == "SPOT"
+    assert wallet_row.direction is None
+    account_row = next(r for r in rows if r.scope == "ACCOUNT")
+    assert account_row.direction == "OUT"
+    assert account_row.counterparty == "master@example.com"
+
+    total, listed = await svc.list_internal_transfers(db, account_id=account.id)
+    assert total == 2
+    _, wallet_only = await svc.list_internal_transfers(
+        db, account_id=account.id, scope="wallet"
+    )
+    assert [r.scope for r in wallet_only] == ["WALLET"]
+
+
+async def test_internal_transfer_scope_separates_colliding_ids(db, connector):
+    """Wallet and account transfer ids live in different venue spaces."""
+    account = await _account_with_key(db, connector)
+    connector.internal_transfers = [
+        _wallet_move("777", "10"),
+        _account_move("777", "10"),
+    ]
+
+    assert await svc.sync_stream(db, connector, account, "internal_transfers", "account") == 2
+    rows = (await db.execute(select(InternalTransferHistory))).scalars().all()
+    assert len(rows) == 2
+    assert {r.native_transfer_id for r in rows} == {"777"}
+
+
+async def test_internal_transfer_status_advances(db, connector):
+    account = await _account_with_key(db, connector)
+    connector.internal_transfers = [
+        _wallet_move("3001", "5", status=InternalTransferStatus.PENDING)
+    ]
+    assert await svc.sync_stream(db, connector, account, "internal_transfers", "account") == 1
+
+    connector.internal_transfers = [
+        _wallet_move("3001", "5", status=InternalTransferStatus.CONFIRMED)
+    ]
+    assert await svc.sync_stream(db, connector, account, "internal_transfers", "account") == 1
+
+    row = (await db.execute(select(InternalTransferHistory))).scalars().one()
+    assert row.status == "CONFIRMED"
 
 
 async def test_stream_failure_recorded_on_cursor(db):

@@ -22,12 +22,17 @@ from app.connectors.binance import (
     normalize_positions,
     normalize_spot_balances,
     normalize_spot_instrument,
+    normalize_sub_transfer,
     normalize_trade,
     normalize_um_instrument,
+    normalize_wallet_transfer,
     normalize_withdrawal,
 )
 from app.connectors.types import (
     DepositStatus,
+    InternalTransferDirection,
+    InternalTransferScope,
+    InternalTransferStatus,
     MarketType,
     OrderSide,
     WalletType,
@@ -747,3 +752,78 @@ async def test_fetch_deposit_address(monkeypatch):
     resolved = await c.fetch_deposit_address({}, "USDT", "TRX")
     assert resolved.address == "TAbc123"
     assert resolved.tag is None
+
+
+# -- internal transfer history -------------------------------------------------
+
+def test_internal_transfer_streams_depend_on_account_type():
+    """Only a subaccount can ask the venue about its master transfers."""
+    connector = BinanceConnector()
+    main = connector.internal_transfer_stream_keys("main")
+    sub = connector.internal_transfer_stream_keys("sub")
+    assert "sub_out" not in main
+    assert set(main).issubset(set(sub))
+    # Both directions are separate streams: subUserHistory defaults to "out".
+    assert {"sub_in", "sub_out"}.issubset(set(sub))
+
+
+def test_normalize_wallet_transfer_reads_pair_from_queried_type():
+    transfer = normalize_wallet_transfer(
+        {
+            "tranId": 11945860693,
+            "asset": "USDT",
+            "amount": "91.84137568",
+            "type": "UMFUTURE_MAIN",
+            "status": "CONFIRMED",
+            "timestamp": 1785418961000,
+        },
+        "UMFUTURE_MAIN",
+    )
+    assert transfer.native_id == "11945860693"
+    assert transfer.scope is InternalTransferScope.WALLET
+    assert transfer.from_wallet is WalletType.FUTURES
+    assert transfer.to_wallet is WalletType.SPOT
+    assert transfer.status is InternalTransferStatus.CONFIRMED
+    assert transfer.amount == Decimal("91.84137568")
+    # WALLET scope needs no direction — the wallet pair already says it.
+    assert transfer.direction is None
+
+
+def test_normalize_wallet_transfer_tolerates_unmodelled_legs():
+    """Isolated margin and options legs normalize to None, not an exception."""
+    transfer = normalize_wallet_transfer(
+        {"tranId": 1, "asset": "USDT", "amount": "1", "status": "PENDING"},
+        "ISOLATEDMARGIN_MARGIN",
+    )
+    assert transfer.from_wallet is None
+    assert transfer.to_wallet is None
+    assert transfer.status is InternalTransferStatus.PENDING
+
+
+def test_normalize_sub_transfer_direction_and_counterparty():
+    out = normalize_sub_transfer(
+        {
+            "counterParty": "master",
+            "email": "master@example.com",
+            "type": 2,
+            "asset": "USDT",
+            "qty": "91.84137568",
+            "fromAccountType": "USDT_FUTURE",
+            "toAccountType": "SPOT",
+            "status": "SUCCESS",
+            "tranId": 99,
+            "time": 1785419000000,
+        }
+    )
+    assert out.scope is InternalTransferScope.ACCOUNT
+    assert out.direction is InternalTransferDirection.OUT
+    assert out.counterparty == "master"
+    assert out.from_wallet is WalletType.FUTURES
+    # SUCCESS is the subaccount endpoint's word for CONFIRMED.
+    assert out.status is InternalTransferStatus.CONFIRMED
+
+    incoming = normalize_sub_transfer(
+        {"type": 1, "asset": "USDT", "qty": "5", "status": "FAILURE", "tranId": 100}
+    )
+    assert incoming.direction is InternalTransferDirection.IN
+    assert incoming.status is InternalTransferStatus.FAILED

@@ -51,6 +51,10 @@ from app.connectors.types import (
     FundingFee,
     Instrument,
     InstrumentFilters,
+    InternalTransfer,
+    InternalTransferDirection,
+    InternalTransferScope,
+    InternalTransferStatus,
     MarketType,
     Order,
     OrderRequest,
@@ -496,6 +500,78 @@ def normalize_deposit(raw: dict) -> Deposit:
     )
 
 
+# Both transfer endpoints report status as a word, with different vocabularies:
+# /asset/transfer says CONFIRMED/PENDING/FAILED, subUserHistory says
+# SUCCESS/PROCESS/FAILURE.
+_INTERNAL_TRANSFER_STATUS = {
+    "CONFIRMED": InternalTransferStatus.CONFIRMED,
+    "SUCCESS": InternalTransferStatus.CONFIRMED,
+    "PENDING": InternalTransferStatus.PENDING,
+    "PROCESS": InternalTransferStatus.PENDING,
+    "FAILED": InternalTransferStatus.FAILED,
+    "FAILURE": InternalTransferStatus.FAILED,
+}
+
+# Leg code -> wallet, for reading back a MAIN_UMFUTURE style transfer type.
+_LEG_TO_WALLET = {leg: wallet for wallet, leg in _UNIVERSAL_TRANSFER_LEG.items()}
+
+# subUserHistory accountType -> wallet.
+_SUB_WALLET_TO_TYPE = {
+    value: wallet for wallet, value in _SUB_TRANSFER_WALLET.items()
+}
+
+
+def _internal_transfer_status(value) -> InternalTransferStatus:
+    return _INTERNAL_TRANSFER_STATUS.get(
+        str(value or "").upper(), InternalTransferStatus.PENDING
+    )
+
+
+def normalize_wallet_transfer(raw: dict, transfer_type: str) -> InternalTransfer:
+    """A /asset/transfer row → InternalTransfer of WALLET scope.
+
+    The wallet pair comes from the queried ``type`` (``FROM_TO``) rather than
+    the row: we asked for exactly one direction, and legs the panel does not
+    model (isolated margin, options) normalize to ``None`` rather than fail.
+    """
+    src, _, dst = transfer_type.partition("_")
+    return InternalTransfer(
+        native_id=str(raw.get("tranId") or ""),
+        asset=raw.get("asset") or "",
+        amount=_dec(raw.get("amount", 0) or 0),
+        status=_internal_transfer_status(raw.get("status")),
+        scope=InternalTransferScope.WALLET,
+        from_wallet=_LEG_TO_WALLET.get(src),
+        to_wallet=_LEG_TO_WALLET.get(dst),
+        created_at=_epoch_ms(raw.get("timestamp")),
+    )
+
+
+def normalize_sub_transfer(raw: dict) -> InternalTransfer:
+    """A subUserHistory row → InternalTransfer of ACCOUNT scope.
+
+    ``type`` is the direction as the subaccount sees it: 1 in, 2 out. The
+    counterparty is the master (or sibling) account's email.
+    """
+    direction = (
+        InternalTransferDirection.IN
+        if int(raw.get("type", 2) or 2) == 1
+        else InternalTransferDirection.OUT
+    )
+    return InternalTransfer(
+        native_id=str(raw.get("tranId") or ""),
+        asset=raw.get("asset") or "",
+        amount=_dec(raw.get("qty", 0) or 0),
+        status=_internal_transfer_status(raw.get("status")),
+        scope=InternalTransferScope.ACCOUNT,
+        direction=direction,
+        from_wallet=_SUB_WALLET_TO_TYPE.get(str(raw.get("fromAccountType") or "")),
+        to_wallet=_SUB_WALLET_TO_TYPE.get(str(raw.get("toAccountType") or "")),
+        counterparty=raw.get("counterParty") or raw.get("email") or None,
+        created_at=_epoch_ms(raw.get("time")),
+    )
+
+
 def normalize_funding_fee(
     raw: dict, universal_symbol: str, *, stream_key: str
 ) -> FundingFee:
@@ -558,6 +634,7 @@ class BinanceConnector(ExchangeConnector):
             Capability.ORDER_HISTORY,
             Capability.SUBACCOUNT_LIST,
             Capability.TRANSFERS,
+            Capability.INTERNAL_TRANSFER_HISTORY,
             Capability.WITHDRAWALS,
             Capability.DEPOSITS,
             Capability.FUNDING_HISTORY,
@@ -1300,6 +1377,97 @@ class BinanceConnector(ExchangeConnector):
         return Page(
             items=items,
             next_cursor=_advance_window(rows, "time", start_ms, end_ms, now_ms, limit),
+        )
+
+    # -- internal transfer history --------------------------------------------
+
+    # /asset/transfer requires an explicit FROM_TO ``type`` — there is no "all
+    # transfers" query — so each direction the panel models is its own stream.
+    # Legs outside the panel's wallet vocabulary (isolated margin, options,
+    # COIN-M) are deliberately not synced.
+    _WALLET_TRANSFER_STREAMS = (
+        "MAIN_UMFUTURE",
+        "UMFUTURE_MAIN",
+        "MAIN_FUNDING",
+        "FUNDING_MAIN",
+    )
+
+    # subUserHistory is answerable only by a subaccount key, and defaults to
+    # transfers *out* — both directions must be asked for separately.
+    _SUB_TRANSFER_DIRECTIONS = {"sub_in": 1, "sub_out": 2}
+
+    _WALLET_TRANSFER_LIMIT = 100   # /asset/transfer size max
+    _SUB_TRANSFER_LIMIT = 200      # subUserHistory limit max
+
+    def internal_transfer_stream_keys(self, account_type: str) -> list[str]:
+        streams = list(self._WALLET_TRANSFER_STREAMS)
+        if account_type == "sub":
+            streams += list(self._SUB_TRANSFER_DIRECTIONS)
+        return streams
+
+    async def _fetch_wallet_transfer_history(
+        self, credential: Credential, transfer_type: str, start_ms: int, end_ms: int,
+        size: int,
+    ) -> list[dict]:
+        wallet = Wallet(config_rest_api=_auth_config(credential))
+        resp = await self._call(
+            wallet.rest_api.query_user_universal_transfer_history,
+            type=transfer_type,
+            start_time=start_ms,
+            end_time=end_ms,
+            current=1,
+            size=size,
+        )
+        data = dump_sdk_model(resp.data())
+        if isinstance(data, dict):
+            rows = data.get("rows") or []
+        else:
+            rows = data or []
+        return rows if isinstance(rows, list) else [rows]
+
+    async def _fetch_sub_transfer_history(
+        self, credential: Credential, direction: int, start_ms: int, end_ms: int,
+        limit: int,
+    ) -> list[dict]:
+        sub = SubAccount(config_rest_api=_auth_config(credential))
+        resp = await self._call(
+            sub.rest_api.sub_account_transfer_history,
+            type=direction,
+            start_time=start_ms,
+            end_time=end_ms,
+            limit=limit,
+        )
+        data = dump_sdk_model(resp.data())
+        return data if isinstance(data, list) else [data] if data else []
+
+    async def fetch_internal_transfers_history(
+        self, credential: Credential, stream_key: str, cursor: str | None
+    ) -> Page:
+        start_ms, end_ms, now_ms = self._history_window(cursor)
+        if start_ms >= now_ms:
+            return Page(items=[], next_cursor=None)
+
+        if stream_key in self._SUB_TRANSFER_DIRECTIONS:
+            limit = self._SUB_TRANSFER_LIMIT
+            rows = await self._fetch_sub_transfer_history(
+                credential, self._SUB_TRANSFER_DIRECTIONS[stream_key],
+                start_ms, end_ms, limit,
+            )
+            items = [normalize_sub_transfer(raw) for raw in rows]
+            time_key = "time"
+        elif stream_key in self._WALLET_TRANSFER_STREAMS:
+            limit = self._WALLET_TRANSFER_LIMIT
+            rows = await self._fetch_wallet_transfer_history(
+                credential, stream_key, start_ms, end_ms, limit
+            )
+            items = [normalize_wallet_transfer(raw, stream_key) for raw in rows]
+            time_key = "timestamp"
+        else:
+            raise ValueError(f"Unknown Binance internal-transfer stream {stream_key!r}")
+
+        return Page(
+            items=items,
+            next_cursor=_advance_window(rows, time_key, start_ms, end_ms, now_ms, limit),
         )
 
     # -- reference prices -----------------------------------------------------

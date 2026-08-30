@@ -1,4 +1,4 @@
-"""History ingestion: trade/order/deposit/withdrawal/funding history and cursors.
+"""History ingestion: trade/order/fund-movement/funding history and cursors.
 
 ``trade_history`` and ``order_history`` are written by **upsert** keyed by
 ``(account, universal_symbol, native id)`` — venue ids are only guaranteed
@@ -6,12 +6,17 @@ unique per symbol on some exchanges (Binance), so the symbol is part of the
 key. ``deposit_history`` / ``withdrawal_history`` / ``funding_fee_history``
 are keyed by ``(account, native id)`` — fund movements and funding
 settlements are account-wide (funding streams may still be sharded by
-derivatives surface). Re-fetching an overlapping window can never create
-duplicates, which is what makes every sync job idempotent
-(ARCHITECTURE.md "History Ingestion").
+derivatives surface). ``internal_transfer_history`` adds the scope to that
+key, because a venue numbers its wallet-level and account-level transfer
+records in separate spaces that may collide. Re-fetching an overlapping
+window can never create duplicates, which is what makes every sync job
+idempotent (ARCHITECTURE.md "History Ingestion").
 
-All five tables are filled from **venue history endpoints**, not from
-panel-orchestrated transfer rows.
+All six tables are filled from **venue history endpoints**, not from
+panel-orchestrated transfer rows. Deposits and withdrawals only ever see
+value crossing a chain; ``internal_transfer_history`` is what accounts for
+value that moved without one — between an account's wallets, or between
+accounts under a single venue login.
 
 ``sync_cursor`` records ingestion progress per ``(account, data kind,
 stream key)``. The stream key exists because venues shard their history
@@ -199,6 +204,51 @@ class WithdrawalHistory(Base):
     )
 
 
+class InternalTransferHistory(Base):
+    """Off-chain value movement as reported by the venue's transfer endpoints.
+
+    Two scopes, sourced from different endpoints and keyed separately:
+    ``WALLET`` for moves between an account's own wallets (spot -> futures),
+    ``ACCOUNT`` for moves between accounts under one login (sub -> master).
+    ``direction`` is meaningful for ACCOUNT scope, where the counterparty is
+    another account; for WALLET scope the wallet pair already says it.
+    """
+
+    __tablename__ = "internal_transfer_history"
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id", "scope", "native_transfer_id",
+            name="uq_internal_transfer_history_account_scope_native",
+        ),
+        Index("ix_internal_transfer_history_account_created", "account_id", "created_at"),
+        Index("ix_internal_transfer_history_account_asset", "account_id", "asset"),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPk, primary_key=True, autoincrement=True)
+
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("account.id"), nullable=False, index=True
+    )
+    exchange: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+
+    native_transfer_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    scope: Mapped[str] = mapped_column(String(8), nullable=False, index=True)  # WALLET | ACCOUNT
+    direction: Mapped[str | None] = mapped_column(String(4))  # IN | OUT
+    asset: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    amount: Mapped[Decimal] = mapped_column(Num, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+
+    from_wallet: Mapped[str | None] = mapped_column(String(16))
+    to_wallet: Mapped[str | None] = mapped_column(String(16))
+    # The account on the other side (Binance reports a subaccount email).
+    counterparty: Mapped[str | None] = mapped_column(String(128))
+
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class FundingFeeHistory(Base):
     """Perpetual funding settlements as reported by the venue's income /
     transaction-log / account-book endpoints.
@@ -250,7 +300,7 @@ class SyncCursor(Base):
         ForeignKey("account.id"), nullable=False, index=True
     )
     exchange: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    # trades | orders | deposits | withdrawals | funding
+    # trades | orders | deposits | withdrawals | funding | internal_transfers
     data_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     stream_key: Mapped[str] = mapped_column(String(80), nullable=False)
 

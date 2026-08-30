@@ -79,6 +79,24 @@ export interface FundingFeeHistoryRow {
 	ingested_at: string;
 }
 
+export interface InternalTransferHistoryRow {
+	id: number;
+	account_id: number;
+	exchange: string;
+	native_transfer_id: string;
+	/** WALLET = between this account's wallets, ACCOUNT = between accounts. */
+	scope: string;
+	direction: string | null;
+	asset: string;
+	amount: string;
+	status: string;
+	from_wallet: string | null;
+	to_wallet: string | null;
+	counterparty: string | null;
+	created_at: string | null;
+	ingested_at: string;
+}
+
 export interface StreamHealth {
 	account_id: number;
 	account_label: string;
@@ -109,6 +127,9 @@ export const fetchWithdrawalHistory = (params: Record<string, string> = {}) =>
 
 export const fetchFundingFeeHistory = (params: Record<string, string> = {}) =>
 	apiGet<Page<FundingFeeHistoryRow>>('/history/funding', params);
+
+export const fetchInternalTransferHistory = (params: Record<string, string> = {}) =>
+	apiGet<Page<InternalTransferHistoryRow>>('/history/internal-transfers', params);
 
 export const fetchStreams = (params: Record<string, string> = {}) =>
 	apiGet<StreamHealth[]>('/history/streams', params);

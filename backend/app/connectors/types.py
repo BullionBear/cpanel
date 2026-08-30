@@ -295,3 +295,48 @@ class FundingFee:
     amount: Decimal
     funding_rate: Decimal | None = None
     settled_at: datetime | None = None
+
+
+class InternalTransferScope(StrEnum):
+    """Which boundary a transfer crossed.
+
+    ``WALLET`` moves value between wallets of one account (spot -> futures);
+    ``ACCOUNT`` moves it between accounts of one venue login (sub -> master).
+    Emptying a subaccount is usually a WALLET leg followed by an ACCOUNT leg,
+    and only the pair explains where the money went.
+    """
+    WALLET = "WALLET"
+    ACCOUNT = "ACCOUNT"
+
+
+class InternalTransferDirection(StrEnum):
+    """Direction relative to the account the stream belongs to."""
+    IN = "IN"
+    OUT = "OUT"
+
+
+class InternalTransferStatus(StrEnum):
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    FAILED = "FAILED"
+
+
+@dataclass(frozen=True)
+class InternalTransfer:
+    """One value move that never touched a chain.
+
+    Neither a deposit nor a withdrawal: the venue moved value between wallets
+    of one account, or between accounts under one login. ``from_wallet`` and
+    ``to_wallet`` are set for WALLET scope; ``counterparty`` names the other
+    account for ACCOUNT scope (Binance reports a subaccount email).
+    """
+    native_id: str
+    asset: str
+    amount: Decimal
+    status: InternalTransferStatus
+    scope: InternalTransferScope
+    direction: InternalTransferDirection | None = None
+    from_wallet: WalletType | None = None
+    to_wallet: WalletType | None = None
+    counterparty: str | None = None
+    created_at: datetime | None = None
