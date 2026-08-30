@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
-	import { ApiError } from '$lib/api';
+	import { tick } from 'svelte';
+	import { ApiError, apiErrorMessage } from '$lib/api';
 	import Menu from '$lib/Menu.svelte';
 	import {
 		fetchTree,
@@ -32,6 +33,7 @@
 	let error = '';
 	let notice = '';
 	let busy = false;
+	let errorBanner: HTMLElement | undefined;
 
 	$: registrationOnly = caps?.registration_only ?? exchange === 'BINANCE';
 	$: needsPassphrase = exchange === 'BITGET' || exchange === 'OKX';
@@ -143,10 +145,16 @@
 			error =
 				e instanceof ApiError && e.status === 401
 					? 'Please log in to manage accounts.'
-					: 'Failed to load accounts.';
+					: apiErrorMessage(e, 'Failed to load accounts.');
 		} finally {
 			loading = false;
 		}
+	}
+
+	async function showError(e: unknown, fallback: string) {
+		error = apiErrorMessage(e, fallback);
+		await tick();
+		errorBanner?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 	}
 
 	async function run(fn: () => Promise<void>) {
@@ -157,7 +165,7 @@
 			await fn();
 			await load();
 		} catch (e) {
-			error = e instanceof ApiError ? e.message : 'Operation failed.';
+			showError(e, 'Operation failed.');
 		} finally {
 			busy = false;
 		}
@@ -350,7 +358,7 @@
 			revealed[cred.id] = await revealSecret(account.exchange, account.label, cred.api_key);
 			revealed = revealed;
 		} catch (e) {
-			error = e instanceof ApiError ? e.message : 'Could not reveal secret.';
+			showError(e, 'Could not reveal secret.');
 		}
 	}
 
@@ -383,8 +391,10 @@
 	{/if}
 </div>
 
-{#if notice}<p class="notice">{notice}</p>{/if}
-{#if error}<p class="error">{error}</p>{/if}
+{#if notice}<p class="banner notice" role="status">{notice}</p>{/if}
+{#if error}
+	<p class="banner error" bind:this={errorBanner} role="alert">{error}</p>
+{/if}
 
 {#if loading}
 	<p class="muted">Loading…</p>
@@ -715,6 +725,9 @@
 							<button class="btn small" disabled={busy || !subName[main.id]?.trim()}>Create subaccount</button>
 						</form>
 					{/if}
+					{#if error}
+						<p class="error" role="alert">{error}</p>
+					{/if}
 				</div>
 				{#if registrationOnly && caps?.subaccount_list}
 					<p class="muted">
@@ -865,6 +878,7 @@
 				<input placeholder="e.g. spot, hedge" bind:value={keyDialog.tags} />
 			</div>
 
+			{#if error}<p class="error" role="alert">{error}</p>{/if}
 			<div class="dialog-actions">
 				<button class="btn secondary" on:click={closeKeyDialog}>Cancel</button>
 				<button class="btn" disabled={busy} on:click={submitKeyDialog}>Create key</button>
@@ -874,6 +888,28 @@
 {/if}
 
 <style>
+	.banner {
+		position: sticky;
+		top: 4.5rem;
+		z-index: 5;
+		padding: 0.7rem 0.9rem;
+		border-radius: var(--radius-sm);
+		font-size: 0.875rem;
+		margin: 0 0 1rem;
+	}
+	.banner.error {
+		color: var(--danger-text);
+		background: var(--danger-bg);
+	}
+	.banner.notice {
+		color: var(--success-text);
+		background: var(--success-bg);
+	}
+	.sub-actions .error {
+		flex-basis: 100%;
+		margin: 0.25rem 0 0;
+	}
+
 	.page-head {
 		display: flex;
 		align-items: baseline;

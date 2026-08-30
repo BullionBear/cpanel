@@ -6,7 +6,36 @@ export class ApiError extends Error {
 		message: string
 	) {
 		super(message);
+		this.name = 'ApiError';
 	}
+}
+
+/** FastAPI `detail` is a string, a validation-error array, or rarely an object. */
+export function formatApiDetail(detail: unknown): string | null {
+	if (detail == null) return null;
+	if (typeof detail === 'string') return detail;
+	if (Array.isArray(detail)) {
+		const parts = detail
+			.map((item) => {
+				if (typeof item === 'string') return item;
+				if (item && typeof item === 'object' && 'msg' in item) {
+					return String((item as { msg: unknown }).msg);
+				}
+				return null;
+			})
+			.filter((part): part is string => Boolean(part));
+		return parts.length ? parts.join('; ') : null;
+	}
+	if (typeof detail === 'object' && 'msg' in detail) {
+		return String((detail as { msg: unknown }).msg);
+	}
+	return null;
+}
+
+export function apiErrorMessage(err: unknown, fallback = 'Request failed'): string {
+	if (err instanceof ApiError && err.message) return err.message;
+	if (err instanceof Error && err.message) return err.message;
+	return fallback;
 }
 
 async function request<T>(method: string, path: string, body?: unknown, params?: Record<string, string>): Promise<T> {
@@ -21,7 +50,11 @@ async function request<T>(method: string, path: string, body?: unknown, params?:
 	});
 	if (!res.ok) {
 		const errBody = await res.json().catch(() => null);
-		throw new ApiError(res.status, errBody?.detail ?? `Request failed (${res.status})`);
+		const message =
+			formatApiDetail(errBody?.detail) ??
+			(typeof errBody?.message === 'string' ? errBody.message : null) ??
+			`Request failed (${res.status})`;
+		throw new ApiError(res.status, message);
 	}
 	if (res.status === 204) return undefined as T;
 	return res.json();

@@ -1,5 +1,6 @@
 """OKX normalization and request-shaping tests (no network)."""
 import json
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -8,6 +9,8 @@ import pytest
 from app.connectors.okx import (
     OkxAPIError,
     OkxConnector,
+    _okx_note,
+    _subacct_name,
     normalize_asset_networks,
     normalize_deposit_record,
     normalize_funding_balances,
@@ -771,6 +774,124 @@ async def test_create_subaccount_59518(connector, monkeypatch):
         await connector.create_subaccount(
             {"api_key": "k", "secret": "s", "passphrase": "p"}, "label1"
         )
+
+
+def test_subacct_name_is_unique_login():
+    a = _subacct_name("hephaestus")
+    b = _subacct_name("hephaestus")
+    assert a != b
+    assert a.startswith("hephaestus")
+    assert re.fullmatch(r"[A-Za-z0-9]{6,20}", a)
+    assert re.fullmatch(r"[A-Za-z0-9]{6,20}", _subacct_name("bot-01"))
+    assert re.fullmatch(r"[A-Za-z0-9]{6,20}", _subacct_name("套利"))
+
+
+def test_okx_note_strips_punctuation():
+    assert _okx_note("bot-01") == "bot01"
+    assert _okx_note("hephaestus") == "hephaestus"
+    assert _okx_note("") == "cpanel"
+
+
+async def test_create_subaccount_uses_unique_login_keeps_panel_label(connector, monkeypatch):
+    captured = {}
+
+    async def api(method, path, **kwargs):
+        captured["body"] = kwargs["body"]
+        return [{"uid": "42", "subAcct": kwargs["body"]["subAcct"], "label": kwargs["body"]["label"]}]
+
+    monkeypatch.setattr(connector, "_api", api)
+    sub = await connector.create_subaccount(
+        {"api_key": "k", "secret": "s", "passphrase": "p"}, "hephaestus"
+    )
+    assert sub.native_uid == "42"
+    assert sub.label == "hephaestus"
+    assert captured["body"]["subAcct"] != "hephaestus"
+    assert captured["body"]["subAcct"].startswith("hephaestus")
+    assert captured["body"]["label"] == "hephaestus"
+
+
+async def test_create_subaccount_taken_imports_if_ours(connector, monkeypatch):
+    calls = []
+
+    async def api(method, path, **kwargs):
+        calls.append((method, path, kwargs.get("params"), kwargs.get("body")))
+        if method == "POST":
+            raise OkxAPIError(
+                "This sub-account name already exists, try another name.",
+                code="51000",
+                status_code=200,
+            )
+        return [
+            {
+                "uid": "99",
+                "subAcct": kwargs["params"]["subAcct"],
+                "label": "hephaestus",
+                "enable": True,
+            }
+        ]
+
+    monkeypatch.setattr(connector, "_api", api)
+    sub = await connector.create_subaccount(
+        {"api_key": "k", "secret": "s", "passphrase": "p"}, "hephaestus"
+    )
+    assert sub.native_uid == "99"
+    assert any(path.endswith("/list") for _, path, _, _ in calls)
+
+
+async def test_create_subaccount_taken_explains_global_name(connector, monkeypatch):
+    async def api(method, path, **kwargs):
+        if method == "POST":
+            raise OkxAPIError(
+                "This sub-account name already exists, try another name.",
+                code="51000",
+                status_code=200,
+            )
+        return []
+
+    monkeypatch.setattr(connector, "_api", api)
+    with pytest.raises(OkxAPIError, match="globally unique"):
+        await connector.create_subaccount(
+            {"api_key": "k", "secret": "s", "passphrase": "p"}, "hephaestus"
+        )
+
+
+async def test_list_subaccounts_flattens_details_wrapper(connector, monkeypatch):
+    async def api(method, path, **kwargs):
+        return [{"details": [{"uid": "1", "subAcct": "a", "label": "one", "enable": True}]}]
+
+    monkeypatch.setattr(connector, "_api", api)
+    subs = await connector.list_subaccounts(
+        {"api_key": "k", "secret": "s", "passphrase": "p"}
+    )
+    assert [s.native_uid for s in subs] == ["1"]
+    assert subs[0].label == "one"
+
+
+async def test_list_subaccounts_paginates(connector, monkeypatch):
+    page1 = [
+        {"uid": str(i), "subAcct": f"s{i}", "enable": True, "ts": "10"}
+        for i in range(1, 101)
+    ]
+    page1[1]["enable"] = False
+    pages = [
+        page1,
+        [{"uid": "200", "subAcct": "last", "label": "z", "enable": True, "ts": "30"}],
+    ]
+    calls = []
+
+    async def api(method, path, **kwargs):
+        calls.append(kwargs.get("params") or {})
+        return pages.pop(0)
+
+    monkeypatch.setattr(connector, "_api", api)
+    subs = await connector.list_subaccounts(
+        {"api_key": "k", "secret": "s", "passphrase": "p"}
+    )
+    assert len(subs) == 101
+    assert subs[1].status == "frozen"
+    assert subs[-1].native_uid == "200"
+    assert calls[0] == {"limit": "100"}
+    assert calls[1].get("after") == "10"
 
 
 async def test_deposit_address_rejects_subaccount(connector):

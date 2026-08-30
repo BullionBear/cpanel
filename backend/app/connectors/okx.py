@@ -24,6 +24,8 @@ Design decisions and venue quirks:
   create/modify/revoke sub API keys. Master keys are registration-only.
   Create-sub and key mutations require an IP-bound master key; some
   accounts reject create-sub with code ``59518`` (use the web UI).
+  OKX ``subAcct`` is a **globally unique login name** (not per-master), so
+  create derives a suffixed name and keeps the panel nickname in ``label``.
   Sub keys minted via API get ``read_only`` / ``trade`` only (no withdraw).
 - **Order shaping** depends on two account-wide settings read from
   ``/api/v5/account/config`` and cached per API key: ``acctLv`` decides
@@ -496,16 +498,63 @@ def normalize_funding_fee(raw: dict, universal_symbol: str) -> FundingFee:
 
 
 def _subacct_name(label: str) -> str:
-    """Derive a venue-legal subAcct (6–20 alphanumeric) from a panel label."""
+    """Derive a globally unique OKX login name (6–20 alphanumeric).
+
+    ``subAcct`` is an OKX-wide login, not unique per master — a common
+    nickname like ``hephaestus`` will be rejected even when this master
+    has no subaccounts. Suffix a random token like Gate does for login_name.
+    """
     cleaned = re.sub(r"[^A-Za-z0-9]", "", label)
-    if len(cleaned) < 6:
-        cleaned = (cleaned + "okxsub")[:6]
-        if len(cleaned) < 6:
-            cleaned = cleaned.ljust(6, "0")
-    cleaned = cleaned[:20]
-    if not _SUBACCT_RE.match(cleaned):
-        cleaned = f"okx{secrets.token_hex(4)}"[:20]
-    return cleaned
+    if not cleaned:
+        cleaned = "okxsub"
+    # 6-char hex suffix; leave room so the result stays ≤ 20.
+    base = cleaned[:14]
+    if len(base) < 3:
+        base = (base + "okx")[:3]
+    name = f"{base}{secrets.token_hex(3)}"
+    if not _SUBACCT_RE.match(name):
+        name = f"okx{secrets.token_hex(8)}"[:20]
+    return name
+
+
+def _okx_note(label: str, limit: int = 32) -> str:
+    """OKX sub-account / API-key ``label`` is letters and digits only."""
+    cleaned = re.sub(r"[^A-Za-z0-9]", "", label or "")
+    return (cleaned or "cpanel")[:limit]
+
+
+def _is_subacct_taken(exc: OkxAPIError) -> bool:
+    msg = (exc.message or "").lower()
+    return "already exists" in msg or "already exist" in msg
+
+
+def _flatten_subaccount_rows(rows: Any) -> list[dict]:
+    """Accept a flat list or a broker-style ``[{details: [...]}]`` wrapper."""
+    if not rows:
+        return []
+    if (
+        isinstance(rows, list)
+        and len(rows) == 1
+        and isinstance(rows[0], dict)
+        and "details" in rows[0]
+        and "uid" not in rows[0]
+        and "subAcct" not in rows[0]
+    ):
+        inner = rows[0].get("details") or []
+        return [row for row in inner if isinstance(row, dict)]
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _subaccount_info(row: dict, fallback_label: str = "") -> SubaccountInfo:
+    enable = row.get("enable")
+    status = "normal" if enable in (True, "true", "True") else "frozen"
+    sub_acct = str(row.get("subAcct") or "")
+    return SubaccountInfo(
+        native_uid=str(row.get("uid") or sub_acct or ""),
+        label=row.get("label") or sub_acct or fallback_label,
+        status=status,
+        raw=row,
+    )
 
 
 def _scope_perm(permissions: list[str], read_only: bool) -> str:
@@ -1171,49 +1220,97 @@ class OkxConnector(ExchangeConnector):
     # -- provisioning -----------------------------------------------------------
 
     async def list_subaccounts(self, credential: Credential) -> list[SubaccountInfo]:
-        rows = await self._api(
-            "GET", "/api/v5/users/subaccount/list", credential=credential
-        )
         out: list[SubaccountInfo] = []
-        for m in rows or []:
-            enable = m.get("enable")
-            status = "normal" if enable in (True, "true", "True") else "frozen"
-            out.append(
-                SubaccountInfo(
-                    native_uid=str(m.get("uid") or m.get("subAcct") or ""),
-                    label=m.get("label") or m.get("subAcct") or "",
-                    status=status,
-                    raw=m,
+        seen: set[str] = set()
+        after: str | None = None
+        while True:
+            params: dict[str, str] = {"limit": "100"}
+            if after:
+                params["after"] = after
+            rows = _flatten_subaccount_rows(
+                await self._api(
+                    "GET",
+                    "/api/v5/users/subaccount/list",
+                    credential=credential,
+                    params=params,
                 )
             )
+            if not rows:
+                break
+            for row in rows:
+                info = _subaccount_info(row)
+                key = info.native_uid or str(row.get("subAcct") or "")
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                out.append(info)
+            if len(rows) < 100:
+                break
+            after = str(rows[-1].get("ts") or "") or None
+            if not after:
+                break
         return out
 
-    async def create_subaccount(self, credential: Credential, label: str) -> SubaccountInfo:
-        sub_acct = _subacct_name(label)
-        try:
-            rows = await self._api(
-                "POST",
-                "/api/v5/users/subaccount/create-subaccount",
+    async def _lookup_subaccount(
+        self, credential: Credential, sub_acct: str
+    ) -> SubaccountInfo | None:
+        rows = _flatten_subaccount_rows(
+            await self._api(
+                "GET",
+                "/api/v5/users/subaccount/list",
                 credential=credential,
-                body={"subAcct": sub_acct, "type": "1", "label": (label or sub_acct)[:32]},
+                params={"subAcct": sub_acct, "limit": "100"},
             )
-        except OkxAPIError as exc:
-            if exc.code == "59518":
-                raise OkxAPIError(
-                    "OKX rejected sub-account creation via API for this master "
-                    "(code 59518) — create it on the OKX website/app instead",
-                    code=exc.code,
-                    status_code=exc.status_code,
-                ) from exc
-            raise
-        row = (rows or [{}])[0]
-        sub_name = str(row.get("subAcct") or sub_acct)
-        return SubaccountInfo(
-            native_uid=str(row.get("uid") or sub_name),
-            label=row.get("label") or label,
-            status="normal",
-            raw={"subAcct": sub_name, **row},
         )
+        for row in rows:
+            if str(row.get("subAcct") or "") == sub_acct:
+                return _subaccount_info(row)
+        return None
+
+    async def create_subaccount(self, credential: Credential, label: str) -> SubaccountInfo:
+        note = _okx_note(label)
+        last_taken: OkxAPIError | None = None
+        last_name = ""
+        for _ in range(3):
+            sub_acct = _subacct_name(label)
+            last_name = sub_acct
+            try:
+                rows = await self._api(
+                    "POST",
+                    "/api/v5/users/subaccount/create-subaccount",
+                    credential=credential,
+                    body={"subAcct": sub_acct, "type": "1", "label": note},
+                )
+            except OkxAPIError as exc:
+                if exc.code == "59518":
+                    raise OkxAPIError(
+                        "OKX rejected sub-account creation via API for this master "
+                        "(code 59518) — create it on the OKX website/app instead",
+                        code=exc.code,
+                        status_code=exc.status_code,
+                    ) from exc
+                if _is_subacct_taken(exc):
+                    existing = await self._lookup_subaccount(credential, sub_acct)
+                    if existing:
+                        return existing
+                    last_taken = exc
+                    continue
+                raise
+            row = (rows or [{}])[0]
+            sub_name = str(row.get("subAcct") or sub_acct)
+            return SubaccountInfo(
+                native_uid=str(row.get("uid") or sub_name),
+                label=label,
+                status="normal",
+                raw={"subAcct": sub_name, **row},
+            )
+        raise OkxAPIError(
+            "OKX login names are globally unique — "
+            f"{last_name!r} is already taken by another OKX account, not this master. "
+            "Try a different nickname.",
+            code=last_taken.code if last_taken else None,
+            status_code=last_taken.status_code if last_taken else None,
+        ) from last_taken
 
     async def _sub_acct_for(self, credential: Credential, subaccount: str) -> str:
         """OKX key APIs want subAcct name; the panel may store the numeric uid."""
@@ -1239,7 +1336,7 @@ class OkxConnector(ExchangeConnector):
         passphrase = _okx_passphrase()
         body: dict[str, Any] = {
             "subAcct": await self._sub_acct_for(credential, subaccount),
-            "label": (note or "cpanel")[:50],
+            "label": _okx_note(note or "cpanel", limit=50),
             "passphrase": passphrase,
             "perm": _scope_perm(permissions, read_only),
         }
