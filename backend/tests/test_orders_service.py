@@ -39,7 +39,9 @@ async def test_place_order_rounds_and_records(db, connector):
     assert row.qty == Decimal("0.12345")       # rounded down to step 0.00001
     assert row.price == Decimal("60000.01")    # rounded to tick 0.01
     assert row.native_order_id is not None
-    assert row.client_order_id.startswith("cpanel-")
+    assert row.client_order_id.startswith("cpanel")
+    # OKX rejects a clOrdId with any non-alphanumeric character.
+    assert row.client_order_id.isalnum()
 
 
 async def test_market_order_has_no_price(db, connector):

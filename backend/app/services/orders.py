@@ -147,7 +147,9 @@ def check_guardrails(
 # -- helpers ------------------------------------------------------------------
 
 def _new_client_order_id() -> str:
-    return f"cpanel-{uuid.uuid4().hex[:16]}"
+    # Alphanumeric only, no separator: OKX rejects any other character in
+    # clOrdId, and every other venue accepts the narrower charset.
+    return f"cpanel{uuid.uuid4().hex[:16]}"
 
 
 async def _ticker(db: AsyncSession, exchange: str, universal_symbol: str) -> UniversalTicker:

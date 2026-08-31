@@ -9,6 +9,7 @@ import pytest
 from app.connectors.okx import (
     OkxAPIError,
     OkxConnector,
+    _error_message,
     _okx_note,
     _subacct_name,
     normalize_asset_networks,
@@ -427,6 +428,21 @@ def _posted_body(calls):
     return next(
         c[2] for c in calls if c[0] == "POST" and c[1] == "/api/v5/trade/order"
     )
+
+
+def test_error_message_prefers_the_per_order_reason():
+    """code=1 says only "All operations failed" — the reason is in data[0]."""
+    payload = {
+        "code": "1",
+        "msg": "All operations failed",
+        "data": [{"ordId": "", "sCode": "51000", "sMsg": "Parameter clOrdId error"}],
+    }
+    assert _error_message(payload, "1") == "Parameter clOrdId error (sCode 51000)"
+
+
+def test_error_message_falls_back_to_the_top_level_msg():
+    payload = {"code": "50113", "msg": "Invalid Sign", "data": []}
+    assert _error_message(payload, "50113") == "Invalid Sign"
 
 
 async def test_place_spot_limit_shapes_request(connector, monkeypatch):

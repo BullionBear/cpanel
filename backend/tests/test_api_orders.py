@@ -74,7 +74,7 @@ async def test_place_and_list(client):
     assert resp.status_code == 201
     body = resp.json()
     assert body["status"] == "OPEN"
-    assert body["client_order_id"].startswith("cpanel-")
+    assert body["client_order_id"].startswith("cpanel")
     assert Decimal(body["qty"]) == Decimal("0.01")
 
     listed = (await client.get("/orders")).json()

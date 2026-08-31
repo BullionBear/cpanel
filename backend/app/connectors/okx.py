@@ -33,7 +33,10 @@ Design decisions and venue quirks:
   reject ``cash``), and ``posMode`` decides whether ``posSide`` may be
   ``net`` or must be ``long``/``short``. Neither is settable over the API.
   Spot market orders pass ``tgtCcy=base_ccy`` because OKX otherwise reads a
-  market buy's ``sz`` as a quote amount.
+  market buy's ``sz`` as a quote amount. ``clOrdId`` must be alphanumeric
+  (max 32) — a dash is rejected, so the panel's ids carry no separator.
+- **Errors** on the order endpoints arrive as ``code=1`` / "All operations
+  failed" with the real rejection in ``data[0].sCode``/``sMsg``.
 """
 from __future__ import annotations
 
@@ -567,6 +570,24 @@ def _scope_perm(permissions: list[str], read_only: bool) -> str:
     return "read_only"
 
 
+def _error_message(payload: dict, code: str) -> str:
+    """Readable reason for a failed OKX call.
+
+    The batch-shaped endpoints — ``/trade/order`` among them — answer with
+    ``code=1`` and the useless top-level msg "All operations failed", keeping
+    the actual rejection in ``data[0].sCode``/``sMsg``. Report that instead,
+    or every order failure looks identical.
+    """
+    for row in payload.get("data") or []:
+        if not isinstance(row, dict):
+            continue
+        s_code = str(row.get("sCode") or "")
+        if s_code and s_code != "0":
+            detail = str(row.get("sMsg") or "").strip()
+            return f"{detail or 'order rejected'} (sCode {s_code})"
+    return str(payload.get("msg") or "") or f"OKX error code={code}"
+
+
 def _spot_td_mode(acct_lv: str) -> str:
     """Trade mode for a spot order, given the account's ``acctLv``.
 
@@ -665,7 +686,7 @@ class OkxConnector(ExchangeConnector):
         code = str(payload.get("code", ""))
         if not resp.is_success or code != "0":
             raise OkxAPIError(
-                payload.get("msg") or f"OKX error code={code}",
+                _error_message(payload, code),
                 code=code or None,
                 status_code=resp.status_code,
             )
