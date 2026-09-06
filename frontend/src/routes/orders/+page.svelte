@@ -219,7 +219,7 @@
 							<li>
 								<button type="button" on:click={() => pickSymbol(s)}>
 									<span class="mono">{s.universal_symbol}</span>
-									<span class="dim">{s.market_type}</span>
+									<span class="dim">{s.native_symbol ?? s.market_type}</span>
 								</button>
 							</li>
 						{/each}

@@ -32,6 +32,7 @@ from app.services.accounts import AccountError, decrypt_credential, get_active_c
 __all__ = [
     "AccountError",
     "QUOTE_ASSET",
+    "STABLE_ASSETS",
     "capture_snapshots",
     "latest_batch",
     "get_holdings",
@@ -45,7 +46,9 @@ __all__ = [
 QUOTE_ASSET = "USDT"
 
 # Assets treated as 1:1 with the quote asset when no direct market exists.
-_STABLE_ASSETS = {"USDT", "USDC", "USD", "BUSD", "FDUSD", "DAI", "TUSD"}
+# History stream discovery uses the same set to split spot coins into the
+# stable / non-stable bipartite (see ``active_symbols``).
+STABLE_ASSETS = frozenset({"USDT", "USDC", "USD", "BUSD", "FDUSD", "DAI", "TUSD"})
 
 
 async def _price_map(db: AsyncSession, exchange: str) -> dict[str, Decimal]:
@@ -64,7 +67,7 @@ async def _price_map(db: AsyncSession, exchange: str) -> dict[str, Decimal]:
 def _value_in_quote(asset: str, amount: Decimal, prices: dict[str, Decimal]) -> Decimal | None:
     if amount == 0:
         return Decimal("0")
-    if asset == QUOTE_ASSET or asset in _STABLE_ASSETS:
+    if asset == QUOTE_ASSET or asset in STABLE_ASSETS:
         return amount
     price = prices.get(asset)
     return amount * price if price is not None else None

@@ -188,6 +188,62 @@ the UI from `expiredAt` / `deadlineDay`.
 
 ---
 
+## Deribit
+
+Account management is served from `https://www.deribit.com/api/v2` (JSON-RPC).
+Credentials are **Client ID + Client Secret** (HMAC, no passphrase). The
+connector signs each private REST call with `Authorization: deri-hmac-sha256`.
+Subaccounts are numeric `id`s; a key minted on a sub is created after
+`public/auth` + `public/exchange_token` because `create_api_key` always
+targets the authenticated subject.
+
+### Credential verification & account info
+
+| Op | Method | Notes | Status |
+|---|---|---|---|
+| Account summaries | `private/get_account_summaries?extended=true` | `id`, `type` (`main` / `subaccount`), per-currency equity. | ✅ |
+| List API keys | `private/list_api_keys` | Match `client_id` to read `max_scope` and `ip_whitelist`. | ✅ |
+
+**Verification model.** `type=main` → master. Scopes on the calling key map
+`trade:*` → can-trade and `wallet:read_write` → can-withdraw. Missing
+`list_api_keys` (narrow key) still verifies as valid from the summaries call.
+
+### Subaccount lifecycle (master account)
+
+| Op | Method | Notes | Status |
+|---|---|---|---|
+| List subaccounts | `private/get_subaccounts` | `id`, `username`, `login_enabled`. | ✅ |
+| Create subaccount | `private/create_subaccount` | No name on create. | ✅ |
+| Rename | `private/change_subaccount_name` | `sid` + name (`[A-Za-z0-9_]`, ≤16). Used after create. | ✅ |
+| Freeze / unfreeze | — | 🚫 no venue equivalent (login toggle is 2FA-gated and not a freeze). | 🚫 |
+
+### API-key lifecycle
+
+| Op | Method | Notes | Status |
+|---|---|---|---|
+| Create key | `private/create_api_key` | `max_scope`, `name` ≤16. Secret returned once. Sub keys via `exchange_token`. | ✅ |
+| Change scope | `private/change_scope_in_api_key` | Numeric key `id` (looked up from `client_id`). | ✅ |
+| Remove key | `private/remove_api_key` | Numeric key `id`. | ✅ |
+| List keys | `private/list_api_keys` | No secrets. | ✅ |
+
+Panel scope tokens: `derivatives` / `spot` → `trade:read` (+ `trade:write` when
+not read-only); `wallet` → `wallet:read` (+ `wallet:read_write`). `account:read`
+is always granted so verify works. Deribit trade is not split by market.
+
+**TFA:** `create_api_key` is documented as TFA-required on some accounts. If
+the venue rejects with `security_key_authorization_error`, the operator must
+create that key on Deribit and paste it into CPanel.
+
+### Current connector capabilities (Deribit)
+
+`INSTRUMENTS`, `REFERENCE_PRICES`, `CREDENTIAL_VERIFY`, `BALANCES`,
+`POSITIONS`, `ORDERS`, `TRADE_HISTORY`, `ORDER_HISTORY`, `SUBACCOUNT_LIST`,
+`SUBACCOUNT_CREATE`, `API_KEY_CREATE`, `API_KEY_MODIFY`, `API_KEY_REVOKE`,
+`TRANSFERS`, `WITHDRAWALS`, `DEPOSITS`, `FUNDING_HISTORY`,
+`INTERNAL_TRANSFER_HISTORY`. HMAC only. No freeze.
+
+---
+
 ## Implications for the Accounts-page redesign
 
 1. **Asymmetric provisioning.** The UI can offer the full create-sub →

@@ -7,6 +7,7 @@ from app.api import api_router
 from app.connectors.binance import BinanceConnector
 from app.connectors.bitget import BitgetConnector
 from app.connectors.bybit import BybitConnector
+from app.connectors.deribit import DeribitConnector
 from app.connectors.gateio import GateIOConnector
 from app.connectors.okx import OkxConnector
 from app.connectors.registry import connectors
@@ -23,7 +24,7 @@ from app.jobs.symbols import make_instrument_refresh, make_price_refresh
 from app.jobs.transfers import make_transfer_progress_job
 from app.middleware.activity_audit import ActivityAuditMiddleware
 
-EXCHANGES = ["BINANCE", "BYBIT", "GATEIO", "BITGET", "OKX"]
+EXCHANGES = ["BINANCE", "BYBIT", "GATEIO", "BITGET", "OKX", "DERIBIT"]
 
 
 def setup_connectors() -> None:
@@ -33,11 +34,13 @@ def setup_connectors() -> None:
     gateio_bucket = rate_limiters.configure("GATEIO", rate=5, capacity=10)
     bitget_bucket = rate_limiters.configure("BITGET", rate=5, capacity=10)
     okx_bucket = rate_limiters.configure("OKX", rate=5, capacity=10)
+    deribit_bucket = rate_limiters.configure("DERIBIT", rate=5, capacity=10)
     connectors.register(BinanceConnector(bucket=binance_bucket))
     connectors.register(BybitConnector(bucket=bybit_bucket))
     connectors.register(GateIOConnector(bucket=gateio_bucket))
     connectors.register(BitgetConnector(bucket=bitget_bucket))
     connectors.register(OkxConnector(bucket=okx_bucket))
+    connectors.register(DeribitConnector(bucket=deribit_bucket))
 
 
 def setup_jobs() -> None:

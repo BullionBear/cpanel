@@ -43,6 +43,14 @@
 				{ id: 'readme', name: 'Readme' },
 				{ id: 'account', name: 'Account' }
 			]
+		},
+		{
+			slug: 'deribit',
+			name: 'Deribit',
+			tabs: [
+				{ id: 'readme', name: 'Readme' },
+				{ id: 'account', name: 'Account' }
+			]
 		}
 	];
 

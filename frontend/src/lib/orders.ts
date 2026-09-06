@@ -47,6 +47,7 @@ export interface SymbolInfo {
 	universal_symbol: string;
 	exchange: string;
 	market_type: string;
+	native_symbol?: string;
 	base_asset: string;
 	quote_asset: string;
 	price_tick: string;
@@ -54,6 +55,8 @@ export interface SymbolInfo {
 	min_qty: string;
 	max_qty: string | null;
 	min_notional: string | null;
+	settle_asset?: string | null;
+	expiry?: string | null;
 	status: string;
 	last_price: string | null;
 }

@@ -15,18 +15,19 @@ what reconciliation needs, and anything older can be re-seeded by hand.
 Stream sets are connector strategy: Bybit returns its fixed account-wide
 streams for trades/orders; Binance returns one stream per *active* symbol,
 where activity is derived from panel orders, previously ingested order
-history, and snapshotted positions (querying every listed instrument would
-waste the rate budget on thousands of empty calls). Deposit and withdrawal
-history is always account-wide (``fund_history_stream_keys``). Funding-fee
-history is per derivatives surface (``funding_history_stream_keys``).
-Internal-transfer streams additionally depend on whether the account is a
-main or a sub (``internal_transfer_stream_keys``), since only a subaccount
-can ask the venue about its transfers to and from its master.
+history, snapshotted positions, and the latest balance snapshot (querying
+every listed instrument would waste the rate budget on thousands of empty
+calls). Deposit and withdrawal history is always account-wide
+(``fund_history_stream_keys``). Funding-fee history is per derivatives
+surface (``funding_history_stream_keys``). Internal-transfer streams
+additionally depend on whether the account is a main or a sub
+(``internal_transfer_stream_keys``), since only a subaccount can ask the
+venue about its transfers to and from its master.
 """
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.connectors.base import (
@@ -38,9 +39,11 @@ from app.connectors.types import (
     Deposit as ConnDeposit,
     FundingFee as ConnFundingFee,
     InternalTransfer as ConnInternalTransfer,
+    MarketType,
     Order as ConnOrder,
     OrderStatus,
     Trade as ConnTrade,
+    WalletType,
     Withdrawal as ConnWithdrawal,
 )
 from app.models.account import Account
@@ -54,8 +57,10 @@ from app.models.history import (
     WithdrawalHistory,
 )
 from app.models.order import Order
-from app.models.snapshot import PositionSnapshot
+from app.models.snapshot import BalanceSnapshot, PositionSnapshot
+from app.models.universal_ticker import UniversalTicker
 from app.services.accounts import AccountError, decrypt_credential, get_active_credential
+from app.services.snapshots import STABLE_ASSETS, get_holdings
 
 logger = logging.getLogger(__name__)
 
@@ -87,14 +92,130 @@ DATA_KINDS = (
 MAX_PAGES_PER_RUN = 20
 
 
+# Latest-batch wallets treated as the spot book (classic vs unified).
+_SPOT_WALLETS_CLASSIC = frozenset({WalletType.SPOT})
+_SPOT_WALLETS_UNIFIED = frozenset({WalletType.UNIFIED, WalletType.SPOT})
+# Coin-margined collateral: classic CM wallet, or the unified book itself.
+_CM_WALLETS_CLASSIC = frozenset({WalletType.CMARGIN})
+_CM_WALLETS_UNIFIED = frozenset({WalletType.UNIFIED, WalletType.CMARGIN})
+
+
 # -- stream discovery ----------------------------------------------------------
+
+def _non_stable_assets(assets: set[str]) -> set[str]:
+    return {asset for asset in assets if asset not in STABLE_ASSETS}
+
+
+def _assets_in_wallets(
+    by_wallet: dict[str, set[str]], wallets: frozenset[WalletType]
+) -> set[str]:
+    assets: set[str] = set()
+    for wallet in wallets:
+        assets.update(by_wallet.get(wallet.value, ()))
+    return assets
+
+
+async def _spot_pairs_from_assets(
+    db: AsyncSession, exchange: str, assets: set[str]
+) -> set[str]:
+    """Listed SPOT pairs on the complete bipartite graph stables × coins.
+
+    Cross pairs between two non-stables (ETHBTC) are not implied by holdings;
+    those only enter ``active_symbols`` if they already appear in orders,
+    order history, or positions.
+    """
+    stables = {asset for asset in assets if asset in STABLE_ASSETS}
+    coins = _non_stable_assets(assets)
+    if not stables or not coins:
+        return set()
+    result = await db.execute(
+        select(UniversalTicker.universal_symbol).where(
+            UniversalTicker.exchange == exchange,
+            UniversalTicker.market_type == MarketType.SPOT.value,
+            UniversalTicker.base_asset.in_(coins),
+            UniversalTicker.quote_asset.in_(stables),
+        )
+    )
+    return set(result.scalars())
+
+
+async def _cm_symbols_from_assets(
+    db: AsyncSession, exchange: str, coins: set[str]
+) -> set[str]:
+    """Listed CMARGIN instruments collateralized by (or based on) ``coins``."""
+    if not coins:
+        return set()
+    result = await db.execute(
+        select(UniversalTicker.universal_symbol).where(
+            UniversalTicker.exchange == exchange,
+            UniversalTicker.market_type == MarketType.CMARGIN.value,
+            or_(
+                UniversalTicker.base_asset.in_(coins),
+                UniversalTicker.settle_asset.in_(coins),
+            ),
+        )
+    )
+    return set(result.scalars())
+
+
+async def _symbols_from_latest_balances(
+    db: AsyncSession, account: Account
+) -> set[str]:
+    """Discover per-symbol streams from the latest balance snapshot.
+
+    Classic accounts (SPOT / UMARGIN / CMARGIN wallets):
+
+    1. Spot — split coins into stables X and non-stables Y; keep every listed
+       SPOT pair on the complete bipartite graph X×Y (BTC+ETH+USDT+USDC →
+       BTCUSDT, BTCUSDC, ETHUSDT, ETHUSDC). ETHBTC is not implied.
+    2. UM futures — *not* from the UMARGIN wallet (that is mostly USDT and
+       would fan out to every linear contract). Positions are the source, and
+       those are unioned separately from ``position_snapshot``.
+    3. CM futures — every listed CMARGIN instrument whose base or settle
+       matches a non-stable in the CMARGIN wallet.
+
+    Unified accounts apply all three against the UNIFIED book (spot bipartite
+    + CMARGIN lookup on the same coins). A UNIFIED row in the latest batch is
+    what selects that path.
+    """
+    balances, _, _ = await get_holdings(db, account.id)
+    by_wallet: dict[str, set[str]] = {}
+    for balance in balances:
+        if balance.total <= 0:
+            continue
+        by_wallet.setdefault(balance.wallet, set()).add(balance.asset)
+    if not by_wallet:
+        return set()
+
+    unified = WalletType.UNIFIED.value in by_wallet
+    if unified:
+        spot_assets = _assets_in_wallets(by_wallet, _SPOT_WALLETS_UNIFIED)
+        cm_coins = _non_stable_assets(_assets_in_wallets(by_wallet, _CM_WALLETS_UNIFIED))
+    else:
+        spot_assets = _assets_in_wallets(by_wallet, _SPOT_WALLETS_CLASSIC)
+        cm_coins = _non_stable_assets(_assets_in_wallets(by_wallet, _CM_WALLETS_CLASSIC))
+
+    symbols = await _spot_pairs_from_assets(db, account.exchange, spot_assets)
+    symbols.update(await _cm_symbols_from_assets(db, account.exchange, cm_coins))
+    return symbols
+
 
 async def active_symbols(db: AsyncSession, account: Account) -> list[str]:
     """Symbols this account has shown activity on (for per-symbol venues).
 
-    Union of panel orders, already-ingested order history, and the latest
-    position snapshot. Order history feeding back into the set means a symbol
-    discovered once keeps syncing even after its panel orders age out.
+    Union of:
+
+    - panel orders and already-ingested order history (once seen, keep
+      syncing — including non-stable crosses like ETHBTC that holdings
+      never imply)
+    - every ``position_snapshot`` row (UM / linear; also any leftover CM
+      position)
+    - the latest ``balance_snapshot``: spot stables×coins bipartite, plus
+      CMARGIN instruments implied by coin-margined collateral. Unified
+      accounts apply both of those against the UNIFIED wallet.
+
+    Order history feeding back into the set means a symbol discovered once
+    keeps syncing even after its panel orders age out.
     """
     symbols: set[str] = set()
     for column, condition in (
@@ -104,6 +225,7 @@ async def active_symbols(db: AsyncSession, account: Account) -> list[str]:
     ):
         result = await db.execute(select(column).where(condition).distinct())
         symbols.update(result.scalars())
+    symbols.update(await _symbols_from_latest_balances(db, account))
     return sorted(symbols)
 
 
@@ -538,7 +660,8 @@ async def sync_account_history(
     ]
     if trade_order_kinds:
         # Only resolved when a trade/order stream is actually supported — it
-        # costs three queries to work out which symbols are active.
+        # costs a handful of queries (orders, positions, latest balances,
+        # matching tickers) to work out which symbols are active.
         symbol_streams = connector.history_stream_keys(await active_symbols(db, account))
         plans += [(kind, symbol_streams) for kind in trade_order_kinds]
 

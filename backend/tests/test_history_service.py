@@ -12,6 +12,7 @@ from app.connectors.types import (
     InternalTransferDirection,
     InternalTransferScope,
     InternalTransferStatus,
+    MarketType,
     Order,
     OrderRequest,
     OrderSide,
@@ -28,6 +29,8 @@ from app.models.history import (
     TradeHistory,
     WithdrawalHistory,
 )
+from app.models.snapshot import BalanceSnapshot, PositionSnapshot, SnapshotBatch
+from app.models.universal_ticker import UniversalTicker
 from app.services import accounts as accounts_svc
 from app.services import history as svc
 
@@ -461,3 +464,292 @@ async def test_active_symbols_union(db, connector):
 
     symbols = await svc.active_symbols(db, account)
     assert symbols == ["FAKE_SPOT_BTCUSDT"]
+
+
+def _ticker(
+    symbol: str,
+    *,
+    market: MarketType,
+    base: str,
+    quote: str,
+    settle: str | None = None,
+    exchange: str = "FAKE",
+) -> UniversalTicker:
+    return UniversalTicker(
+        universal_symbol=symbol,
+        exchange=exchange,
+        market_type=market.value,
+        native_symbol=f"{base}{quote}",
+        base_asset=base,
+        quote_asset=quote,
+        price_tick=Decimal("0.01"),
+        qty_step=Decimal("0.001"),
+        min_qty=Decimal("0.001"),
+        settle_asset=settle,
+        status="active",
+    )
+
+
+async def _write_holdings(
+    db,
+    account,
+    balances: list[tuple[WalletType | str, str, str]],
+    positions: list[str] | None = None,
+):
+    """One snapshot batch: ``(wallet, asset, total)`` plus optional position symbols."""
+    batch_id = f"batch-{account.id}-{len(balances)}"
+    taken_at = datetime.now(timezone.utc)
+    for wallet, asset, total in balances:
+        amount = Decimal(total)
+        db.add(
+            BalanceSnapshot(
+                batch_id=batch_id,
+                account_id=account.id,
+                exchange=account.exchange,
+                wallet=wallet.value if isinstance(wallet, WalletType) else wallet,
+                asset=asset,
+                free=amount,
+                locked=Decimal("0"),
+                total=amount,
+                taken_at=taken_at,
+            )
+        )
+    for symbol in positions or []:
+        db.add(
+            PositionSnapshot(
+                batch_id=batch_id,
+                account_id=account.id,
+                exchange=account.exchange,
+                universal_symbol=symbol,
+                side="long",
+                size=Decimal("1"),
+                entry_price=Decimal("1"),
+                taken_at=taken_at,
+            )
+        )
+    db.add(
+        SnapshotBatch(
+            batch_id=batch_id,
+            account_id=account.id,
+            exchange=account.exchange,
+            balance_rows=len(balances),
+            position_rows=len(positions or []),
+            taken_at=taken_at,
+        )
+    )
+    await db.flush()
+
+
+async def test_active_symbols_spot_bipartite_from_balances(db, connector):
+    """Classic spot: stables × coins, verified against listed instruments."""
+    account = await _account_with_key(db, connector)
+    db.add_all(
+        [
+            _ticker("FAKE_SPOT_BTCUSDT", market=MarketType.SPOT, base="BTC", quote="USDT"),
+            _ticker("FAKE_SPOT_BTCUSDC", market=MarketType.SPOT, base="BTC", quote="USDC"),
+            _ticker("FAKE_SPOT_ETHUSDT", market=MarketType.SPOT, base="ETH", quote="USDT"),
+            _ticker("FAKE_SPOT_ETHUSDC", market=MarketType.SPOT, base="ETH", quote="USDC"),
+            _ticker("FAKE_SPOT_ETHBTC", market=MarketType.SPOT, base="ETH", quote="BTC"),
+        ]
+    )
+    await _write_holdings(
+        db,
+        account,
+        [
+            (WalletType.SPOT, "BTC", "0.5"),
+            (WalletType.SPOT, "ETH", "2"),
+            (WalletType.SPOT, "USDT", "100"),
+            (WalletType.SPOT, "USDC", "50"),
+        ],
+    )
+
+    symbols = await svc.active_symbols(db, account)
+    assert symbols == [
+        "FAKE_SPOT_BTCUSDC",
+        "FAKE_SPOT_BTCUSDT",
+        "FAKE_SPOT_ETHUSDC",
+        "FAKE_SPOT_ETHUSDT",
+    ]
+
+
+async def test_active_symbols_spot_ignores_funding_and_unlisted(db, connector):
+    """FUNDING stables do not complete the bipartite; unlisted pairs stay out."""
+    account = await _account_with_key(db, connector)
+    db.add(_ticker("FAKE_SPOT_BTCUSDT", market=MarketType.SPOT, base="BTC", quote="USDT"))
+    await _write_holdings(
+        db,
+        account,
+        [
+            (WalletType.SPOT, "BTC", "0.1"),
+            (WalletType.FUNDING, "USDT", "950"),
+        ],
+    )
+
+    assert await svc.active_symbols(db, account) == []
+
+
+async def test_active_symbols_um_from_positions_not_umargin_wallet(db, connector):
+    """USD-M streams come from positions, not from holding USDT in UMARGIN."""
+    account = await _account_with_key(db, connector)
+    db.add_all(
+        [
+            _ticker(
+                "FAKE_PERP_BTCUSDT",
+                market=MarketType.PERP,
+                base="BTC",
+                quote="USDT",
+                settle="USDT",
+            ),
+            _ticker(
+                "FAKE_PERP_ETHUSDT",
+                market=MarketType.PERP,
+                base="ETH",
+                quote="USDT",
+                settle="USDT",
+            ),
+        ]
+    )
+    await _write_holdings(
+        db,
+        account,
+        [(WalletType.UMARGIN, "USDT", "5000")],
+        positions=["FAKE_PERP_ETHUSDT"],
+    )
+
+    assert await svc.active_symbols(db, account) == ["FAKE_PERP_ETHUSDT"]
+
+
+async def test_active_symbols_cm_from_cmargin_balance(db, connector):
+    """Classic CM: coin in the CMARGIN wallet → listed inverse instruments."""
+    account = await _account_with_key(db, connector)
+    db.add_all(
+        [
+            _ticker(
+                "FAKE_CMARGIN_BTCUSD",
+                market=MarketType.CMARGIN,
+                base="BTC",
+                quote="USD",
+                settle="BTC",
+            ),
+            _ticker(
+                "FAKE_CMARGIN_ETHUSD",
+                market=MarketType.CMARGIN,
+                base="ETH",
+                quote="USD",
+                settle="ETH",
+            ),
+            _ticker("FAKE_SPOT_BTCUSDT", market=MarketType.SPOT, base="BTC", quote="USDT"),
+        ]
+    )
+    await _write_holdings(db, account, [(WalletType.CMARGIN, "BTC", "0.2")])
+
+    assert await svc.active_symbols(db, account) == ["FAKE_CMARGIN_BTCUSD"]
+
+
+async def test_active_symbols_classic_spot_does_not_imply_cm(db, connector):
+    """Spot BTC is not CM collateral on a classic account."""
+    account = await _account_with_key(db, connector)
+    db.add_all(
+        [
+            _ticker("FAKE_SPOT_BTCUSDT", market=MarketType.SPOT, base="BTC", quote="USDT"),
+            _ticker(
+                "FAKE_CMARGIN_BTCUSD",
+                market=MarketType.CMARGIN,
+                base="BTC",
+                quote="USD",
+                settle="BTC",
+            ),
+        ]
+    )
+    await _write_holdings(
+        db,
+        account,
+        [(WalletType.SPOT, "BTC", "0.1"), (WalletType.SPOT, "USDT", "10")],
+    )
+
+    assert await svc.active_symbols(db, account) == ["FAKE_SPOT_BTCUSDT"]
+
+
+async def test_active_symbols_unified_applies_spot_and_cm(db, connector):
+    """Unified book: spot bipartite plus CM lookup on the same coins."""
+    account = await _account_with_key(db, connector)
+    db.add_all(
+        [
+            _ticker("FAKE_SPOT_BTCUSDT", market=MarketType.SPOT, base="BTC", quote="USDT"),
+            _ticker("FAKE_SPOT_ETHUSDT", market=MarketType.SPOT, base="ETH", quote="USDT"),
+            _ticker("FAKE_SPOT_ETHBTC", market=MarketType.SPOT, base="ETH", quote="BTC"),
+            _ticker(
+                "FAKE_CMARGIN_BTCUSD",
+                market=MarketType.CMARGIN,
+                base="BTC",
+                quote="USD",
+                settle="BTC",
+            ),
+            _ticker(
+                "FAKE_PERP_BTCUSDT",
+                market=MarketType.PERP,
+                base="BTC",
+                quote="USDT",
+                settle="USDT",
+            ),
+        ]
+    )
+    await _write_holdings(
+        db,
+        account,
+        [
+            (WalletType.UNIFIED, "BTC", "0.4"),
+            (WalletType.UNIFIED, "ETH", "1"),
+            (WalletType.UNIFIED, "USDT", "200"),
+        ],
+        positions=["FAKE_PERP_BTCUSDT"],
+    )
+
+    assert await svc.active_symbols(db, account) == [
+        "FAKE_CMARGIN_BTCUSD",
+        "FAKE_PERP_BTCUSDT",
+        "FAKE_SPOT_BTCUSDT",
+        "FAKE_SPOT_ETHUSDT",
+    ]
+
+
+async def test_active_symbols_skips_zero_balances(db, connector):
+    account = await _account_with_key(db, connector)
+    db.add(_ticker("FAKE_SPOT_BTCUSDT", market=MarketType.SPOT, base="BTC", quote="USDT"))
+    await _write_holdings(
+        db,
+        account,
+        [
+            (WalletType.SPOT, "BTC", "0"),
+            (WalletType.SPOT, "USDT", "100"),
+        ],
+    )
+
+    assert await svc.active_symbols(db, account) == []
+
+
+async def test_active_symbols_keeps_traded_cross_pair(db, connector):
+    """ETHBTC is excluded from the bipartite unless already traded."""
+    account = await _account_with_key(db, connector)
+    db.add_all(
+        [
+            _ticker("FAKE_SPOT_BTCUSDT", market=MarketType.SPOT, base="BTC", quote="USDT"),
+            _ticker("FAKE_SPOT_ETHBTC", market=MarketType.SPOT, base="ETH", quote="BTC"),
+        ]
+    )
+    await _write_holdings(
+        db,
+        account,
+        [
+            (WalletType.SPOT, "BTC", "1"),
+            (WalletType.SPOT, "ETH", "1"),
+            (WalletType.SPOT, "USDT", "10"),
+        ],
+    )
+    await _fill_orders(connector, 1, symbol="FAKE_SPOT_ETHBTC")
+    await svc.sync_stream(db, connector, account, "orders", "account")
+
+    assert await svc.active_symbols(db, account) == [
+        "FAKE_SPOT_BTCUSDT",
+        "FAKE_SPOT_ETHBTC",
+    ]

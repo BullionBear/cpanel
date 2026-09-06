@@ -152,7 +152,7 @@ module docstring of the new connector (see the tops of `binance.py` /
 3. **Symbol mapping.** How native symbols become universal symbols
    (`EXCHANGE_MARKETTYPE_BASEQUOTE`, built by
    `connectors/symbols.build_universal_symbol`). Decide which instruments are
-   skipped (delivery futures, weird quotes) and how the reverse map is warmed
+   skipped (delivery futures, options, weird quotes) and how the reverse map is warmed
    (both existing connectors build `(market_type, native_symbol) →
    universal_symbol` maps in `fetch_instruments`).
 
