@@ -829,7 +829,7 @@ class BitgetConnector(ExchangeConnector):
                 errors.append(exc)
                 logger.debug("Bitget %s positions unavailable: %s", category, exc)
                 continue
-            positions.extend(normalize_positions(rows, market_type, self._native_map))
+            positions.extend(normalize_positions(rows, category, self._native_map))
         if errors and len(errors) == len(_FUTURE_CATEGORIES):
             raise errors[0]
         return positions
