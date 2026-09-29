@@ -54,8 +54,8 @@ explicitly: each connector declares `wallets: tuple[WalletType, ...]` — the
 wallets that actually exist on that venue, in display order.
 
 - What wallets does the venue have, and which subset does the panel need?
-  (Binance/Bitget: `SPOT`, `FUNDING`, `UMARGIN`, `CMARGIN`. Gate.io:
-  `SPOT`, `UMARGIN`, `CMARGIN`. Bybit UTA: just `UNIFIED` and `FUNDING`.)
+  (Binance: `SPOT`, `FUNDING`, `UMARGIN`, `CMARGIN`. Gate.io:
+  `SPOT`, `UMARGIN`, `CMARGIN`. Bitget UTA and Bybit UTA: `UNIFIED` and `FUNDING`.)
   Extend `WalletType` only if the venue truly has a wallet kind no existing
   value describes. USD-M and coin-M futures are separate wallets whenever
   the venue keeps them apart.

@@ -109,15 +109,15 @@ const SPEC = {
 		reduceOnly: false,
 		positionModes: [],
 		contracts: false,
-		hint: 'Post-only routes as force=post_only. Market orders use IOC.'
+		hint: 'Unified account. Post-only is timeInForce=post_only. Market buys are converted from base qty to quote size.'
 	},
 	bitgetPerp: {
 		orderTypes: ['LIMIT', 'MARKET'],
 		tif: FULL_TIF,
 		reduceOnly: true,
 		positionModes: [],
-		contracts: true,
-		hint: 'USDT-M perpetual: quantity is in contracts; one-way position mode.'
+		contracts: false,
+		hint: 'USDT-M perpetual on the unified account. Quantity is in the base coin; one-way unless a position side is set.'
 	},
 	bitgetInverse: {
 		orderTypes: ['LIMIT', 'MARKET'],
@@ -125,7 +125,7 @@ const SPEC = {
 		reduceOnly: true,
 		positionModes: [],
 		contracts: true,
-		hint: 'Coin-margined: quantity is in contracts; one-way position mode.'
+		hint: 'Coin-M perpetual (BTCUSD_CM). Quantity is in contracts; one-way unless a position side is set.'
 	},
 	okxSpot: {
 		orderTypes: ['LIMIT', 'MARKET'],
