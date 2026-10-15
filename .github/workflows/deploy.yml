@@ -34,6 +34,21 @@ jobs:
           target: ${{ env.DEPLOY_PATH }}
           strip_components: 1
 
+      # The database is only reachable from the server (over Tailscale), so
+      # migrations run there rather than on the GitHub runner. migration/models
+      # imports backend/app/models, so both go up in the repo's layout. `rm`
+      # clears the target first so a revision deleted from the repo does not
+      # linger.
+      - name: Sync migrations to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "migration,backend/app/__init__.py,backend/app/models"
+          target: ${{ env.DEPLOY_PATH }}/migration-src
+          rm: true
+
       - name: Deploy to production server
         id: deploy
         uses: appleboy/ssh-action@v1.0.3
@@ -55,6 +70,16 @@ jobs:
             # Fail the job if GHCR pull is denied — otherwise we silently
             # "deploy" stale local images and Discord reports success.
             docker compose -p "$COMPOSE_PROJECT_NAME" pull backend frontend
+            # Schema first, then code. A failed migration stops the deploy here
+            # and leaves the running containers untouched.
+            echo "Running database migrations..."
+            docker run --rm \
+              -e DATABASE_URL \
+              -e PYTHONDONTWRITEBYTECODE=1 \
+              -v "$PWD/migration-src:/src:ro" \
+              -w /src/migration \
+              python:3.12-slim \
+              sh -c "pip install --quiet --no-cache-dir --disable-pip-version-check --root-user-action=ignore -r requirements.txt && alembic upgrade head"
             echo "Restarting services..."
             COMPOSE_PULL_POLICY=never docker compose -p "$COMPOSE_PROJECT_NAME" up -d --pull never --remove-orphans backend frontend
             echo "Cleaning up old images..."

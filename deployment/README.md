@@ -39,9 +39,9 @@ Prefer `docker compose -p cpanel` (or `COMPOSE_PROJECT_NAME=cpanel`) so sibling 
 ## Notes
 
 - All previous database tables were archived (renamed to
-  `<name>_archived_20260713`) by Alembic revision `a0b1c2d3e4f5`. The migration
-  pipeline (`migrate.yml`) still runs `alembic upgrade head` on every push to
-  `main`, and the rebuilt schema will grow from new models in
-  `migration/models/`.
+  `<name>_archived_20260713`) by Alembic revision `a0b1c2d3e4f5`. `deploy.yml` runs
+  `alembic upgrade head` on this host (from `./migration-src`, synced on
+  every deploy) before restarting the containers, and the rebuilt schema will grow
+  from new models in `migration/models/`.
 - Auth is Discord OAuth (guild membership required, optional role check). No
   users table yet — the JWT carries the Discord identity directly.

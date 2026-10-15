@@ -28,7 +28,7 @@ cd frontend && npm install && npm run dev        # UI on :5173
 
 ## CI/CD pipeline
 
-Three GitHub Actions workflows run on every push to `main`:
+Two GitHub Actions workflows run on every push to `main`:
 
 ### 1. Build and Push Docker Images (`docker.yml`)
 
@@ -39,21 +39,26 @@ Builds and pushes both images to GHCR on every `main` push or tag.
 | `ghcr.io/bullionbear/cpanel-backend` | `latest`, `<short-sha>` | `<tag>` |
 | `ghcr.io/bullionbear/cpanel-frontend` | `latest`, `<short-sha>` | `<tag>` |
 
-### 2. Migrate Database (`migrate.yml`)
+### 2. Deploy to Production (`deploy.yml`)
 
-Runs `alembic upgrade head` against the production database on every `main` push, in parallel with the Docker build.
-
-### 3. Deploy to Production (`deploy.yml`)
-
-Triggered automatically once the Docker build succeeds. SSHes into the production server and runs:
+Triggered automatically once the Docker build succeeds. Copies `migration/` and
+`backend/app/models/` (which the migrations import) to
+`/root/cpanel/deployment/migration-src` on the production server, then SSHes in and runs:
 
 ```bash
 cd /root/cpanel/deployment
 source env.sh
 docker compose pull backend frontend
+# Alembic in a throwaway python:3.12-slim container, against $DATABASE_URL from env.sh
+docker run --rm -e DATABASE_URL -v "$PWD/migration-src:/src:ro" -w /src/migration \
+  python:3.12-slim sh -c "pip install -r requirements.txt && alembic upgrade head"
 docker compose up -d --remove-orphans backend frontend
 docker image prune -f
 ```
+
+Migrations run on the server because the database is only reachable from there
+(over Tailscale), not from GitHub-hosted runners. A failed migration stops the
+deploy before any container is restarted.
 
 Sends a Discord notification on success or failure. Notifications include the
 repository, branch, commit link, and the commit message.
@@ -62,9 +67,8 @@ repository, branch, commit link, and the commit message.
 
 ```
 push to main
-├── docker.yml  ──────────────────────────────► deploy.yml (on success)
-│                                                  └─ SSH → server → docker compose up
-└── migrate.yml (Alembic upgrade head)
+└── docker.yml ──► deploy.yml (on success)
+                     └─ SSH → server → alembic upgrade head → docker compose up
 ```
 
 ### Required GitHub secrets
@@ -73,7 +77,6 @@ push to main
 |---|---|
 | `GHCR_TOKEN` | `docker.yml` — push images to GHCR |
 | `SSH_PRIVATE_KEY` | `deploy.yml` — SSH into production server |
-| `DATABASE_URL` | `migrate.yml` — Alembic target database |
 | `DISCORD_WEBHOOK` | `deploy.yml` — deployment notifications |
 
 ## Production deployment
