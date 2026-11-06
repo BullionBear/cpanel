@@ -1,0 +1,31 @@
+# Checks for every pull request and every push to main (C2-D001): gofmt, go mod tidy, go vet, the build, and the
+# tests, which include internal/archtest (I1, I5, I6). One target, make check, so a local run matches CI. Building
+# and publishing images is a separate workflow (C2-06). Actions are pinned by commit, as in mftiko.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: make check
+        run: make check
