@@ -94,7 +94,7 @@ C2 骨架 ──► C3 Job 系統 ──┬─► C4 Mirror ──┐
 |---|---|---|---|
 | C5-01 | `pms.exchange_account`：穩定 id、`revision`、`exch_account_uid` 建立後不可改、軟刪除；API：建立、列表、讀取、刪除 | 改 uid 回 400；刪除後歷史仍查得到出處 | C2-03 |
 | C5-02 | sealbox：X25519 + NaCl anonymous sealed box，header 與 mftiko `internal/platform/sealbox` 相同（version、8 bytes 指紋）；封裝與解封拆成兩個套件；worker 金鑰對的設定與載入 | 與 mftiko 的測試向量對拍；archtest 確認 cpanel-api 沒有連到解封套件 | C2-01 |
-| C5-03 | 登記 key：API 封裝、回 `202`、狀態 `unverified`；`credential.verify` job：Binance（`/api/v3/account` 的 `uid`、`apiRestrictions`）、Bybit（`query-api`）、OKX（`account/config`）驗證唯讀與 uid | 非唯讀或 uid 不符 → `rejected` 並寫明原因；通過 → `active` | C5-01、C5-02、C3-03 |
+| C5-03 | 交易所 client 骨架：Binance、Bybit、OKX 的簽章；限速（Binance 的 request weight、Bybit／OKX 的帳號額度）；把交易所的錯誤對到 C3-04 的錯誤類別；只有唯讀 REST（GET，D2），只在 worker 裡用，不在 `internal/reconcile` 底下（I5）；套件路徑在這張票決定（例如 `internal/venue/<exchange>`），C6-01 的 venue profile 與之後的快照、History job 都建在它上面。登記 key：API 封裝、回 `202`、狀態 `unverified`；`credential.verify` job：Binance（`/api/v3/account` 的 `uid`、`apiRestrictions`）、Bybit（`query-api`）、OKX（`account/config`）驗證唯讀與 uid | 非唯讀或 uid 不符 → `rejected` 並寫明原因；通過 → `active`；簽章與各交易所文件的範例一致；只開放 GET；以假交易所（httptest）逐類注入錯誤，各自對到 C3-04 的錯誤類別；限速依交易所回報的用量節流；archtest 確認 `internal/reconcile` 與 cpanel-api 都沒有連到交易所 client | C5-01、C5-02、C3-03、C3-04；先於 C6-01 |
 | C5-04 | credential 健康：狀態機（`unverified`、`active`、`rejected`、`auth_failed`、`disabled`）、`credential.probe`、ReconcileLoop 的斷路規則、停用與刪除、告警 | `auth_failed` 的 credential 只剩 probe job | C5-03、C3-04 |
 | C5-05 | 換鑰：新舊私鑰並存，背景 job 重新封裝 | 換鑰中途重啟 worker，所有 key 都還解得開 | C5-02、C3-03 |
 | C5-06 | Account UI：帳號列表、建立帳號、登記 key、狀態與原因、join 到的 `api_id`、unmatched | | C5-04、C4-03、C2-05 |
