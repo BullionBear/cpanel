@@ -7,7 +7,7 @@ SHELL := /bin/bash
 GO  ?= go
 BIN := bin
 
-.PHONY: help fmt vet test build check
+.PHONY: help fmt vet test build check dev-db
 
 help: ## List targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-8s %s\n",$$1,$$2}'
@@ -24,6 +24,9 @@ test: ## go test with the race detector, uncached; includes internal/archtest (I
 
 build: ## Build cpanel-api, cpanel-worker and cpanel-migrate into bin/
 	$(GO) build -o $(BIN)/ ./cmd/...
+
+dev-db: ## Start the local Postgres 17 (deploy/dev/compose.yml)
+	docker compose -f deploy/dev/compose.yml up -d --wait
 
 check: ## What CI runs: gofmt, go mod tidy, vet, build, test
 	@files=$$(git ls-files --cached --others --exclude-standard '*.go'); \

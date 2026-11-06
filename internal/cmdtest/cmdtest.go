@@ -65,8 +65,16 @@ func exitCode(t *testing.T, err error) int {
 // Run runs bin to completion and returns its exit code and stderr.
 func Run(t *testing.T, bin string, env []string, args ...string) (int, string) {
 	t.Helper()
+	code, _, stderr := RunOutput(t, bin, env, args...)
+	return code, stderr
+}
+
+// RunOutput is Run that also returns stdout.
+func RunOutput(t *testing.T, bin string, env []string, args ...string) (int, string, string) {
+	t.Helper()
 	cmd := command(bin, env, args...)
-	var stderr bytes.Buffer
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	done := make(chan error, 1)
 	if err := cmd.Start(); err != nil {
@@ -75,11 +83,11 @@ func Run(t *testing.T, bin string, env []string, args ...string) (int, string) {
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
-		return exitCode(t, err), stderr.String()
+		return exitCode(t, err), stdout.String(), stderr.String()
 	case <-time.After(timeout):
 		_ = cmd.Process.Kill()
 		t.Fatalf("%s did not exit within %v", filepath.Base(bin), timeout)
-		return 0, ""
+		return 0, "", ""
 	}
 }
 

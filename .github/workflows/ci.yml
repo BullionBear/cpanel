@@ -18,7 +18,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -26,6 +26,21 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      # Postgres 17 is not in Ubuntu 24.04's own archive (C2-02). pgtest uses this binary;
+      # CPANEL_REQUIRE_PG makes a missing one fail the run instead of skipping.
+      - name: Install PostgreSQL 17
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-17
+          bin=/usr/lib/postgresql/17/bin/postgres
+          test -x "$bin"
+          "$bin" --version
+          echo "CPANEL_PG_BIN=$bin" >> "$GITHUB_ENV"
+          echo "CPANEL_REQUIRE_PG=1" >> "$GITHUB_ENV"
 
       - name: make check
         run: make check
