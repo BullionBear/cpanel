@@ -30,22 +30,13 @@ var netCarriers = []string{"github.com/jackc/pgx", "github.com/rs/zerolog"}
 type pkg struct {
 	ImportPath string
 	Imports    []string // direct, without test imports
-	Deps       []string // everything it links, transitively
-	ForTest    string   // set on a package recompiled for its tests and on an external test package
+	Deps       []string // everything it links, transitively, without test imports
 	Error      *struct{ Err string }
 }
 
-// isTest reports whether p is built only for a test: a package recompiled with its tests, an external test
-// package, or a generated test main.
-func (p pkg) isTest() bool {
-	return p.ForTest != "" || strings.HasSuffix(p.ImportPath, ".test")
-}
-
-// rel is a path inside the module relative to its root, and whether it is inside the module. A test variant,
-// "p [p.test]", is p.
+// rel is a path inside the module relative to its root, and whether it is inside the module.
 func rel(importPath string) (string, bool) {
-	path, _, _ := strings.Cut(importPath, " ")
-	if r, ok := strings.CutPrefix(path, module+"/"); ok {
+	if r, ok := strings.CutPrefix(importPath, module+"/"); ok {
 		return r, true
 	}
 	return "", false
@@ -69,7 +60,7 @@ func under(path string, prefixes ...string) bool {
 	return false
 }
 
-// outsideHandOff reports why no cpanel package, test code included, may link the package, or "" (I1).
+// outsideHandOff reports why no cpanel package may link the package, or "" (I1).
 func outsideHandOff(importPath string) string {
 	switch {
 	case under(importPath, mftiko) && !under(importPath, mftiko+"/contract"):
@@ -124,68 +115,50 @@ func pathToNet(start string, imports map[string][]string) []string {
 	return nil
 }
 
-// check returns one line per broken rule, "<package> links <dependency>: <rule>". A test variant reports only what
-// its package does not already report.
+// check returns one line per broken rule, "<package> links <dependency>: <rule>".
 func check(pkgs []pkg) []string {
 	imports := map[string][]string{}
 	for _, p := range pkgs {
-		if !p.isTest() {
-			imports[p.ImportPath] = p.Imports
-		}
+		imports[p.ImportPath] = p.Imports
 	}
 	var out []string
-	reported := map[[2]string]bool{}
-	for _, tests := range []bool{false, true} {
-		for _, p := range pkgs {
-			from, own := rel(p.ImportPath)
-			if !own || p.isTest() != tests || strings.HasSuffix(p.ImportPath, ".test") {
-				continue
+	for _, p := range pkgs {
+		from, own := rel(p.ImportPath)
+		if !own {
+			continue
+		}
+		bad := func(dep, why string) { out = append(out, fmt.Sprintf("%s links %s: %s", from, show(dep), why)) }
+		for _, d := range p.Deps {
+			if why := outsideHandOff(d); why != "" {
+				bad(d, why)
 			}
-			label := from
-			if tests {
-				label += " (test)"
-			}
-			bad := func(dep, why string) {
-				if k := [2]string{from, dep}; !reported[k] {
-					reported[k] = true
-					out = append(out, fmt.Sprintf("%s links %s: %s", label, show(dep), why))
-				}
-			}
+		}
+		if under(from, "internal/reconcile") {
+			var hits []string
 			for _, d := range p.Deps {
-				if why := outsideHandOff(d); why != "" {
-					bad(d, why)
+				if forbiddenInReconcile(d) {
+					hits = append(hits, d)
 				}
 			}
-			if tests {
-				continue
+			for _, d := range outermost(hits) {
+				bad(d, "the ReconcileLoop does no I/O but the database (I5)")
 			}
-			if under(from, "internal/reconcile") {
-				var hits []string
-				for _, d := range p.Deps {
-					if forbiddenInReconcile(d) {
-						hits = append(hits, d)
+			if chain := pathToNet(p.ImportPath, imports); chain != nil {
+				how := "imported directly"
+				if via := chain[1 : len(chain)-1]; len(via) > 0 {
+					names := make([]string, len(via))
+					for i, v := range via {
+						names[i] = show(v)
 					}
+					how = "reached through " + strings.Join(names, " → ")
 				}
-				for _, d := range outermost(hits) {
-					bad(d, "the ReconcileLoop does no I/O but the database (I5)")
-				}
-				if chain := pathToNet(p.ImportPath, imports); chain != nil {
-					how := "imported directly"
-					if via := chain[1 : len(chain)-1]; len(via) > 0 {
-						names := make([]string, len(via))
-						for i, v := range via {
-							names[i] = show(v)
-						}
-						how = "reached through " + strings.Join(names, " → ")
-					}
-					bad("net", how+"; the ReconcileLoop reaches net only through pgx and zerolog (I5)")
-				}
+				bad("net", how+"; the ReconcileLoop reaches net only through pgx and zerolog (I5)")
 			}
-			if from == "cmd/cpanel-api" {
-				for _, d := range p.Deps {
-					if r, own := rel(d); own && under(r, sealboxOpen) {
-						bad(d, "the public layer holds no key that opens a secret (I6)")
-					}
+		}
+		if from == "cmd/cpanel-api" {
+			for _, d := range p.Deps {
+				if r, own := rel(d); own && under(r, sealboxOpen) {
+					bad(d, "the public layer holds no key that opens a secret (I6)")
 				}
 			}
 		}
@@ -193,8 +166,9 @@ func check(pkgs []pkg) []string {
 	return out
 }
 
-// goList runs go list over the whole module and its tests, with every dependency. -e keeps a package that does not
-// build, such as one importing mftiko's internal/, so its rules are still checked.
+// goList runs go list over the whole module, with every dependency. Test files are not listed: the rules are about
+// what the binaries contain. -e keeps a package that does not build, such as one importing mftiko's internal/, so
+// its rules are still checked.
 func goList(t *testing.T) []pkg {
 	t.Helper()
 	goBin, err := exec.LookPath("go")
@@ -205,7 +179,7 @@ func goList(t *testing.T) []pkg {
 	if err != nil {
 		t.Fatalf("go env GOMOD: %v", err)
 	}
-	cmd := exec.Command(goBin, "list", "-e", "-deps", "-test", "-json=ImportPath,Imports,Deps,ForTest,Error", "./...")
+	cmd := exec.Command(goBin, "list", "-e", "-deps", "-json=ImportPath,Imports,Deps,Error", "./...")
 	cmd.Dir = filepath.Dir(strings.TrimSpace(string(gomod)))
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -230,17 +204,13 @@ func goList(t *testing.T) []pkg {
 func TestDependencyRules(t *testing.T) {
 	pkgs := goList(t)
 	var own []string
-	loadErrs := map[string]bool{}
 	for _, p := range pkgs {
 		r, ok := rel(p.ImportPath)
 		if !ok {
 			continue
 		}
-		if !p.isTest() {
-			own = append(own, r)
-		}
-		if p.Error != nil && !loadErrs[p.Error.Err] {
-			loadErrs[p.Error.Err] = true
+		own = append(own, r)
+		if p.Error != nil {
 			t.Errorf("go list %s: %s", r, p.Error.Err)
 		}
 	}
@@ -259,18 +229,13 @@ func TestDependencyRules(t *testing.T) {
 func TestCheckReportsViolations(t *testing.T) {
 	m := func(p string) string { return module + "/" + p }
 	mf := func(p string) string { return mftiko + "/" + p }
-	variant := func(p string) string { return m(p) + " [" + m(p) + ".test]" }
 	pkgs := []pkg{
 		// I1
 		{ImportPath: m("internal/mftiko"), Deps: []string{mf("contract/gen/api/v1"), mf("contract/wire/cloid"), "github.com/oapi-codegen/runtime"}}, // allowed
 		{ImportPath: m("internal/a"), Deps: []string{mf("internal/platform/buildinfo")}},
-		{ImportPath: variant("internal/a"), ForTest: m("internal/a"), Deps: []string{mf("internal/platform/buildinfo")}}, // reported once, by internal/a
 		{ImportPath: m("internal/b"), Deps: []string{mf("exchange"), mf("exchange/binance")}},
 		{ImportPath: m("internal/c"), Deps: []string{mf("migrations"), "go.etcd.io/etcd/client/v3"}},
-		{ImportPath: m("internal/d")},
-		{ImportPath: variant("internal/d"), ForTest: m("internal/d"), Deps: []string{mf("sdk")}},
-		{ImportPath: m("internal/d_test") + " [" + m("internal/d") + ".test]", ForTest: m("internal/d"), Deps: []string{"go.etcd.io/etcd/client/v3"}},
-		{ImportPath: m("internal/d") + ".test", Deps: []string{mf("sdk"), "go.etcd.io/etcd/client/v3"}}, // the test main: its test packages report
+		{ImportPath: m("internal/d"), Deps: []string{mf("sdk")}},
 		{ImportPath: m("internal/e"), Deps: []string{mftiko, "github.com/BullionBear/mftikox"}},
 		{ImportPath: "github.com/x/y", Deps: []string{mf("internal/platform/buildinfo"), "net/http"}}, // outside the module: ignored
 
@@ -291,14 +256,11 @@ func TestCheckReportsViolations(t *testing.T) {
 		{ImportPath: m("internal/reconcile/trace"), Deps: []string{"net/http/httptrace"}},
 		{ImportPath: m("internal/reconcile/rpc"), Deps: []string{"connectrpc.com/connect", "google.golang.org/grpc", "github.com/valyala/fasthttp",
 			"github.com/coder/websocket", "github.com/gorilla/websocket", "net/rpc", "net/smtp"}},
-		{ImportPath: variant("internal/reconcile"), ForTest: m("internal/reconcile"), Imports: []string{"net/http/httptest"},
-			Deps: []string{"net", "net/http", "net/http/httptest"}}, // test code: I5 does not apply
 		{ImportPath: m("internal/reconciler"), Imports: []string{"net/http"}, Deps: []string{"net", "net/http"}}, // another package: free
 
 		// I6
 		{ImportPath: m("cmd/cpanel-api"), Deps: []string{m("internal/platform/sealbox"), m("internal/platform/sealbox/open")}},
-		{ImportPath: variant("cmd/cpanel-api"), ForTest: m("cmd/cpanel-api"), Deps: []string{m("internal/platform/sealbox/open")}}, // test code: I6 does not apply
-		{ImportPath: m("cmd/cpanel-worker"), Deps: []string{m("internal/platform/sealbox"), m("internal/platform/sealbox/open")}},  // the worker opens secrets
+		{ImportPath: m("cmd/cpanel-worker"), Deps: []string{m("internal/platform/sealbox"), m("internal/platform/sealbox/open")}}, // the worker opens secrets
 	}
 	got := check(pkgs)
 	want := []string{
@@ -307,8 +269,7 @@ func TestCheckReportsViolations(t *testing.T) {
 		"internal/b links " + mf("exchange/binance"),
 		"internal/c links " + mf("migrations"),
 		"internal/c links go.etcd.io/etcd/client/v3",
-		"internal/d (test) links " + mf("sdk"),
-		"internal/d_test (test) links go.etcd.io/etcd/client/v3",
+		"internal/d links " + mf("sdk"),
 		"internal/e links " + mftiko,
 		"internal/reconcile/rules links net",
 		"internal/reconcile/direct links net",

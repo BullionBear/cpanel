@@ -3,7 +3,7 @@
 // mftiko's internal/archtest.
 //
 //   - I1: cpanel links nothing of mftiko but contract/ (not internal/, exchange/, migrations/ or anything else), and
-//     no etcd client. This holds for test code too.
+//     no etcd client.
 //   - I5: the ReconcileLoop, internal/reconcile and everything under it, does no I/O but the database. It links no
 //     net/http, net/rpc or net/smtp, no RPC or websocket client (connect, grpc, fasthttp, coder/websocket,
 //     gorilla/websocket) and no venue client: a REST client links net/http, and mftiko's exchange/ is already
@@ -12,6 +12,7 @@
 //   - I6: cmd/cpanel-api, the public layer, does not link internal/platform/sealbox/open, the code that opens
 //     sealed secrets.
 //
-// I5 and I6 are about what the binaries contain and ignore test code. The rules match on paths, so the packages they
-// name must exist: internal/reconcile and internal/platform/sealbox/open are reserved until C3 and C5 fill them.
+// The rules are about what the binaries contain, so they check production code and not test files. They match on
+// paths, so the packages they name must exist: internal/reconcile and internal/platform/sealbox/open are reserved
+// until C3 and C5 fill them.
 package archtest
