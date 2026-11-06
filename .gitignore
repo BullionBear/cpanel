@@ -1,9 +1,22 @@
-venv/
+# make build
+/bin/
+
+# go test -c, coverage and profiles
+*.test
+*.out
+coverage.*
+*.coverprofile
+
+# Go workspace: cpanel builds against the mftiko commit in go.mod, not a local checkout (C2-D007)
+go.work
+go.work.sum
+
+# Secrets never go in git
+.env
+*.env
 env.sh
 credentials/
-*.env
-.env
+
+# Left in local checkouts by v1 and v2 (archive/)
+venv/
 __pycache__/
-*.pyc
-*.http
-deployment/letsencrypt/acme.json
