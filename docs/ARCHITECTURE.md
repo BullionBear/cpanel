@@ -184,7 +184,8 @@
 ### 4.4 job 表與 Worker
 
 - **job 表就是 Dispatcher 加 Queue**，不另外架 broker。
-- **認領：** worker 先以 `ingest.account_lease` 租一個 exchange_account（`UPDATE … WHERE lease_until < now() … SKIP LOCKED`），租期內依 priority 依序跑該帳號的 pending job，並續租。同一個帳號同時只有一個 worker 在跑，per-account 的限速預算只在一個進程內。
+- **未完成與已完成分兩張表（C3-D001）：** `ingest.job` 只放 `pending`、`running`，不分區，以 `dedup_key` 去重（C3-D002）；完成時在同一個 transaction 裡移到按天分區的 `ingest.job_run`。Postgres 分區表上的 unique index 必須包含分區鍵，所以「至多一個未完成 job」不能放在分區表上。
+- **認領：** worker 先以 `ingest.lease` 租一個 `lease_key`（`account:<id>`、`global:mftiko`…，C3-D003），租期內依 priority 依序跑該 key 的 pending job，並續租。同一個帳號同時只有一個 worker 在跑，per-account 的限速預算只在一個進程內。資料的正確性不依賴 lease，靠 cursor 的 CAS（C3-D004）。
 - **一個 job = 一條 stream 跑到預算用完**（例如 20 個請求或 30 秒），不是一頁一個 job。每頁一個 transaction：raw、ledger、cursor（帶版本號 CAS）一起 commit。結束時寫 job 結果：請求數、筆數、`more`、錯誤類別。
 - **cursor 在執行時讀當下的值**，不用派工當下帶進來的值。
 - **錯誤分類**（worker 寫入 job，並更新 stream 或 credential 的狀態）：
@@ -198,7 +199,7 @@
 | `not_found` | Binance `-2013`（訂單不存在） | 只在 `order.resolve` 出現，見 §4.5 |
 
 - **健康狀態放在 stream 與 credential 那一列上**（`last_ok_at`、`consecutive_failures`、`last_error_class`、`last_error`），UI 與告警讀這裡。job 表是證據，不是偵測機制。
-- **job 表的量：** 例如 3 個帳號 × 40 個商品 × 2 種、每 2 分鐘一輪，一天約 17 萬筆。`ingest.job` 按天分區、保留 30 天；失敗的另外複製到 `ingest.job_failure`，保留一年。
+- **job 表的量：** 例如 3 個帳號 × 40 個商品 × 2 種、每 2 分鐘一輪，一天約 17 萬筆。這些都在 `ingest.job_run`：按 UTC 日分區、保留 30 天；過期分區的失敗列先複製到 `ingest.job_failure`（保留一年）再 drop。`ingest.job` 本身只有未完成的幾百列。
 
 ### 4.5 History 的語意
 
@@ -276,9 +277,10 @@
 |---|---|---|
 | `pms` | `exchange_account(id)`，`UNIQUE(exchange, exch_account_uid)`；`credential(id)` | `credential.status`、`exch_reported_uid`、`permissions`、`verified_at`、`consecutive_auth_failures` |
 | `mirror` | `account(api_id)`、`scope(api_id, uid)`、`symbol(uid)`、`sync_state(source)` | 只有 mirror job 寫；二期加 `session_record`、`session_account` |
-| `ingest` | `stream(id)`，`UNIQUE(exchange_account_id, venue, kind, key)` | `source`（scope／discovered／manual）、`tier`、`cursor jsonb`、`cursor_version`、`next_due_at`、健康欄位 |
-| | `job(id)`，按天分區 | partial unique：`(stream_id) WHERE status IN ('pending','running')`；`(kind, exchange_account_id, bucket) WHERE status IN (…)` 給快照；singleton key 給 mirror job |
-| | `job_failure`、`account_lease(exchange_account_id)`、`pending_order(exchange_account_id, venue, native_order_id)` | |
+| `ingest` | `stream(id)`，`UNIQUE(kind, lease_key, key)` | `source`（scope／discovered／manual／system）、`tier`、`period`、`cursor jsonb`、`cursor_version`、`next_due_at`、`paused_reason`、健康欄位 |
+| | `job(id)`，不分區，只放未完成的 job | `dedup_key UNIQUE`：`stream:<id>`、`periodic:<name>`、`bucket:<kind>:<lease_key>:<時間點>`（C3-D001、D002） |
+| | `job_run`，按 UTC 日分區加 default 分區；`job_failure` | 完成的 job；分區由 `ingest.ensure_job_run_partition`、`ingest.expire_job_runs` 維護 |
+| | `periodic(name)`、`lease(key)`、`pause(scope)`、`pending_order(exchange_account_id, venue, native_order_id)` | singleton 的排程、lease（C3-D003）、出口 IP 層級的暫停 |
 | `raw` | `venue_trade`、`venue_order`、`venue_income`、`venue_snapshot` | `(exchange_account_id, venue, native_id)`；payload `jsonb`、`fetched_at`、請求參數；不可變；按月分區 |
 | `ledger` | `trade`、`order`、`funding`、`snapshot_batch`、`balance_snapshot`、`position_snapshot` | 可由 raw 重建，帶 `norm_version`；商品一律 UID |
 | `meta` | `audit` | |

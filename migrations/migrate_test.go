@@ -153,9 +153,18 @@ func TestChangedMigrationIsRefused(t *testing.T) {
 	if !errors.As(err, &drift) || drift.State != StateChanged || drift.Version != 1 || len(res.Applied) != 0 {
 		t.Fatalf("up after a changed file: applied %v, err %v", res.Applied, err)
 	}
+	ups, _, err := load()
+	if err != nil {
+		t.Fatal(err)
+	}
 	rows, err := Status(ctx, srv.DSN())
-	if !errors.As(err, &drift) || len(rows) != 2 || rows[0].State != StateChanged || rows[1].State != StateChanged {
+	if !errors.As(err, &drift) || len(rows) != len(ups) {
 		t.Fatalf("status: %v %v", rows, err)
+	}
+	for _, r := range rows {
+		if r.State != StateChanged {
+			t.Fatalf("status: %v", rows)
+		}
 	}
 }
 
@@ -211,15 +220,30 @@ func assertSchema(t *testing.T, ctx context.Context, conn *pgx.Conn, want bool) 
 	if cols != 8 {
 		t.Fatalf("meta.audit columns = %d, want 8", cols)
 	}
-	for _, table := range []string{"meta.session", "meta.api_token"} {
-		var rel *string
-		if err := conn.QueryRow(ctx, `SELECT to_regclass($1)::text`, table).Scan(&rel); err != nil {
-			t.Fatal(err)
-		}
-		if rel == nil {
-			t.Fatalf("%s missing after up", table)
+	for _, tables := range ownedTables {
+		for _, table := range tables {
+			if !relationExists(t, ctx, conn, table) {
+				t.Fatalf("%s missing after up", table)
+			}
 		}
 	}
+}
+
+// ownedTables lists the tables each migration after 0001 creates. Its down file drops them and
+// nothing else.
+var ownedTables = map[int][]string{
+	2: {"meta.session", "meta.api_token"},
+	3: {"ingest.stream", "ingest.periodic", "ingest.job", "ingest.job_run", "ingest.job_run_default",
+		"ingest.job_failure", "ingest.lease", "ingest.pause"},
+}
+
+func relationExists(t *testing.T, ctx context.Context, conn *pgx.Conn, name string) bool {
+	t.Helper()
+	var rel *string
+	if err := conn.QueryRow(ctx, `SELECT to_regclass($1)::text`, name).Scan(&rel); err != nil {
+		t.Fatal(err)
+	}
+	return rel != nil
 }
 
 // assertDown checks the objects that migration version removes. 0001 drops every schema.
@@ -239,13 +263,15 @@ func assertDown(t *testing.T, ctx context.Context, conn *pgx.Conn, version int) 
 	if n != 6 {
 		t.Fatalf("schemas = %d after down %d, want 6", n, version)
 	}
-	for _, table := range []string{"meta.session", "meta.api_token"} {
-		var rel *string
-		if err := conn.QueryRow(ctx, `SELECT to_regclass($1)::text`, table).Scan(&rel); err != nil {
-			t.Fatal(err)
-		}
-		if rel != nil {
-			t.Fatalf("%s still present after down %d", table, version)
+	for v, tables := range ownedTables {
+		for _, table := range tables {
+			exists := relationExists(t, ctx, conn, table)
+			if v == version && exists {
+				t.Fatalf("%s still present after down %d", table, version)
+			}
+			if v != version && !exists {
+				t.Fatalf("%s missing after down %d, which does not own it", table, version)
+			}
 		}
 	}
 }
