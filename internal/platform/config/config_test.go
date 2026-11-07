@@ -16,6 +16,7 @@ type settings struct {
 	listen  string
 	token   string
 	timeout time.Duration
+	slots   int
 }
 
 func parse(t *testing.T, env map[string]string, args ...string) (settings, *Set, error) {
@@ -25,6 +26,7 @@ func parse(t *testing.T, env map[string]string, args ...string) (settings, *Set,
 	set.String(&s.listen, "listen", "T_LISTEN", ":8080", "listen address")
 	set.Secret(&s.token, "token", "T_TOKEN", "bearer token")
 	set.Duration(&s.timeout, "timeout", "T_TIMEOUT", 10*time.Second, "shutdown timeout")
+	set.Int(&s.slots, "slots", "T_SLOTS", 4, "job slots")
 	err := set.Parse(args)
 	return s, set, err
 }
@@ -49,13 +51,13 @@ func TestPrecedence(t *testing.T) {
 		args []string
 		want settings
 	}{
-		{"defaults", nil, nil, settings{listen: ":8080", timeout: 10 * time.Second}},
-		{"environment", map[string]string{"T_LISTEN": ":9000", "T_TOKEN": "s3cret", "T_TIMEOUT": "3s"}, nil,
-			settings{listen: ":9000", token: "s3cret", timeout: 3 * time.Second}},
-		{"flag over environment", map[string]string{"T_LISTEN": ":9000", "T_TIMEOUT": "3s"}, []string{"-listen", ":7000", "-timeout=1m"},
-			settings{listen: ":7000", timeout: time.Minute}},
+		{"defaults", nil, nil, settings{listen: ":8080", timeout: 10 * time.Second, slots: 4}},
+		{"environment", map[string]string{"T_LISTEN": ":9000", "T_TOKEN": "s3cret", "T_TIMEOUT": "3s", "T_SLOTS": "8"}, nil,
+			settings{listen: ":9000", token: "s3cret", timeout: 3 * time.Second, slots: 8}},
+		{"flag over environment", map[string]string{"T_LISTEN": ":9000", "T_TIMEOUT": "3s", "T_SLOTS": "8"}, []string{"-listen", ":7000", "-timeout=1m", "-slots=2"},
+			settings{listen: ":7000", timeout: time.Minute, slots: 2}},
 		{"flag set to the default still wins", map[string]string{"T_LISTEN": ":9000"}, []string{"-listen=:8080"},
-			settings{listen: ":8080", timeout: 10 * time.Second}},
+			settings{listen: ":8080", timeout: 10 * time.Second, slots: 4}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -73,6 +75,10 @@ func TestPrecedence(t *testing.T) {
 func TestBadEnvironmentNamesTheVariable(t *testing.T) {
 	_, _, err := parse(t, map[string]string{"T_TIMEOUT": "soon"})
 	if err == nil || !strings.HasPrefix(err.Error(), `$T_TIMEOUT: invalid value "soon"`) {
+		t.Fatalf("err = %v", err)
+	}
+	_, _, err = parse(t, map[string]string{"T_SLOTS": "many"})
+	if err == nil || !strings.HasPrefix(err.Error(), `$T_SLOTS: invalid value "many"`) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -96,7 +102,7 @@ func TestDictMasksSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := dict(t, set)
-	want := map[string]string{"listen": ":9000", "token": Masked, "timeout": "10s"}
+	want := map[string]string{"listen": ":9000", "token": Masked, "timeout": "10s", "slots": "4"}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}

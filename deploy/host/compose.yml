@@ -68,6 +68,9 @@ services:
     secrets: [database_url, mftiko_token, sym_token]
     networks: [default]
     mem_limit: 256m
+    # Room for -shutdown-timeout (10s) to finish the job pages in progress, then hand the jobs back and release the
+    # leases, so the next container does not wait out the 60s lease TTL.
+    stop_grace_period: 20s
 
 secrets:
   database_url: { file: ./secrets/database_url }
