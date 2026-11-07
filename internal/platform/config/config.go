@@ -70,13 +70,21 @@ func withEnv(usage, env string) string {
 }
 
 // Parse reads args, then fills every setting not given on the command line from its environment variable. -h
-// returns flag.ErrHelp after printing the usage. The commands take no positional arguments.
+// returns flag.ErrHelp after printing the usage. Positional arguments are rejected; ParseRemaining keeps them.
 func (s *Set) Parse(args []string) error {
-	if err := s.fs.Parse(args); err != nil {
+	if _, err := s.ParseRemaining(args); err != nil {
 		return err
 	}
 	if s.fs.NArg() > 0 {
 		return fmt.Errorf("unexpected argument %q", s.fs.Arg(0))
+	}
+	return nil
+}
+
+// ParseRemaining is Parse that returns the positional arguments. cpanel-migrate uses it for up and status.
+func (s *Set) ParseRemaining(args []string) ([]string, error) {
+	if err := s.fs.Parse(args); err != nil {
+		return nil, err
 	}
 	given := map[string]bool{}
 	s.fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
@@ -86,10 +94,10 @@ func (s *Set) Parse(args []string) error {
 			continue
 		}
 		if err := s.fs.Set(st.name, v); err != nil {
-			return fmt.Errorf("$%s: invalid value %q: %w", st.env, v, err)
+			return nil, fmt.Errorf("$%s: invalid value %q: %w", st.env, v, err)
 		}
 	}
-	return nil
+	return s.fs.Args(), nil
 }
 
 // Dict returns the effective settings in registration order, keyed by flag name, with secrets masked.

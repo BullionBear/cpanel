@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"strings"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/BullionBear/cpanel/internal/cmdtest"
 	"github.com/BullionBear/cpanel/internal/platform/logger"
+	"github.com/BullionBear/cpanel/internal/platform/pgtest"
+	"github.com/BullionBear/cpanel/migrations"
 )
 
 func TestParseArgs(t *testing.T) {
@@ -24,11 +27,12 @@ func TestParseArgs(t *testing.T) {
 		{"defaults", nil, nil, options{listen: ":8080", logLevel: logger.DefaultLevel, shutdownTimeout: 10 * time.Second}},
 		{"environment", map[string]string{
 			"CPANEL_API_LISTEN": ":9000", "CPANEL_LOG_LEVEL": "debug", "CPANEL_SHUTDOWN_TIMEOUT": "3s",
+			"CPANEL_DATABASE_URL":  "postgres://db/cpanel",
 			"CPANEL_WORKER_LISTEN": ":1", // the worker's, not ours
-		}, nil, options{listen: ":9000", logLevel: logger.Level(zerolog.DebugLevel), shutdownTimeout: 3 * time.Second}},
-		{"flags over environment", map[string]string{"CPANEL_API_LISTEN": ":9000", "CPANEL_LOG_LEVEL": "debug"},
-			[]string{"-listen=:7000", "-log-level=warn", "-shutdown-timeout=1m"},
-			options{listen: ":7000", logLevel: logger.Level(zerolog.WarnLevel), shutdownTimeout: time.Minute}},
+		}, nil, options{listen: ":9000", database: "postgres://db/cpanel", logLevel: logger.Level(zerolog.DebugLevel), shutdownTimeout: 3 * time.Second}},
+		{"flags over environment", map[string]string{"CPANEL_API_LISTEN": ":9000", "CPANEL_LOG_LEVEL": "debug", "CPANEL_DATABASE_URL": "postgres://env/cpanel"},
+			[]string{"-listen=:7000", "-log-level=warn", "-shutdown-timeout=1m", "-database=postgres://flag/cpanel"},
+			options{listen: ":7000", database: "postgres://flag/cpanel", logLevel: logger.Level(zerolog.WarnLevel), shutdownTimeout: time.Minute}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -48,12 +52,18 @@ func TestParseArgs(t *testing.T) {
 
 func TestBinary(t *testing.T) {
 	bin := cmdtest.Build(t)
+	srv := pgtest.Start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := migrations.Up(ctx, srv.DSN()); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("healthz and graceful shutdown", func(t *testing.T) {
-		p := cmdtest.Start(t, bin, []string{"CPANEL_API_LISTEN=127.0.0.1:0"}, "-shutdown-timeout=5s")
+		p := cmdtest.Start(t, bin, []string{"CPANEL_API_LISTEN=127.0.0.1:0", "CPANEL_DATABASE_URL=" + srv.DSN()}, "-shutdown-timeout=5s")
 		start := p.Log(t, "starting")
 		cfg, _ := start["config"].(map[string]any)
-		if start["component"] != name || cfg["listen"] != "127.0.0.1:0" || cfg["log-level"] != "info" || cfg["shutdown-timeout"] != "5s" {
+		if start["component"] != name || cfg["listen"] != "127.0.0.1:0" || cfg["database"] != "***" || cfg["log-level"] != "info" || cfg["shutdown-timeout"] != "5s" {
 			t.Errorf("startup line %v", start)
 		}
 		addr, _ := p.Log(t, "listening")["addr"].(string)
@@ -84,7 +94,22 @@ func TestBinary(t *testing.T) {
 
 	t.Run("help exits 0", func(t *testing.T) {
 		code, stderr := cmdtest.Run(t, bin, nil, "-h")
-		if code != 0 || !strings.Contains(stderr, "$CPANEL_API_LISTEN") {
+		if code != 0 || !strings.Contains(stderr, "$CPANEL_API_LISTEN") || !strings.Contains(stderr, "$CPANEL_DATABASE_URL") {
+			t.Errorf("exit %d, stderr %q", code, stderr)
+		}
+	})
+
+	t.Run("empty database exits 2", func(t *testing.T) {
+		code, stderr := cmdtest.Run(t, bin, nil)
+		if code != 2 || !strings.Contains(stderr, "CPANEL_DATABASE_URL") {
+			t.Errorf("exit %d, stderr %q", code, stderr)
+		}
+	})
+
+	t.Run("behind database is refused", func(t *testing.T) {
+		fresh := pgtest.Start(t)
+		code, stderr := cmdtest.Run(t, bin, []string{"CPANEL_DATABASE_URL=" + fresh.DSN()})
+		if code != 1 || !strings.Contains(stderr, "behind") || !strings.Contains(stderr, "0001_schema") || !strings.Contains(stderr, "cpanel-migrate up") {
 			t.Errorf("exit %d, stderr %q", code, stderr)
 		}
 	})
