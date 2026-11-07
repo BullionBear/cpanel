@@ -2,6 +2,10 @@
 // commands do: a flag on the command line wins, then the environment variable, then the built-in default. Every
 // value goes through its flag's parser, so a bad environment variable fails startup the way a bad flag does.
 //
+// A secret can also come from a file: when neither the flag nor $NAME is set, $NAME_FILE names a file whose contents,
+// without surrounding whitespace, are the value. That is how compose's secrets reach a container (C2-D008): the
+// environment carries a path, never the secret. Setting both $NAME and $NAME_FILE is an error.
+//
 // Dict lists the effective settings for the startup log. A secret that is set is shown as Masked; one that is not
 // set is shown as "", so the log still tells the two apart.
 package config
@@ -9,6 +13,8 @@ package config
 import (
 	"flag"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -43,9 +49,9 @@ func (s *Set) String(p *string, name, env, value, usage string) {
 	s.add(name, env, false)
 }
 
-// Secret registers a string setting that Dict never shows. It has no default.
+// Secret registers a string setting that Dict never shows. It has no default. $env_FILE may name a file that holds it.
 func (s *Set) Secret(p *string, name, env, usage string) {
-	s.fs.StringVar(p, name, "", withEnv(usage, env))
+	s.fs.StringVar(p, name, "", fmt.Sprintf("%s ($%s or $%s_FILE)", usage, env, env))
 	s.add(name, env, true)
 }
 
@@ -90,10 +96,28 @@ func (s *Set) ParseRemaining(args []string) ([]string, error) {
 	s.fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 	for _, st := range s.settings {
 		v := s.getenv(st.env)
+		if st.secret {
+			file := s.getenv(st.env + "_FILE")
+			if v != "" && file != "" {
+				return nil, fmt.Errorf("$%s and $%s_FILE are both set; set one", st.env, st.env)
+			}
+			if file != "" && !given[st.name] {
+				b, err := os.ReadFile(file)
+				if err != nil {
+					return nil, fmt.Errorf("$%s_FILE: %w", st.env, err)
+				}
+				if v = strings.TrimSpace(string(b)); v == "" {
+					return nil, fmt.Errorf("$%s_FILE: %s is empty", st.env, file)
+				}
+			}
+		}
 		if given[st.name] || v == "" {
 			continue
 		}
 		if err := s.fs.Set(st.name, v); err != nil {
+			if st.secret {
+				return nil, fmt.Errorf("$%s: invalid value: %w", st.env, err)
+			}
 			return nil, fmt.Errorf("$%s: invalid value %q: %w", st.env, v, err)
 		}
 	}

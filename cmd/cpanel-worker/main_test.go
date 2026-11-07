@@ -48,6 +48,12 @@ func TestParseArgs(t *testing.T) {
 	if _, _, err := parseArgs(nil, func(k string) string { return map[string]string{"CPANEL_LOG_LEVEL": "loud"}[k] }); err == nil {
 		t.Error("accepted CPANEL_LOG_LEVEL=loud")
 	}
+	if got, _, err := parseArgs([]string{"-sym-url=http://sym", "doctor"}, nil); err != nil || !got.doctor || got.symURL != "http://sym" {
+		t.Errorf("doctor: %+v, %v", got, err)
+	}
+	if _, _, err := parseArgs([]string{"serve"}, nil); err == nil {
+		t.Error("accepted an unknown command")
+	}
 }
 
 func TestBinary(t *testing.T) {
@@ -82,6 +88,13 @@ func TestBinary(t *testing.T) {
 		p.Log(t, "stopped")
 		if code := p.Exit(t); code != 0 {
 			t.Errorf("exit %d after SIGINT, want 0", code)
+		}
+	})
+
+	t.Run("doctor without settings fails every check", func(t *testing.T) {
+		code, _ := cmdtest.Run(t, bin, nil, "doctor")
+		if code != 1 {
+			t.Errorf("doctor exit %d, want 1", code)
 		}
 	})
 

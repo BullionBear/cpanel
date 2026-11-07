@@ -1,0 +1,82 @@
+# cpanel v3 on 172.237.19.123 (C2-07, C2-D003). Lives at /root/cpanel/deployment/compose.yml; deploy.sh is the
+# only thing that starts it, with CPANEL_IMAGE set to ghcr.io/bullionbear/cpanel@sha256:… (an image by digest,
+# never a tag). See docs/operations.md.
+#
+# Secrets are files in ./secrets/ (0600, owned by 65532, the image's nonroot user) mounted at /run/secrets/. The
+# environment carries only their paths, as $NAME_FILE (C2-D008). Settings that are not secret are in ./config.env.
+name: cpanel
+
+x-cpanel: &cpanel
+  image: ${CPANEL_IMAGE:?deploy.sh sets CPANEL_IMAGE}
+  env_file: config.env
+  environment: &env
+    CPANEL_DATABASE_URL_FILE: /run/secrets/database_url
+  logging:
+    driver: json-file
+    options: { max-size: 20m, max-file: "5" }
+
+services:
+  # One-off: deploy.sh runs it with `docker compose run --rm` before switching. `up` never starts it.
+  cpanel-migrate:
+    <<: *cpanel
+    profiles: [migrate]
+    command: ["/usr/local/bin/cpanel-migrate", "up"]
+    restart: "no"
+    secrets: [database_url]
+    networks: [default]
+
+  cpanel-api:
+    <<: *cpanel
+    container_name: cpanel-api
+    command: ["/usr/local/bin/cpanel-api"]
+    restart: unless-stopped
+    environment:
+      <<: *env
+      CPANEL_DISCORD_CLIENT_SECRET_FILE: /run/secrets/discord_client_secret
+      CPANEL_DISCORD_BOT_TOKEN_FILE: /run/secrets/discord_bot_token
+    secrets: [database_url, discord_client_secret, discord_bot_token]
+    networks: [web_proxy]
+    mem_limit: 256m
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web_proxy"
+      - "traefik.http.routers.cpanel.rule=Host(`cpanel.lynxlinkage.com`)"
+      - "traefik.http.routers.cpanel.entrypoints=websecure"
+      - "traefik.http.routers.cpanel.tls.certresolver=myresolver"
+      - "traefik.http.routers.cpanel.service=cpanel"
+      - "traefik.http.services.cpanel.loadbalancer.server.port=8080"
+      # capi. is retired: every path moves to the same path on cpanel. (permanent).
+      - "traefik.http.routers.cpanel-capi.rule=Host(`capi.lynxlinkage.com`)"
+      - "traefik.http.routers.cpanel-capi.entrypoints=websecure"
+      - "traefik.http.routers.cpanel-capi.tls.certresolver=myresolver"
+      - "traefik.http.routers.cpanel-capi.service=cpanel"
+      - "traefik.http.routers.cpanel-capi.middlewares=cpanel-capi-redirect"
+      - "traefik.http.middlewares.cpanel-capi-redirect.redirectregex.regex=^https://capi\\.lynxlinkage\\.com/(.*)"
+      - "traefik.http.middlewares.cpanel-capi-redirect.redirectregex.replacement=https://cpanel.lynxlinkage.com/$${1}"
+      - "traefik.http.middlewares.cpanel-capi-redirect.redirectregex.permanent=true"
+
+  # No Traefik labels and no published port: it is reached by nothing, it only calls out.
+  cpanel-worker:
+    <<: *cpanel
+    container_name: cpanel-worker
+    command: ["/usr/local/bin/cpanel-worker"]
+    restart: unless-stopped
+    environment:
+      <<: *env
+      CPANEL_MFTIKO_TOKEN_FILE: /run/secrets/mftiko_token
+      CPANEL_SYM_TOKEN_FILE: /run/secrets/sym_token
+    secrets: [database_url, mftiko_token, sym_token]
+    networks: [default]
+    mem_limit: 256m
+
+secrets:
+  database_url: { file: ./secrets/database_url }
+  discord_client_secret: { file: ./secrets/discord_client_secret }
+  discord_bot_token: { file: ./secrets/discord_bot_token }
+  mftiko_token: { file: ./secrets/mftiko_token }
+  sym_token: { file: ./secrets/sym_token }
+
+networks:
+  default: {}
+  web_proxy:
+    external: true

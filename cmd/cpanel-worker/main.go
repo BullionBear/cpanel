@@ -7,6 +7,17 @@
 //	-database          $CPANEL_DATABASE_URL       PostgreSQL URL; required, logged as ***
 //	-log-level         $CPANEL_LOG_LEVEL          trace, debug, info, warn or error, default info
 //	-shutdown-timeout  $CPANEL_SHUTDOWN_TIMEOUT   how long to wait for in-flight requests after SIGTERM, default 10s
+//	-mftiko-url        $CPANEL_MFTIKO_URL         mftiko-api base URL, e.g. http://100.65.26.119:8080/api/v1
+//	-mftiko-token      $CPANEL_MFTIKO_TOKEN       mftiko-api bearer token; logged as ***
+//	-sym-url           $CPANEL_SYM_URL            SYM gRPC listener, e.g. http://100.65.26.119:7450
+//	-sym-token         $CPANEL_SYM_TOKEN          SYM gRPC bearer token; logged as ***
+//
+// Every secret may instead come from a file named by $NAME_FILE, which is how compose mounts them (C2-D008).
+//
+//	cpanel-worker [flags] doctor
+//
+// doctor calls mftiko GET /accounts, SYM's grpc.health.v1 Check and SYM Revisions, prints one line per check and
+// exits 0 when all pass, 1 otherwise. It needs no database and starts no server.
 //
 // The effective settings are logged at startup, as JSON on stderr. Startup does not migrate: the database
 // must already be at the embedded version (cpanel-migrate up), or the process refuses to start and says why.
@@ -24,6 +35,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/BullionBear/cpanel/internal/doctor"
 	"github.com/BullionBear/cpanel/internal/platform/config"
 	"github.com/BullionBear/cpanel/internal/platform/httpserver"
 	"github.com/BullionBear/cpanel/internal/platform/logger"
@@ -37,6 +49,11 @@ type options struct {
 	database        string
 	logLevel        logger.Level
 	shutdownTimeout time.Duration
+	mftikoURL       string
+	mftikoToken     string
+	symURL          string
+	symToken        string
+	doctor          bool
 }
 
 func parseArgs(args []string, getenv func(string) string) (options, *config.Set, error) {
@@ -47,8 +64,20 @@ func parseArgs(args []string, getenv func(string) string) (options, *config.Set,
 	set.Var(&opt.logLevel, "log-level", "CPANEL_LOG_LEVEL", "trace, debug, info, warn or error")
 	set.Duration(&opt.shutdownTimeout, "shutdown-timeout", "CPANEL_SHUTDOWN_TIMEOUT", 10*time.Second,
 		"how long to wait for in-flight requests after SIGTERM")
-	if err := set.Parse(args); err != nil {
+	set.String(&opt.mftikoURL, "mftiko-url", "CPANEL_MFTIKO_URL", "", "mftiko-api base URL")
+	set.Secret(&opt.mftikoToken, "mftiko-token", "CPANEL_MFTIKO_TOKEN", "mftiko-api bearer token")
+	set.String(&opt.symURL, "sym-url", "CPANEL_SYM_URL", "", "SYM gRPC listener URL")
+	set.Secret(&opt.symToken, "sym-token", "CPANEL_SYM_TOKEN", "SYM gRPC bearer token")
+	rest, err := set.ParseRemaining(args)
+	if err != nil {
 		return options{}, nil, err
+	}
+	switch {
+	case len(rest) == 0:
+	case len(rest) == 1 && rest[0] == "doctor":
+		opt.doctor = true
+	default:
+		return options{}, nil, fmt.Errorf("unexpected argument %q; the only command is doctor", rest[0])
 	}
 	return opt, set, nil
 }
@@ -63,6 +92,17 @@ func main() {
 		os.Exit(2)
 	}
 	log := logger.New(os.Stderr, name, opt.logLevel)
+	if opt.doctor {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		results := doctor.Run(ctx, doctor.Config{
+			MftikoURL: opt.mftikoURL, MftikoToken: opt.mftikoToken, SymURL: opt.symURL, SymToken: opt.symToken,
+		})
+		if !doctor.Write(os.Stdout, results) {
+			os.Exit(1)
+		}
+		return
+	}
 	log.Info().Dict("config", set.Dict()).Msg("starting")
 	if err := requireSchema(opt.database); err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
