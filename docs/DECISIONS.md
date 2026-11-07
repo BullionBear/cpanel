@@ -92,3 +92,9 @@ C2-D001–C2-D007 於 2026-11-06 定在 epic，原文照錄。
 
 - 子命令，不開 server、不需要資料庫。依序：mftiko `GET /accounts?limit=1`（帶 token）、SYM `grpc.health.v1` Check（不需 token）、SYM `Revisions`（帶 token，證明 token 有效）。每項一行，全過 exit 0。
 - 只有讀的呼叫（I2）。
+
+### C2-D014 GHCR 的 `cpanel` package 設為 public（#54）
+
+- 主機不需要 GHCR 的登入憑證就能以 digest 拉 image，主機上少一把可以讀 org 其他 package 的 token。
+- image 裡沒有 secret：設定與 secret 都在部署時以 `config.env` 與 `secrets/` 給。repo 本身仍是 private。
+- 代價：任何人都拉得到 binary 與內嵌的 SPA。cpanel 沒有要對外保密的程式邏輯；之後若有，改回 private 並在主機上以只有 `read:packages` 的 token 登入。
