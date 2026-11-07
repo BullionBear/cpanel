@@ -11,6 +11,7 @@
 //	-shutdown-timeout  $CPANEL_SHUTDOWN_TIMEOUT   how long to wait for in-flight requests and job pages after SIGTERM, default 10s
 //	-reconcile-interval $CPANEL_RECONCILE_INTERVAL  how often the ReconcileLoop starts a round, default 5s
 //	-job-slots         $CPANEL_JOB_SLOTS          how many lease keys run jobs at once, default 4
+//	-egress            $CPANEL_EGRESS             name shared by every replica behind one egress IP; an HTTP 418 pauses it
 //	-mftiko-url        $CPANEL_MFTIKO_URL         mftiko-api base URL, e.g. http://100.65.26.119:8080/api/v1
 //	-mftiko-token      $CPANEL_MFTIKO_TOKEN       mftiko-api bearer token; logged as ***
 //	-sym-url           $CPANEL_SYM_URL            SYM gRPC listener, e.g. http://100.65.26.119:7450
@@ -64,6 +65,7 @@ type options struct {
 	shutdownTimeout   time.Duration
 	reconcileInterval time.Duration
 	jobSlots          int
+	egress            string
 	mftikoURL         string
 	mftikoToken       string
 	symURL            string
@@ -82,6 +84,7 @@ func parseArgs(args []string, getenv func(string) string) (options, *config.Set,
 	set.Duration(&opt.reconcileInterval, "reconcile-interval", "CPANEL_RECONCILE_INTERVAL", reconcile.DefaultInterval,
 		"how often the ReconcileLoop starts a round")
 	set.Int(&opt.jobSlots, "job-slots", "CPANEL_JOB_SLOTS", worker.DefaultSlots, "how many lease keys run jobs at once")
+	set.String(&opt.egress, "egress", "CPANEL_EGRESS", "", "name shared by every replica behind one egress IP; an HTTP 418 pauses it")
 	set.String(&opt.mftikoURL, "mftiko-url", "CPANEL_MFTIKO_URL", "", "mftiko-api base URL")
 	set.Secret(&opt.mftikoToken, "mftiko-token", "CPANEL_MFTIKO_TOKEN", "mftiko-api bearer token")
 	set.String(&opt.symURL, "sym-url", "CPANEL_SYM_URL", "", "SYM gRPC listener URL")
@@ -162,7 +165,7 @@ func main() {
 		loop.Run(ctx)
 	}()
 	jobs := &worker.Worker{
-		DB: pool, Slots: opt.jobSlots, Grace: opt.shutdownTimeout, Log: log,
+		DB: pool, Slots: opt.jobSlots, Grace: opt.shutdownTimeout, Egress: opt.egress, Log: log,
 		Handlers: worker.Handlers{reconcile.MaintPartitions.Name: worker.MaintPartitions},
 	}
 	working := make(chan struct{})

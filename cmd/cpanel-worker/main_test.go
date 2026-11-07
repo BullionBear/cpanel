@@ -29,11 +29,12 @@ func TestParseArgs(t *testing.T) {
 		{"environment", map[string]string{
 			"CPANEL_WORKER_LISTEN": ":9001", "CPANEL_LOG_LEVEL": "debug", "CPANEL_SHUTDOWN_TIMEOUT": "3s",
 			"CPANEL_DATABASE_URL": "postgres://db/cpanel", "CPANEL_RECONCILE_INTERVAL": "2s", "CPANEL_JOB_SLOTS": "2",
+			"CPANEL_EGRESS":     "172.237.19.123",
 			"CPANEL_API_LISTEN": ":1", // the API's, not ours
-		}, nil, options{listen: ":9001", database: "postgres://db/cpanel", logLevel: logger.Level(zerolog.DebugLevel), shutdownTimeout: 3 * time.Second, reconcileInterval: 2 * time.Second, jobSlots: 2}},
-		{"flags over environment", map[string]string{"CPANEL_WORKER_LISTEN": ":9001", "CPANEL_LOG_LEVEL": "debug", "CPANEL_DATABASE_URL": "postgres://env/cpanel", "CPANEL_RECONCILE_INTERVAL": "2s", "CPANEL_JOB_SLOTS": "2"},
-			[]string{"-listen=:7001", "-log-level=warn", "-shutdown-timeout=1m", "-database=postgres://flag/cpanel", "-reconcile-interval=1s", "-job-slots=8"},
-			options{listen: ":7001", database: "postgres://flag/cpanel", logLevel: logger.Level(zerolog.WarnLevel), shutdownTimeout: time.Minute, reconcileInterval: time.Second, jobSlots: 8}},
+		}, nil, options{listen: ":9001", database: "postgres://db/cpanel", logLevel: logger.Level(zerolog.DebugLevel), shutdownTimeout: 3 * time.Second, reconcileInterval: 2 * time.Second, jobSlots: 2, egress: "172.237.19.123"}},
+		{"flags over environment", map[string]string{"CPANEL_WORKER_LISTEN": ":9001", "CPANEL_LOG_LEVEL": "debug", "CPANEL_DATABASE_URL": "postgres://env/cpanel", "CPANEL_RECONCILE_INTERVAL": "2s", "CPANEL_JOB_SLOTS": "2", "CPANEL_EGRESS": "env"},
+			[]string{"-listen=:7001", "-log-level=warn", "-shutdown-timeout=1m", "-database=postgres://flag/cpanel", "-reconcile-interval=1s", "-job-slots=8", "-egress=flag"},
+			options{listen: ":7001", database: "postgres://flag/cpanel", logLevel: logger.Level(zerolog.WarnLevel), shutdownTimeout: time.Minute, reconcileInterval: time.Second, jobSlots: 8, egress: "flag"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -79,12 +80,12 @@ func TestBinary(t *testing.T) {
 	}
 
 	t.Run("healthz, reconcile, jobs, metrics and graceful shutdown", func(t *testing.T) {
-		p := cmdtest.Start(t, bin, []string{"CPANEL_WORKER_LISTEN=127.0.0.1:0", "CPANEL_DATABASE_URL=" + srv.DSN()},
+		p := cmdtest.Start(t, bin, []string{"CPANEL_WORKER_LISTEN=127.0.0.1:0", "CPANEL_DATABASE_URL=" + srv.DSN(), "CPANEL_EGRESS=edge"},
 			"-shutdown-timeout=5s", "-reconcile-interval=50ms")
 		start := p.Log(t, "starting")
 		cfg, _ := start["config"].(map[string]any)
 		if start["component"] != name || cfg["listen"] != "127.0.0.1:0" || cfg["database"] != "***" || cfg["log-level"] != "info" ||
-			cfg["shutdown-timeout"] != "5s" || cfg["reconcile-interval"] != "50ms" || cfg["job-slots"] != "4" {
+			cfg["shutdown-timeout"] != "5s" || cfg["reconcile-interval"] != "50ms" || cfg["job-slots"] != "4" || cfg["egress"] != "edge" {
 			t.Errorf("startup line %v", start)
 		}
 		addr, _ := p.Log(t, "listening")["addr"].(string)

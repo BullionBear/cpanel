@@ -9,4 +9,8 @@
 // A worker that is killed leaves its jobs running under its lease token. The next worker to take the lease after
 // it expires sets them back to pending with attempt + 1. A worker that is stopped finishes the page in progress,
 // sets its job back to pending without counting an attempt, and releases the lease at once.
+//
+// A handler's *classify.ClassifiedError picks the failure's handling (C3-04): auth calls CredentialHook, a rate
+// limit pushes the whole lease_key back, an IP ban pauses every worker of this egress, and a bad request pauses
+// the stream. Any other error is internal.
 package worker

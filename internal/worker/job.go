@@ -10,7 +10,8 @@ import (
 )
 
 // Handler runs one job. It makes outbound requests while job.Continue allows, writes each page with
-// job.CommitPage, and returns what it did. A returned error fails the job; C3-04 classifies it.
+// job.CommitPage, and returns what it did. A returned *classify.ClassifiedError is handled by its class (C3-04);
+// any other error fails the job as internal.
 type Handler func(ctx context.Context, job *Job) (Result, error)
 
 // Result is what a handler did.
@@ -107,6 +108,8 @@ func (r *runner) claim(ctx context.Context, l *lease) (*Job, error) {
 			SELECT id
 			FROM ingest.job
 			WHERE lease_key = $1 AND status = 'pending' AND not_before <= now() AND kind = ANY($4)
+			  AND (kind = ANY($5) OR NOT EXISTS (
+			        SELECT FROM ingest.pause p WHERE p.scope = $6 AND p.until > now()))
 			ORDER BY priority, not_before, id
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
@@ -119,7 +122,7 @@ func (r *runner) claim(ctx context.Context, l *lease) (*Job, error) {
 		RETURNING j.id, j.kind, j.lease_key, coalesce(j.stream_id, 0), coalesce(j.periodic_name, ''), j.params, j.attempt,
 		          (SELECT s.cursor FROM ingest.stream s WHERE s.id = j.stream_id),
 		          coalesce((SELECT s.cursor_version FROM ingest.stream s WHERE s.id = j.stream_id), 0)`,
-		l.key, r.name, l.token, r.kinds).Scan(
+		l.key, r.name, l.token, r.kinds, r.local, r.scope()).Scan(
 		&j.ID, &j.Kind, &j.LeaseKey, &j.StreamID, &j.Periodic, &j.Params, &j.Attempt, &j.Cursor, &j.version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -133,26 +136,18 @@ func (r *runner) claim(ctx context.Context, l *lease) (*Job, error) {
 // maxErrorLen bounds the error text kept in job_run and on the stream.
 const maxErrorLen = 2000
 
-// complete moves j from ingest.job to ingest.job_run and updates its stream, in one transaction. It returns false,
-// and writes nothing, when the job is no longer running under l: another worker took it over.
+// complete moves j from ingest.job to ingest.job_run and updates its stream, in one transaction. A classified
+// failure also backs off, pauses or alerts, in that same transaction. It returns false, and writes nothing, when
+// the job is no longer running under l: another worker took it over.
 func (r *runner) complete(ctx context.Context, l *lease, j *Job, res Result, runErr error) (bool, error) {
-	status := "succeeded"
-	var class, msg *string
+	eff := effect{status: "succeeded", due: "period"}
 	if runErr != nil {
-		text := runErr.Error()
-		if len(text) > maxErrorLen {
-			text = text[:maxErrorLen]
-		}
-		msg = &text
-		if errors.Is(runErr, ErrCursorMoved) {
-			status = "cancelled"
-		} else {
-			status = "failed"
-			internal := "internal"
-			class = &internal
-		}
+		eff = r.effectOf(runErr)
+	} else if res.More {
+		eff.due = "now"
 	}
 	ours := false
+	var alert *Alert
 	err := pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			WITH done AS (
@@ -166,31 +161,48 @@ func (r *runner) complete(ctx context.Context, l *lease, j *Job, res Result, run
 			SELECT id, kind, dedup_key, lease_key, stream_id, periodic_name, priority, attempt,
 			       params, enqueued_at, started_at, now(), worker, $4, $5, $6, $7, $8, $9
 			FROM done`,
-			j.ID, r.name, l.token, status, res.Requests, res.Items, res.More, class, msg)
+			j.ID, r.name, l.token, eff.status, res.Requests, res.Items, res.More, eff.class, eff.msg)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
 		ours = true
-		if j.StreamID == 0 {
-			return nil
+		if runErr == nil {
+			if j.StreamID == 0 {
+				return nil
+			}
+			_, err = tx.Exec(ctx, `
+				UPDATE ingest.stream SET
+					next_due_at          = CASE WHEN $2 THEN now() ELSE now() + period END,
+					last_ok_at           = now(),
+					consecutive_failures = 0
+				WHERE id = $1`,
+				j.StreamID, res.More)
+			return err
 		}
-		// More, or a cursor moved by someone else, means the stream is due again now.
-		again := status == "cancelled" || (status == "succeeded" && res.More)
-		_, err = tx.Exec(ctx, `
-			UPDATE ingest.stream SET
-				next_due_at          = CASE WHEN $2 THEN now() ELSE now() + period END,
-				last_ok_at           = CASE WHEN $3 = 'succeeded' THEN now() ELSE last_ok_at END,
-				consecutive_failures = CASE $3 WHEN 'succeeded' THEN 0
-				                               WHEN 'failed' THEN consecutive_failures + 1
-				                               ELSE consecutive_failures END,
-				last_error_at        = CASE WHEN $3 = 'failed' THEN now() ELSE last_error_at END,
-				last_error_class     = CASE WHEN $3 = 'failed' THEN $4::text ELSE last_error_class END,
-				last_error           = CASE WHEN $3 = 'failed' THEN $5::text ELSE last_error END
-			WHERE id = $1`,
-			j.StreamID, again, status, class, msg)
+		alert, err = r.recordFailure(ctx, tx, j, &eff)
 		return err
 	})
-	return ours, err
+	if err != nil || !ours {
+		return ours, err
+	}
+	switch {
+	case eff.ban > 0:
+		r.log.Warn().Str("scope", r.scope()).Dur("for", eff.ban).Int64("job", j.ID).Msg("egress paused")
+	case eff.banSkipped:
+		r.log.Error().Int64("job", j.ID).Msg("egress name is empty; the IP ban was not paused")
+	}
+	if alert != nil {
+		ev := r.log.Error().Int64("stream", alert.StreamID).Str("lease_key", alert.LeaseKey).Str("error", alert.Message)
+		if alert.StreamID != 0 {
+			ev.Msg("bad request; the stream is paused and will not be dispatched")
+		} else {
+			ev.Msg("bad request")
+		}
+		if r.alert != nil {
+			r.alert(ctx, *alert)
+		}
+	}
+	return true, nil
 }
 
 // handBack sets j back to pending, without counting an attempt, for the next holder of the key.

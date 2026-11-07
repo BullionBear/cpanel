@@ -63,6 +63,7 @@ services:
     restart: unless-stopped
     environment:
       <<: *env
+      CPANEL_EGRESS: "172.237.19.123"
       CPANEL_MFTIKO_TOKEN_FILE: /run/secrets/mftiko_token
       CPANEL_SYM_TOKEN_FILE: /run/secrets/sym_token
     secrets: [database_url, mftiko_token, sym_token]

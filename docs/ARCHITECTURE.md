@@ -194,11 +194,12 @@
 
 | 類別 | 例子 | 處理 |
 |---|---|---|
-| `auth` | key 無效、權限不足、IP 不在白名單 | credential 連續 2 次 → `auth_failed`，觸發告警；ReconcileLoop 斷路（§4.3-1） |
-| `rate_limited` | 429；Binance 418（IP 被封） | 依 `Retry-After` 退避；418 時整台 worker（整個出口 IP）暫停 |
-| `unavailable` | 5xx、逾時、維護 | stream 指數退避 |
-| `bad_request` | 4xx 的參數錯誤 | 視為 bug：stream 暫停並告警，不熱重試 |
-| `not_found` | Binance `-2013`（訂單不存在） | 只在 `order.resolve` 出現，見 §4.5 |
+| `auth` | 401、403：key 無效、權限不足、IP 不在白名單 | job 失敗，並呼叫 credential hook（C5-04 才把連續 2 次轉成 `auth_failed` 與斷路，§4.3-1） |
+| `rate_limited` | 429 | 依 `Retry-After`（沒有就指數退避）把整個 `lease_key` 的 `not_before` 與其他 stream 的 `next_due_at` 往後推。不寫 `ingest.pause` |
+| `ip_banned` | 418，Binance 的 IP 封禁 | 寫 `ingest.pause`，scope 是 `egress:<名稱>`（`-egress`，同一出口的副本共用）。到期前不認領要對外的 job；`maint.partitions` 照常 |
+| `unavailable` | 5xx、408、逾時、連線錯誤、維護 | 只延後這條 stream：30 秒起、加倍、上限 30 分鐘，再乘 0.5–1 的 jitter |
+| `bad_request` | 其他 4xx，參數錯誤 | 視為 bug：`paused_reason = bad_request`，記 log、呼叫 alert hook（C3-05 才送出），不重試 |
+| `not_found` | 404；Binance `-2013` 由 venue client 標成這一類 | worker 不另外處理，handler 自己決定（`order.resolve` 見 §4.5） |
 
 - **健康狀態放在 stream 與 credential 那一列上**（`last_ok_at`、`consecutive_failures`、`last_error_class`、`last_error`），UI 與告警讀這裡。job 表是證據，不是偵測機制。
 - **job 表的量：** 例如 3 個帳號 × 40 個商品 × 2 種、每 2 分鐘一輪，一天約 17 萬筆。這些都在 `ingest.job_run`：按 UTC 日分區、保留 30 天；過期分區的失敗列先複製到 `ingest.job_failure`（保留一年）再 drop。`ingest.job` 本身只有未完成的幾百列。
@@ -208,7 +209,7 @@
 - **取得：** 挑一個 lease 空著或過期、而且有到期 job（或前一個持有者留下的 `running` job）的 `lease_key`，以 `INSERT … ON CONFLICT (key) DO UPDATE … WHERE until <= now()` 搶，`token` 加一。同一個 transaction 把舊 token 留下的 `running` job 改回 `pending`、`attempt` 加一。
 - **續租與釋放：** 租期 60 秒，每 20 秒續一次。續不到，或本地估計剩不到一個續租間隔，就不再開始新的一頁。該 key 沒有到期 job 時以 `until = now()` 釋放。
 - **handler：** `kind → Handler`，拿到 job、當下的 cursor 與預算（20 個請求或 30 秒；硬上限是兩倍時間）。每一頁以 `CommitPage` 寫入：同一個 transaction 先以 `cursor_version` CAS 推進 cursor 再寫資料。CAS 失敗整頁 rollback，job 記成 `cancelled`，stream 立刻再到期。
-- **結束：** 同一個 transaction 刪掉 job（條件含 worker 與 token，已被接手的就不寫）、寫 `job_run`、更新 stream。成功時寫 `last_ok_at`、`consecutive_failures = 0`；`more` 時 `next_due_at = now`，否則 `now + period`。失敗目前一律記成 `internal`，由 C3-04 細分並退避。handler panic 也記成失敗。
+- **結束：** 同一個 transaction 刪掉 job（條件含 worker 與 token，已被接手的就不寫）、寫 `job_run`、更新 stream。成功時寫 `last_ok_at`、`consecutive_failures = 0`；`more` 時 `next_due_at = now`，否則 `now + period`。失敗依 `*classify.ClassifiedError` 的類別處理（上表）；沒有這個型別的錯誤與 panic 記成 `internal`，一個 period 後再派。`Retry-After` 超過 24 小時以 24 小時計。出口名稱沒設時，418 只記錄、不寫 pause。
 - **停止：** SIGTERM 後不再認領；進行中的頁最多等 `-shutdown-timeout`，沒做完的 job 改回 `pending`（不算 attempt）並釋放 lease，另一個副本不必等租期。被 kill 的 worker 則等租期過後，由下一個持有者接手。
 - **`maint.partitions`：** 建今天與之後 7 天的分區、expire 30 天前的分區、刪一年前的 `job_failure`。每一步各用一個短 transaction 並設 `lock_timeout`。讀 `job_run` 的查詢先鎖 parent 再鎖各分區；如果同一個 transaction 先 attach（鎖 default 分區）再 drop（鎖 parent），會跟它死結。
 
