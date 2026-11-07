@@ -16,6 +16,8 @@
 - 主機在 tailnet 上，容器的流量經主機路由，所以容器直接連得到 `100.65.26.119`。不經 `mftiko-proxy`：那是讓 Traefik 從公網轉到 mftiko console 的，cpanel 走私網即可（C2-D010）。
 - `capi.lynxlinkage.com` 永久轉址到 `cpanel.lynxlinkage.com` 的同一個路徑。
 - Discord OAuth 的 redirect URI：`https://cpanel.lynxlinkage.com/auth/discord/callback`。
+- Discord：app 是 LynxBot（client id `1525825932999266404`，沿用 v2，C2-D006），guild 是 MFTIK（`1297170481031548928`），登入要有 `Admin` role（`1529506484894044231`）。不能用 bot 自己的 `LynkBear` role：那是 Discord 管理的 role（`managed`），不能指派給人。
+- image：GHCR 的 `cpanel` package 是 public，主機不登入 GHCR 就能拉（C2-D014）。
 
 ## 主機上的檔案
 
@@ -46,7 +48,7 @@
 
 ## 部署
 
-1. 推 tag（`v3.0.0` 之類）或 merge 到 `main`。`release` workflow build 並推 `ghcr.io/bullionbear/cpanel`，Discord 通知裡有 digest。也可以查：
+1. 推 tag（`v3.0.0-alpha.1` 之類）或 merge 到 `main`。`release` workflow build 並推 `ghcr.io/bullionbear/cpanel`，Discord 通知裡有 digest。也可以查：
 
    ```sh
    docker buildx imagetools inspect ghcr.io/bullionbear/cpanel:v3.0.0 --format '{{json .Manifest.Digest}}'
@@ -114,6 +116,15 @@
 
 - 不用 `bullionbear`：它是 superuser、擁有其他資料庫，密碼曾外洩到 shell 紀錄（#45）。
 
+## mftiko 與 SYM 的 token
+
+cpanel 在兩邊各有自己的一個身分，名字都是 `cpanel`，撤銷時不影響其他客戶端。兩邊都在 `100.65.26.119`（yite）上，要 root。
+
+- **mftiko-api**：`/etc/mftiko/api/api.json` 的 `users[]` 加 `{"name": "cpanel", "token_sha256": "<sha256(token) 的 hex>"}`，`systemctl restart mftiko-api`。API 只存 hash，明文只在 cpanel 主機的 `secrets/mftiko_token`。單一角色、實際上有寫權限，所以 cpanel 這一側只發 GET（I2）。
+- **SYM**：`/etc/mftiko/sym/grpc-tokens` 加一行 `cpanel <token>`（0600，owner `mftiko-sym`），`systemctl restart mftiko-sym`。重啟會中斷其他客戶端的 `WatchChanges`，它們會重連。
+- token 以 `openssl rand -hex 32` 在 yite 上產生，經 ssh 管線直接寫進 cpanel 主機的 secret 檔，不顯示、不落在第三個地方。改之前先備份（`*.bak-pre-cpanel`）；新 token 驗證不過就還原備份再重啟。
+- 驗證：`docker exec cpanel-worker /usr/local/bin/cpanel-worker doctor`。
+
 ## secret 輪換
 
 每個 secret 都是一個檔。換的步驟一樣：寫新檔、`chown 65532:65532`、`chmod 600`，再重建用到它的容器。
@@ -129,7 +140,7 @@ CPANEL_IMAGE=ghcr.io/bullionbear/cpanel@$(cat state/current) docker compose -p c
 | `database_url` | `ALTER ROLE cpanel_v3 PASSWORD '…'`，同時更新檔案 | 全部 |
 | `discord_client_secret` | Discord Developer Portal → OAuth2 → Reset Secret | cpanel-api |
 | `discord_bot_token` | Developer Portal → Bot → Reset Token | cpanel-api |
-| `mftiko_token` | mftiko 那邊發新的 PMS token，換完撤舊的 | cpanel-worker |
+| `mftiko_token` | `users[]` 加一個新名字（例如 `cpanel-2`）的 hash、重啟 mftiko-api、換檔、驗證 doctor、刪舊的再重啟 | cpanel-worker |
 | `sym_token` | `/etc/mftiko/sym/grpc-tokens` 加一行新的（例如 `cpanel-2`）、重啟 SYM、換檔、驗證 doctor、刪舊行再重啟 SYM（mftiko operations「輪換 gRPC 的 token」） | cpanel-worker |
 
 換完跑一次 `doctor`；Discord 的換完從瀏覽器登入一次。
