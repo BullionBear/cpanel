@@ -33,7 +33,10 @@ WEB_CLIENT := $(WEB)/src/lib/gen/api/v1.ts
 
 export PATH := $(TOOLS):$(NODE_BIN):$(WEB_BIN):$(PATH)
 
-.PHONY: help fmt vet test build check dev-db tools openapi openapi-lint openapi-breaking gen-check web web-install web-check web-dev image
+.PHONY: help fmt vet test build check dev-db tools openapi openapi-lint openapi-breaking gen-check web web-install web-check web-dev image rules-check
+
+# promtool unit-tests deploy/prometheus (C3-D005). The binary is not committed.
+PROM_VERSION := 2.55.1
 
 help: ## List targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-18s %s\n",$$1,$$2}'
@@ -137,9 +140,25 @@ web-check: web-install ## svelte-check and the small node tests
 web-dev: web-install ## Dev server; proxies the API to cpanel-api on :8080
 	npm run dev --prefix $(WEB)
 
-check: ## What CI runs: gofmt, tidy, OpenAPI lint, oasdiff, gen-check, svelte-check, SPA build, vet, build, test
+check: ## What CI runs: gofmt, tidy, OpenAPI lint, oasdiff, gen-check, svelte-check, SPA build, vet, build, alert rules, test
 	@files=$$(git ls-files --cached --others --exclude-standard '*.go'); \
 	unformatted=$$(gofmt -l $$files); \
 	if [ -n "$$unformatted" ]; then echo "not gofmt-ed, run make fmt:" >&2; echo "$$unformatted" >&2; exit 1; fi
 	$(GO) mod tidy -diff
-	$(MAKE) --no-print-directory openapi-lint openapi-breaking gen-check web-check web vet build test
+	$(MAKE) --no-print-directory openapi-lint openapi-breaking gen-check web-check web vet build rules-check test
+
+rules-check: $(TOOLS)/promtool ## promtool check and unit-test deploy/prometheus/cpanel.rules.yml
+	$(TOOLS)/promtool check rules deploy/prometheus/cpanel.rules.yml
+	$(TOOLS)/promtool test rules deploy/prometheus/cpanel.rules.test.yml
+
+$(TOOLS)/promtool:
+	mkdir -p $(TOOLS)
+	set -euo pipefail; \
+	arch=$$(uname -m); \
+	case "$$arch" in x86_64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) echo "unsupported arch $$arch" >&2; exit 1 ;; esac; \
+	tmp=$$(mktemp -d); \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	curl -fsSL -o "$$tmp/prom.tgz" "https://github.com/prometheus/prometheus/releases/download/v$(PROM_VERSION)/prometheus-$(PROM_VERSION).linux-$$arch.tar.gz"; \
+	tar -C "$$tmp" -xzf "$$tmp/prom.tgz"; \
+	mv "$$tmp/prometheus-$(PROM_VERSION).linux-$$arch/promtool" $(TOOLS)/promtool; \
+	chmod +x $(TOOLS)/promtool

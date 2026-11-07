@@ -1,0 +1,1 @@
+import{A as e,N as t,l as n,x as r,y as i}from"../chunks/Duj6H_S2.js";var a=r(`<main class="card"><h1>登入</h1> <p>使用 Discord 登入。必須是指定伺服器的成員，而且有指定的角色。</p> <p><a class="primary svelte-1x05zx6" href="/auth/discord/login">以 Discord 登入</a></p></main>`);function o(r){var o=a();n(`1x05zx6`,n=>{e(()=>{t.title=`登入 · cpanel`})}),i(r,o)}export{o as component};

@@ -7,6 +7,78 @@ import (
 	"time"
 )
 
+// Defines values for ErrorClass.
+const (
+	Auth        ErrorClass = "auth"
+	BadRequest  ErrorClass = "bad_request"
+	Internal    ErrorClass = "internal"
+	IpBanned    ErrorClass = "ip_banned"
+	NotFound    ErrorClass = "not_found"
+	RateLimited ErrorClass = "rate_limited"
+	Unavailable ErrorClass = "unavailable"
+)
+
+// Valid indicates whether the value is a known member of the ErrorClass enum.
+func (e ErrorClass) Valid() bool {
+	switch e {
+	case Auth:
+		return true
+	case BadRequest:
+		return true
+	case Internal:
+		return true
+	case IpBanned:
+		return true
+	case NotFound:
+		return true
+	case RateLimited:
+		return true
+	case Unavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for JobRunStatus.
+const (
+	Cancelled JobRunStatus = "cancelled"
+	Failed    JobRunStatus = "failed"
+	Succeeded JobRunStatus = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the JobRunStatus enum.
+func (e JobRunStatus) Valid() bool {
+	switch e {
+	case Cancelled:
+		return true
+	case Failed:
+		return true
+	case Succeeded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for JobStatus.
+const (
+	Pending JobStatus = "pending"
+	Running JobStatus = "running"
+)
+
+// Valid indicates whether the value is a known member of the JobStatus enum.
+func (e JobStatus) Valid() bool {
+	switch e {
+	case Pending:
+		return true
+	case Running:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MeAuth.
 const (
 	MeAuthSession MeAuth = "session"
@@ -25,6 +97,30 @@ func (e MeAuth) Valid() bool {
 	}
 }
 
+// Defines values for StreamStatus.
+const (
+	BackingOff StreamStatus = "backing_off"
+	Ok         StreamStatus = "ok"
+	Paused     StreamStatus = "paused"
+)
+
+// Valid indicates whether the value is a known member of the StreamStatus enum.
+func (e StreamStatus) Valid() bool {
+	switch e {
+	case BackingOff:
+		return true
+	case Ok:
+		return true
+	case Paused:
+		return true
+	default:
+		return false
+	}
+}
+
+// ErrorClass 錯誤類別（C3-04）。
+type ErrorClass string
+
 // Health defines model for Health.
 type Health struct {
 	// BuiltAt 建置時間，UTC，RFC3339。
@@ -39,6 +135,56 @@ type Health struct {
 	// Version 建置版本，來自 `git describe`。在 `v*` tag 上建置時與 image tag 相同。
 	Version string `json:"version"`
 }
+
+// Job defines model for Job.
+type Job struct {
+	Attempt    int       `json:"attempt"`
+	DedupKey   string    `json:"dedup_key"`
+	EnqueuedAt time.Time `json:"enqueued_at"`
+	Id         int64     `json:"id"`
+	Kind       string    `json:"kind"`
+
+	// LastErrorClass 所屬 stream 的 `last_error_class`。沒有 stream 時是 null。
+	LastErrorClass *string    `json:"last_error_class,omitempty"`
+	LeaseKey       string     `json:"lease_key"`
+	NotBefore      time.Time  `json:"not_before"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	Status         JobStatus  `json:"status"`
+	StreamId       *int64     `json:"stream_id,omitempty"`
+}
+
+// JobRun defines model for JobRun.
+type JobRun struct {
+	Attempt    int          `json:"attempt"`
+	DedupKey   string       `json:"dedup_key"`
+	EnqueuedAt time.Time    `json:"enqueued_at"`
+	Error      *string      `json:"error,omitempty"`
+	ErrorClass *string      `json:"error_class,omitempty"`
+	FinishedAt time.Time    `json:"finished_at"`
+	Id         int64        `json:"id"`
+	Items      int          `json:"items"`
+	Kind       string       `json:"kind"`
+	LeaseKey   string       `json:"lease_key"`
+	More       bool         `json:"more"`
+	Requests   int          `json:"requests"`
+	StartedAt  *time.Time   `json:"started_at,omitempty"`
+	Status     JobRunStatus `json:"status"`
+	StreamId   *int64       `json:"stream_id,omitempty"`
+	Worker     *string      `json:"worker,omitempty"`
+}
+
+// JobRunPage defines model for JobRunPage.
+type JobRunPage struct {
+	// NextCursor 還有下一頁時才有。原樣傳回 `cursor`。
+	NextCursor *string  `json:"next_cursor,omitempty"`
+	Runs       []JobRun `json:"runs"`
+}
+
+// JobRunStatus defines model for JobRunStatus.
+type JobRunStatus string
+
+// JobStatus defines model for JobStatus.
+type JobStatus string
 
 // Me defines model for Me.
 type Me struct {
@@ -69,6 +215,28 @@ type Ready struct {
 	Ok bool `json:"ok"`
 }
 
+// Stream defines model for Stream.
+type Stream struct {
+	ConsecutiveFailures int        `json:"consecutive_failures"`
+	CreatedAt           time.Time  `json:"created_at"`
+	Id                  int64      `json:"id"`
+	Key                 string     `json:"key"`
+	Kind                string     `json:"kind"`
+	LastError           *string    `json:"last_error,omitempty"`
+	LastErrorClass      *string    `json:"last_error_class,omitempty"`
+	LastOkAt            *time.Time `json:"last_ok_at,omitempty"`
+	LeaseKey            string     `json:"lease_key"`
+	NextDueAt           time.Time  `json:"next_due_at"`
+	PausedAt            *time.Time `json:"paused_at,omitempty"`
+	PausedReason        *string    `json:"paused_reason,omitempty"`
+
+	// Status 有 `paused_reason` 是 `paused`；否則連續失敗大於 0 是 `backing_off`；其餘是 `ok`。
+	Status StreamStatus `json:"status"`
+}
+
+// StreamStatus 有 `paused_reason` 是 `paused`；否則連續失敗大於 0 是 `backing_off`；其餘是 `ok`。
+type StreamStatus string
+
 // Token defines model for Token.
 type Token struct {
 	CreatedAt  time.Time  `json:"created_at"`
@@ -92,6 +260,15 @@ type TokenCreated struct {
 	Token string `json:"token"`
 }
 
+// Kind defines model for Kind.
+type Kind = string
+
+// LeaseKey defines model for LeaseKey.
+type LeaseKey = string
+
+// ListLimit defines model for ListLimit.
+type ListLimit = int
+
 // Unauthenticated RFC 9457。`code` 是給程式判斷的穩定值。
 type Unauthenticated = Problem
 
@@ -99,6 +276,69 @@ type Unauthenticated = Problem
 type CallbackDiscordParams struct {
 	Code  string `form:"code" json:"code"`
 	State string `form:"state" json:"state"`
+}
+
+// ListJobRunsParams defines parameters for ListJobRuns.
+type ListJobRunsParams struct {
+	// From 含這個時間之後完成的。
+	From *time.Time `form:"from,omitempty" json:"from,omitempty"`
+
+	// To 不含這個時間之後完成的。
+	To *time.Time `form:"to,omitempty" json:"to,omitempty"`
+
+	// Kind 只留這個 kind。
+	Kind *Kind `form:"kind,omitempty" json:"kind,omitempty"`
+
+	// LeaseKey 只留這個 lease key，例如 `account:1`。
+	LeaseKey *LeaseKey `form:"lease_key,omitempty" json:"lease_key,omitempty"`
+
+	// Status 只留這個狀態。
+	Status *JobRunStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// ErrorClass 只留這個錯誤類別。
+	ErrorClass *ErrorClass `form:"error_class,omitempty" json:"error_class,omitempty"`
+
+	// Limit 一頁幾筆。預設 50，最大 200。
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor 上一頁回的 `next_cursor`。不是這個格式則 `bad_request`。
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// ListJobsParams defines parameters for ListJobs.
+type ListJobsParams struct {
+	// Kind 只留這個 kind。
+	Kind *Kind `form:"kind,omitempty" json:"kind,omitempty"`
+
+	// LeaseKey 只留這個 lease key，例如 `account:1`。
+	LeaseKey *LeaseKey `form:"lease_key,omitempty" json:"lease_key,omitempty"`
+
+	// Status 只留這個狀態。
+	Status *JobStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// ErrorClass 只留這個錯誤類別。
+	ErrorClass *ErrorClass `form:"error_class,omitempty" json:"error_class,omitempty"`
+
+	// Limit 最多幾筆。預設 200，最大 500。
+	Limit *ListLimit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListStreamsParams defines parameters for ListStreams.
+type ListStreamsParams struct {
+	// Kind 只留這個 kind。
+	Kind *Kind `form:"kind,omitempty" json:"kind,omitempty"`
+
+	// LeaseKey 只留這個 lease key，例如 `account:1`。
+	LeaseKey *LeaseKey `form:"lease_key,omitempty" json:"lease_key,omitempty"`
+
+	// Status 只留這個狀態。
+	Status *StreamStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// ErrorClass 只留這個錯誤類別。
+	ErrorClass *ErrorClass `form:"error_class,omitempty" json:"error_class,omitempty"`
+
+	// Limit 最多幾筆。預設 200，最大 500。
+	Limit *ListLimit `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.

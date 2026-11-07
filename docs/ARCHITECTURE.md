@@ -198,7 +198,7 @@
 | `rate_limited` | 429 | 依 `Retry-After`（沒有就指數退避）把整個 `lease_key` 的 `not_before` 與其他 stream 的 `next_due_at` 往後推。不寫 `ingest.pause` |
 | `ip_banned` | 418，Binance 的 IP 封禁 | 寫 `ingest.pause`，scope 是 `egress:<名稱>`（`-egress`，同一出口的副本共用）。到期前不認領要對外的 job；`maint.partitions` 照常 |
 | `unavailable` | 5xx、408、逾時、連線錯誤、維護 | 只延後這條 stream：30 秒起、加倍、上限 30 分鐘，再乘 0.5–1 的 jitter |
-| `bad_request` | 其他 4xx，參數錯誤 | 視為 bug：`paused_reason = bad_request`，記 log、呼叫 alert hook（C3-05 才送出），不重試 |
+| `bad_request` | 其他 4xx，參數錯誤 | 視為 bug：`paused_reason = bad_request`，記 log、呼叫 alert hook（只記 log）。告警由 C3-05 的 metrics 與 Prometheus 規則送出，不重試 |
 | `not_found` | 404；Binance `-2013` 由 venue client 標成這一類 | worker 不另外處理，handler 自己決定（`order.resolve` 見 §4.5） |
 
 - **健康狀態放在 stream 與 credential 那一列上**（`last_ok_at`、`consecutive_failures`、`last_error_class`、`last_error`），UI 與告警讀這裡。job 表是證據，不是偵測機制。
@@ -259,7 +259,7 @@
   - Account／Key：`GET /exchange-accounts`（含 join 到的 `api_id`、key 狀態、stream 健康摘要）、`GET /exchange-accounts/unmatched`（mftiko 有、cpanel 沒有的帳號）、`POST /exchange-accounts`、`POST /exchange-accounts/{id}/credentials`（封裝後回 `202`，驗證走 job）、`POST …/credentials/{cid}/verify`（重新驗證）、`POST …/credentials/{cid}/disable`、`DELETE …/credentials/{cid}`。
   - History：`GET /trades`、`GET /orders`、`GET /funding`（篩選：exchange_account、UID、時間），不透明 cursor 分頁，比照 mftiko 的慣例（`limit` 1–1000、`next_cursor`）。
   - 快照：`GET /snapshots`（batch 與缺口）、`GET /balances?at=`、`GET /positions?at=`。
-  - 營運：`GET /streams`、`GET /jobs`（依狀態、錯誤類別、帳號篩選）、`GET /pending-orders`。
+  - 營運（C3-05）：`GET /streams`、`GET /jobs`、`GET /job-runs`（時間、kind、lease key、狀態、錯誤類別，cursor 分頁）、`POST /streams/{id}/resume`（清掉暫停並寫 audit）。`GET /pending-orders` 還沒有。
 - web：SvelteKit SPA，由 cpanel-api 直接服務，同源，不需要 CORS。
 
 ### 4.8 platform
@@ -269,7 +269,7 @@
   - 與 mftiko 用同一個格式，是為了 §4.9：哪天 cpanel 要把 key 交給 mftiko，可以直接封給 TD instance 的公鑰（E21-D004）。`internal/platform/sealbox` 不能 import（I1），cpanel 自己實作，用 mftiko 的測試向量對拍。
   - 私鑰與 DB 分開備份；私鑰遺失，所有 key 都要重新登記。
 - migration：純 SQL；部署流程先 migrate、成功才換版。
-- log：結構化 JSON；`/metrics`（Prometheus）：stream lag、job 失敗率（依錯誤類別）、credential 狀態、pending order 的存活時間、快照缺口、PMS 沒涵蓋的 mftiko 帳號數。
+- log：結構化 JSON；`/metrics`（Prometheus）：stream lag、job 失敗率（依錯誤類別）、credential 狀態、pending order 的存活時間、快照缺口、PMS 沒涵蓋的 mftiko 帳號數。C3-05 先把 stream lag、連續失敗、暫停的 stream、生效中的 `ingest.pause`、未完成 job 的數量與最老年齡、最近一小時的 `job_run` 放在 `cpanel-worker` 的 `/metrics`。規則在 `deploy/prometheus/cpanel.rules.yml`（C3-D005）。credential、pending order、快照缺口仍等後面的 epic。
 
 ### 4.9 未來：mftiko 向 cpanel 拿帳號
 

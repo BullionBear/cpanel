@@ -39,7 +39,8 @@ a {
 }
 
 button,
-input {
+input,
+select {
 	font: inherit;
 	color: var(--fg);
 }
@@ -67,7 +68,8 @@ button:disabled {
 	cursor: default;
 }
 
-input {
+input,
+select {
 	background: var(--surface);
 	border: 1px solid var(--border);
 	border-radius: 4px;

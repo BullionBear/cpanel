@@ -1,0 +1,1 @@
+import"../chunks/Duj6H_S2.js";import{t as e}from"../chunks/DO7bsAwI.js";function t(t){e(t,{title:`Accounts`,note:`帳戶頁還沒有內容。`})}export{t as component};

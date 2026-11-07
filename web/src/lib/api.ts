@@ -9,6 +9,13 @@ export { failureMessage, isProblem };
 export type Me = components['schemas']['Me'];
 export type Token = components['schemas']['Token'];
 export type TokenCreated = components['schemas']['TokenCreated'];
+export type Stream = components['schemas']['Stream'];
+export type Job = components['schemas']['Job'];
+export type JobRun = components['schemas']['JobRun'];
+export type ErrorClass = components['schemas']['ErrorClass'];
+export type StreamStatus = components['schemas']['StreamStatus'];
+export type JobStatus = components['schemas']['JobStatus'];
+export type JobRunStatus = components['schemas']['JobRunStatus'];
 
 // Same-origin cookies. Dev reaches the API through the Vite proxy.
 export const api = createClient<paths>({

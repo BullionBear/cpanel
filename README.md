@@ -14,6 +14,8 @@ cpanel 是 [mftiko](https://github.com/BullionBear/mftiko) 的外部 PMS：管�
 
 一期 8 個 epic：#32（C1 封存 v2）到 #39（C8 其他 venue）。v3 的程式碼從 C2（#33）開始放進這個 repo。
 
+C3-05（#68）起，登入後可以從 `/ops` 看 stream、未完成的 job 與 job 歷史，並恢復暫停的 stream。告警規則在 `deploy/prometheus/cpanel.rules.yml`，由 Prometheus 抓 `cpanel-worker` 的 `/metrics`（C3-D005）。worker 不對公網開 port。
+
 ## 與 mftiko 的關係
 
 cpanel 只使用四樣輸入（mftiko E21-D085）：mftiko API（只發 GET）、SYM（gRPC）、cpanel 自己的唯讀交易所 key、交易所 REST。不連 mftiko 的 etcd、資料庫或 `td.evt`。

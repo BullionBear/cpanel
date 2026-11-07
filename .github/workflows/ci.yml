@@ -1,6 +1,6 @@
 # Checks for every pull request and every push to main (C2-D001): gofmt, go mod tidy, OpenAPI lint,
-# oasdiff, gen-check, svelte-check, the SPA build, go vet, the build, and the tests, which include
-# internal/archtest (I1, I5, I6).
+# oasdiff, gen-check, svelte-check, the SPA build, go vet, the build, alert rules, and the tests,
+# which include internal/archtest (I1, I5, I6).
 # One target, make check, so a local run matches CI. Building and publishing images is a separate
 # workflow (C2-06). Actions are pinned by commit, as in mftiko.
 name: ci

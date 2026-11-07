@@ -144,3 +144,14 @@ CPANEL_IMAGE=ghcr.io/bullionbear/cpanel@$(cat state/current) docker compose -p c
 | `sym_token` | `/etc/mftiko/sym/grpc-tokens` 加一行新的（例如 `cpanel-2`）、重啟 SYM、換檔、驗證 doctor、刪舊行再重啟 SYM（mftiko operations「輪換 gRPC 的 token」） | cpanel-worker |
 
 換完跑一次 `doctor`；Discord 的換完從瀏覽器登入一次。
+
+## 告警（C3-D005）
+
+`cpanel-worker` 的 `/metrics` 在容器內的 `:8081`。compose 沒有把這個 port 公布出去。Prometheus 跟 worker 在同一台時，用容器 IP 抓，跟 `deploy.sh` 檢查 `/healthz` 一樣：
+
+```sh
+ip=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' cpanel-worker)
+curl -s "http://$ip:8081/metrics" | head
+```
+
+在 Prometheus 的設定加上這個 target，並載入 repo 的 `deploy/prometheus/cpanel.rules.yml`。Grafana 匯入 `deploy/grafana/cpanel.json`，資料來源選這個 Prometheus。規則與 dashboard 都在 repo，這一步在主機上做，不進 image，也不需要新的 secret。
