@@ -27,7 +27,8 @@ cmd/cpanel-worker/           job worker；對 mftiko、SYM、交易所的呼叫�
 cmd/cpanel-migrate/          套用 embed 的 SQL migration；啟動時不 migrate 的檢查在 api 與 worker
 contract/openapi/            cpanel.v1.yaml；Redocly、oapi-codegen、oasdiff
 contract/gen/cpanel/v1/      由契約產生的 server 與型別，要 commit
-web/build/                   SPA placeholder；cpanel-api embed。C2-05 換成 SvelteKit build
+web/                         SvelteKit SPA。`src/lib/gen/api/v1.ts` 由契約產生，要 commit
+web/build/                   SvelteKit 的建置結果；cpanel-api embed
 migrations/                  NNNN_name.up.sql／.down.sql，版本表 meta.schema_migrations
 internal/api/                cpanel-api 的 OpenAPI handler、middleware、SPA
 internal/archtest/           以 go list 檢查 I1、I5、I6
@@ -40,14 +41,18 @@ docs/                        v3 的文件
 
 ## 開發
 
-Go 1.26（`go.mod`）。`make help` 列出所有 target；CI 在每個 PR 與 push `main` 時跑 `make check`（gofmt、`go mod tidy`、OpenAPI lint、oasdiff、gen-check、vet、build、test，archtest 包含在 test 裡）。
+Go 1.26（`go.mod`）。`make help` 列出所有 target；CI 在每個 PR 與 push `main` 時跑 `make check`（gofmt、`go mod tidy`、OpenAPI lint、oasdiff、gen-check、svelte-check、SPA build、vet、build、test，archtest 包含在 test 裡）。
 
 ```
 make dev-db   # 本機 Postgres 17，postgres://cpanel:cpanel@127.0.0.1:5432/cpanel?sslmode=disable
-make openapi  # 重新產生 contract/gen，然後 commit。工具是 oapi-codegen v2.8.0
+make openapi  # 重新產生 contract/gen 與 web/src/lib/gen/api/v1.ts，然後 commit
+make web      # 建置 SPA 到 web/build
+make web-dev  # Vite。把 /auth、/me、/tokens 代理到 127.0.0.1:8080 的 cpanel-api
 make check    # 與 CI 相同。Postgres 測試在找不到 binary 時跳過；CI 設 CPANEL_REQUIRE_PG=1，找不到就失敗
 make build    # bin/cpanel-api、bin/cpanel-worker、bin/cpanel-migrate，並寫入版本與 commit
 ```
+
+`make web-dev` 時，把 `CPANEL_PUBLIC_ORIGIN` 設成 Vite 的 origin（預設 `http://localhost:5173`）。cookie 的寫入請求會帶這個 Origin，OAuth redirect 也從這裡組出來。
 
 `cpanel-api` 提供 `GET /healthz`（只看行程，帶版本與 commit）、`GET /readyz`（資料庫連得上且 schema 是目前版本，否則 503 `application/problem+json`）、`GET /metrics`（Prometheus）。其他路徑回傳嵌入的 SPA：未知路徑是 `index.html`（不快取），`_app/immutable/*` 長快取。錯誤一律是 `application/problem+json`。oasdiff 比較 `OAS_BASE`（預設 `origin/main`）；那個 commit 還沒有契約時略過，不視為失敗。
 

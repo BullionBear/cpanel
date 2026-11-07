@@ -1,5 +1,4 @@
-// Package web is the SPA cpanel-api embeds (C2-D004). C2-05 replaces web/build
-// with the SvelteKit build; the embed path stays.
+// Package web is the SvelteKit SPA cpanel-api embeds (C2-D004, C2-05).
 package web
 
 import "embed"

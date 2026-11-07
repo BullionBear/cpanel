@@ -108,10 +108,9 @@ func TestSPA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	js, err := fs.ReadFile(web.Build, "build/_app/immutable/app.js")
-	if err != nil {
-		t.Fatal(err)
-	}
+	assetPath, js := embeddedJS(t)
+	embeddedHas(t, "/auth/discord/login")
+	embeddedHas(t, "Accounts")
 
 	root := do(t, h, http.MethodGet, "/")
 	if root.Code != http.StatusOK || root.Body.String() != string(index) {
@@ -126,7 +125,7 @@ func TestSPA(t *testing.T) {
 		t.Fatalf("GET /trades/1 = %d %q %q", page.Code, page.Header().Get("Cache-Control"), page.Body)
 	}
 
-	asset := do(t, h, http.MethodGet, "/_app/immutable/app.js")
+	asset := do(t, h, http.MethodGet, assetPath)
 	if asset.Code != http.StatusOK || asset.Body.String() != string(js) {
 		t.Fatalf("asset %d %q", asset.Code, asset.Body)
 	}
@@ -146,6 +145,59 @@ func TestSPA(t *testing.T) {
 func TestMethodNotAllowed(t *testing.T) {
 	rec := do(t, handler(t, nil, ""), http.MethodPost, "/healthz")
 	problemOf(t, rec, http.StatusMethodNotAllowed, "method_not_allowed")
+}
+
+func embeddedJS(t *testing.T) (string, []byte) {
+	t.Helper()
+	var urlPath string
+	var body []byte
+	err := fs.WalkDir(web.Build, "build", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || urlPath != "" {
+			return err
+		}
+		if strings.Contains(p, "/_app/immutable/") && strings.HasSuffix(p, ".js") {
+			body, err = fs.ReadFile(web.Build, p)
+			if err != nil {
+				return err
+			}
+			urlPath = "/" + strings.TrimPrefix(p, "build/")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if urlPath == "" || len(body) == 0 {
+		t.Fatal("embedded SPA has no immutable javascript")
+	}
+	return urlPath, body
+}
+
+func embeddedHas(t *testing.T, needle string) {
+	t.Helper()
+	found := false
+	err := fs.WalkDir(web.Build, "build", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || found {
+			return err
+		}
+		if !strings.HasSuffix(p, ".js") && !strings.HasSuffix(p, ".html") {
+			return nil
+		}
+		b, err := fs.ReadFile(web.Build, p)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(b), needle) {
+			found = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatalf("embedded SPA does not contain %q", needle)
+	}
 }
 
 func handler(t *testing.T, pool *pgxpool.Pool, dsn string) http.Handler {

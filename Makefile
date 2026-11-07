@@ -25,9 +25,13 @@ OASDIFF_VERSION      := v1.34.1
 OAS_BASE ?= origin/main
 OASDIFF_FAIL_ON ?= ERR
 
-export PATH := $(TOOLS):$(NODE_BIN):$(PATH)
+WEB      := web
+WEB_BIN  := $(abspath $(WEB)/node_modules/.bin)
+WEB_CLIENT := $(WEB)/src/lib/gen/api/v1.ts
 
-.PHONY: help fmt vet test build check dev-db tools openapi openapi-lint openapi-breaking gen-check
+export PATH := $(TOOLS):$(NODE_BIN):$(WEB_BIN):$(PATH)
+
+.PHONY: help fmt vet test build check dev-db tools openapi openapi-lint openapi-breaking gen-check web web-install web-check web-dev
 
 help: ## List targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-18s %s\n",$$1,$$2}'
@@ -64,12 +68,13 @@ $(NODE_BIN)/redocly: contract/openapi/package-lock.json contract/openapi/package
 openapi-lint: $(NODE_BIN)/redocly ## Redocly lint for cpanel.v1
 	redocly lint --config contract/openapi/redocly.yaml $(SPEC)
 
-openapi: tools $(NODE_BIN)/redocly ## Lint cpanel.v1 and regenerate Go; commit the result
+openapi: tools $(NODE_BIN)/redocly web-install ## Lint cpanel.v1 and regenerate Go and TypeScript; commit the result
 	$(MAKE) --no-print-directory openapi-lint
 	rm -rf $(GEN)/cpanel
-	mkdir -p $(GEN)/cpanel/v1
+	mkdir -p $(GEN)/cpanel/v1 $(dir $(WEB_CLIENT))
 	oapi-codegen --config contract/openapi/oapi-codegen-types.yaml $(SPEC)
 	oapi-codegen --config contract/openapi/oapi-codegen-server.yaml $(SPEC)
+	openapi-typescript $(SPEC) --output $(WEB_CLIENT)
 	$(GO) mod tidy
 
 # A missing spec on the base is skipped. A base that is not a commit is an error.
@@ -92,23 +97,40 @@ openapi-breaking: tools ## oasdiff breaking against OAS_BASE; fails on a breakin
 	oasdiff "$${args[@]}"
 
 # Regenerates, then compares with what was committed. The fresh output stays in place.
-gen-check: tools $(NODE_BIN)/redocly ## Fail if contract/gen, go.mod or go.sum is stale
+gen-check: tools $(NODE_BIN)/redocly web-install ## Fail if contract/gen, the TypeScript client, go.mod or go.sum is stale
 	@before=$$(mktemp -d) && trap 'rm -rf "$$before"' EXIT && \
-	cp -R $(GEN) "$$before/gen" && cp go.mod go.sum "$$before/" && \
+	cp -R $(GEN) "$$before/gen" && cp go.mod go.sum $(WEB_CLIENT) "$$before/" && \
 	$(MAKE) --no-print-directory openapi >/dev/null && \
 	if diff -r "$$before/gen" $(GEN) >/dev/null && \
-	   cmp -s "$$before/go.mod" go.mod && cmp -s "$$before/go.sum" go.sum; then \
+	   cmp -s "$$before/go.mod" go.mod && cmp -s "$$before/go.sum" go.sum && \
+	   cmp -s "$$before/$(notdir $(WEB_CLIENT))" $(WEB_CLIENT); then \
 	  echo "generated code is up to date"; \
 	else \
 	  echo "generated code is stale: run make openapi, then commit the result" >&2; \
 	  diff -ru "$$before/gen" $(GEN) | head -80 >&2; \
+	  diff -u "$$before/$(notdir $(WEB_CLIENT))" $(WEB_CLIENT) | head -80 >&2; \
 	  diff -u "$$before/go.mod" go.mod >&2; \
 	  exit 1; \
 	fi
 
-check: ## What CI runs: gofmt, tidy, OpenAPI lint, oasdiff, gen-check, vet, build, test
+web-install: $(WEB)/node_modules ## npm ci for the SPA
+
+$(WEB)/node_modules: $(WEB)/package.json $(WEB)/package-lock.json
+	npm ci --prefix $(WEB)
+	@touch $@
+
+web: web-install ## Build the SPA into web/build/
+	npm run build --prefix $(WEB)
+
+web-check: web-install ## svelte-check and the small node tests
+	npm run check --prefix $(WEB)
+
+web-dev: web-install ## Dev server; proxies the API to cpanel-api on :8080
+	npm run dev --prefix $(WEB)
+
+check: ## What CI runs: gofmt, tidy, OpenAPI lint, oasdiff, gen-check, svelte-check, SPA build, vet, build, test
 	@files=$$(git ls-files --cached --others --exclude-standard '*.go'); \
 	unformatted=$$(gofmt -l $$files); \
 	if [ -n "$$unformatted" ]; then echo "not gofmt-ed, run make fmt:" >&2; echo "$$unformatted" >&2; exit 1; fi
 	$(GO) mod tidy -diff
-	$(MAKE) --no-print-directory openapi-lint openapi-breaking gen-check vet build test
+	$(MAKE) --no-print-directory openapi-lint openapi-breaking gen-check web-check web vet build test
