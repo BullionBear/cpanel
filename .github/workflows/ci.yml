@@ -1,6 +1,7 @@
-# Checks for every pull request and every push to main (C2-D001): gofmt, go mod tidy, go vet, the build, and the
-# tests, which include internal/archtest (I1, I5, I6). One target, make check, so a local run matches CI. Building
-# and publishing images is a separate workflow (C2-06). Actions are pinned by commit, as in mftiko.
+# Checks for every pull request and every push to main (C2-D001): gofmt, go mod tidy, OpenAPI lint,
+# oasdiff, gen-check, go vet, the build, and the tests, which include internal/archtest (I1, I5, I6).
+# One target, make check, so a local run matches CI. Building and publishing images is a separate
+# workflow (C2-06). Actions are pinned by commit, as in mftiko.
 name: ci
 
 on:
@@ -18,14 +19,28 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # oasdiff reads the base commit from this clone
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: contract/openapi/package-lock.json
+
+      # The pull request's base, or the previous main for a push. oasdiff reads it as a local branch.
+      - name: Base for breaking checks
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: git branch -f ci-base "$BASE_SHA"
 
       # Postgres 17 is not in Ubuntu 24.04's own archive (C2-02). pgtest uses this binary;
       # CPANEL_REQUIRE_PG makes a missing one fail the run instead of skipping.
@@ -43,4 +58,4 @@ jobs:
           echo "CPANEL_REQUIRE_PG=1" >> "$GITHUB_ENV"
 
       - name: make check
-        run: make check
+        run: make check OAS_BASE=ci-base

@@ -25,10 +25,14 @@ archive/                     v1、v2 的程式碼，只供閱讀
 cmd/cpanel-api/              公網的 HTTP server（I6：連不到解封 secret 的程式）
 cmd/cpanel-worker/           job worker；對 mftiko、SYM、交易所的呼叫都在這裡
 cmd/cpanel-migrate/          套用 embed 的 SQL migration；啟動時不 migrate 的檢查在 api 與 worker
+contract/openapi/            cpanel.v1.yaml；Redocly、oapi-codegen、oasdiff
+contract/gen/cpanel/v1/      由契約產生的 server 與型別，要 commit
+web/build/                   SPA placeholder；cpanel-api embed。C2-05 換成 SvelteKit build
 migrations/                  NNNN_name.up.sql／.down.sql，版本表 meta.schema_migrations
+internal/api/                cpanel-api 的 OpenAPI handler、middleware、SPA
 internal/archtest/           以 go list 檢查 I1、I5、I6
 internal/mftiko/             釘住 mftiko 的 contract（C2-D007）
-internal/platform/           設定、log、HTTP server、測試用 Postgres（pgtest）
+internal/platform/           設定、log、HTTP server、版本、測試用 Postgres（pgtest）
 internal/reconcile/          ReconcileLoop（C3；I5）
 deploy/dev/compose.yml       本機開發用的 Postgres 17
 docs/                        v3 的文件
@@ -36,12 +40,15 @@ docs/                        v3 的文件
 
 ## 開發
 
-Go 1.26（`go.mod`）。`make help` 列出所有 target；CI 在每個 PR 與 push `main` 時跑 `make check`（gofmt、`go mod tidy`、vet、build、test，archtest 包含在 test 裡）。
+Go 1.26（`go.mod`）。`make help` 列出所有 target；CI 在每個 PR 與 push `main` 時跑 `make check`（gofmt、`go mod tidy`、OpenAPI lint、oasdiff、gen-check、vet、build、test，archtest 包含在 test 裡）。
 
 ```
-make dev-db  # 本機 Postgres 17，postgres://cpanel:cpanel@127.0.0.1:5432/cpanel?sslmode=disable
-make check   # 與 CI 相同。Postgres 測試在找不到 binary 時跳過；CI 設 CPANEL_REQUIRE_PG=1，找不到就失敗
-make build   # bin/cpanel-api、bin/cpanel-worker、bin/cpanel-migrate
+make dev-db   # 本機 Postgres 17，postgres://cpanel:cpanel@127.0.0.1:5432/cpanel?sslmode=disable
+make openapi  # 重新產生 contract/gen，然後 commit。工具是 oapi-codegen v2.8.0
+make check    # 與 CI 相同。Postgres 測試在找不到 binary 時跳過；CI 設 CPANEL_REQUIRE_PG=1，找不到就失敗
+make build    # bin/cpanel-api、bin/cpanel-worker、bin/cpanel-migrate，並寫入版本與 commit
 ```
+
+`cpanel-api` 提供 `GET /healthz`（只看行程，帶版本與 commit）、`GET /readyz`（資料庫連得上且 schema 是目前版本，否則 503 `application/problem+json`）、`GET /metrics`（Prometheus）。其他路徑回傳嵌入的 SPA：未知路徑是 `index.html`（不快取），`_app/immutable/*` 長快取。錯誤一律是 `application/problem+json`。oasdiff 比較 `OAS_BASE`（預設 `origin/main`）；那個 commit 還沒有契約時略過，不視為失敗。
 
 設定是 flag，預設值來自環境變數，flag 優先；`<command> -h` 列出各自的設定與對應的環境變數。啟動時會以 JSON log 印出生效的設定，secret 以 `***` 遮掉。資料庫是 `-database`／`$CPANEL_DATABASE_URL`。`cpanel-migrate up` 才會改 schema；`cpanel-api` 與 `cpanel-worker` 只檢查版本，落後就拒絕啟動。

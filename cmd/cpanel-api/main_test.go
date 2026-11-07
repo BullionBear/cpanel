@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
+	"io/fs"
 	"net/http"
 	"strings"
 	"syscall"
@@ -15,6 +17,7 @@ import (
 	"github.com/BullionBear/cpanel/internal/platform/logger"
 	"github.com/BullionBear/cpanel/internal/platform/pgtest"
 	"github.com/BullionBear/cpanel/migrations"
+	"github.com/BullionBear/cpanel/web"
 )
 
 func TestParseArgs(t *testing.T) {
@@ -24,15 +27,15 @@ func TestParseArgs(t *testing.T) {
 		args []string
 		want options
 	}{
-		{"defaults", nil, nil, options{listen: ":8080", logLevel: logger.DefaultLevel, shutdownTimeout: 10 * time.Second}},
+		{"defaults", nil, nil, options{listen: ":8080", logLevel: logger.DefaultLevel, shutdownTimeout: 10 * time.Second, requestTimeout: 30 * time.Second}},
 		{"environment", map[string]string{
-			"CPANEL_API_LISTEN": ":9000", "CPANEL_LOG_LEVEL": "debug", "CPANEL_SHUTDOWN_TIMEOUT": "3s",
+			"CPANEL_API_LISTEN": ":9000", "CPANEL_LOG_LEVEL": "debug", "CPANEL_SHUTDOWN_TIMEOUT": "3s", "CPANEL_REQUEST_TIMEOUT": "2s",
 			"CPANEL_DATABASE_URL":  "postgres://db/cpanel",
 			"CPANEL_WORKER_LISTEN": ":1", // the worker's, not ours
-		}, nil, options{listen: ":9000", database: "postgres://db/cpanel", logLevel: logger.Level(zerolog.DebugLevel), shutdownTimeout: 3 * time.Second}},
-		{"flags over environment", map[string]string{"CPANEL_API_LISTEN": ":9000", "CPANEL_LOG_LEVEL": "debug", "CPANEL_DATABASE_URL": "postgres://env/cpanel"},
-			[]string{"-listen=:7000", "-log-level=warn", "-shutdown-timeout=1m", "-database=postgres://flag/cpanel"},
-			options{listen: ":7000", database: "postgres://flag/cpanel", logLevel: logger.Level(zerolog.WarnLevel), shutdownTimeout: time.Minute}},
+		}, nil, options{listen: ":9000", database: "postgres://db/cpanel", logLevel: logger.Level(zerolog.DebugLevel), shutdownTimeout: 3 * time.Second, requestTimeout: 2 * time.Second}},
+		{"flags over environment", map[string]string{"CPANEL_API_LISTEN": ":9000", "CPANEL_LOG_LEVEL": "debug", "CPANEL_DATABASE_URL": "postgres://env/cpanel", "CPANEL_REQUEST_TIMEOUT": "2s"},
+			[]string{"-listen=:7000", "-log-level=warn", "-shutdown-timeout=1m", "-request-timeout=1s", "-database=postgres://flag/cpanel"},
+			options{listen: ":7000", database: "postgres://flag/cpanel", logLevel: logger.Level(zerolog.WarnLevel), shutdownTimeout: time.Minute, requestTimeout: time.Second}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -63,19 +66,40 @@ func TestBinary(t *testing.T) {
 		p := cmdtest.Start(t, bin, []string{"CPANEL_API_LISTEN=127.0.0.1:0", "CPANEL_DATABASE_URL=" + srv.DSN()}, "-shutdown-timeout=5s")
 		start := p.Log(t, "starting")
 		cfg, _ := start["config"].(map[string]any)
-		if start["component"] != name || cfg["listen"] != "127.0.0.1:0" || cfg["database"] != "***" || cfg["log-level"] != "info" || cfg["shutdown-timeout"] != "5s" {
+		if start["component"] != name || cfg["listen"] != "127.0.0.1:0" || cfg["database"] != "***" || cfg["log-level"] != "info" || cfg["shutdown-timeout"] != "5s" || cfg["request-timeout"] != "30s" {
 			t.Errorf("startup line %v", start)
 		}
 		addr, _ := p.Log(t, "listening")["addr"].(string)
 
-		resp, err := http.Get("http://" + addr + "/healthz")
+		health := getJSON[struct {
+			OK      bool   `json:"ok"`
+			Version string `json:"version"`
+			Commit  string `json:"commit"`
+		}](t, addr, "/healthz")
+		if health.code != http.StatusOK || !health.body.OK || health.body.Version == "" || health.body.Commit == "" {
+			t.Errorf("GET /healthz = %d %+v", health.code, health.body)
+		}
+		ready := getJSON[struct {
+			OK bool `json:"ok"`
+		}](t, addr, "/readyz")
+		if ready.code != http.StatusOK || !ready.body.OK {
+			t.Errorf("GET /readyz = %d %+v", ready.code, ready.body)
+		}
+		index, err := fs.ReadFile(web.Build, "build/index.html")
 		if err != nil {
 			t.Fatal(err)
 		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) != `{"ok":true}` {
-			t.Errorf("GET /healthz = %d %q", resp.StatusCode, body)
+		root := getRaw(t, addr, "/")
+		page := getRaw(t, addr, "/trades/1")
+		if root.code != http.StatusOK || page.code != http.StatusOK || string(root.body) != string(index) || string(page.body) != string(index) {
+			t.Errorf("SPA / = %d %q, /trades/1 = %d %q", root.code, root.body, page.code, page.body)
+		}
+		if root.header.Get("Cache-Control") != "no-cache" || page.header.Get("Cache-Control") != "no-cache" {
+			t.Errorf("SPA cache / %q /trades/1 %q", root.header.Get("Cache-Control"), page.header.Get("Cache-Control"))
+		}
+		asset := getRaw(t, addr, "/_app/immutable/app.js")
+		if asset.code != http.StatusOK || asset.header.Get("Cache-Control") != "public, max-age=31536000, immutable" || !strings.Contains(string(asset.body), "Placeholder") {
+			t.Errorf("asset %d %q %q", asset.code, asset.header.Get("Cache-Control"), asset.body)
 		}
 
 		p.Signal(t, syscall.SIGTERM)
@@ -94,7 +118,7 @@ func TestBinary(t *testing.T) {
 
 	t.Run("help exits 0", func(t *testing.T) {
 		code, stderr := cmdtest.Run(t, bin, nil, "-h")
-		if code != 0 || !strings.Contains(stderr, "$CPANEL_API_LISTEN") || !strings.Contains(stderr, "$CPANEL_DATABASE_URL") {
+		if code != 0 || !strings.Contains(stderr, "$CPANEL_API_LISTEN") || !strings.Contains(stderr, "$CPANEL_DATABASE_URL") || !strings.Contains(stderr, "$CPANEL_REQUEST_TIMEOUT") {
 			t.Errorf("exit %d, stderr %q", code, stderr)
 		}
 	})
@@ -106,6 +130,37 @@ func TestBinary(t *testing.T) {
 		}
 	})
 
+	t.Run("database down", func(t *testing.T) {
+		p := cmdtest.Start(t, bin, []string{"CPANEL_API_LISTEN=127.0.0.1:0", "CPANEL_DATABASE_URL=" + srv.DSN()})
+		addr, _ := p.Log(t, "listening")["addr"].(string)
+		srv.Stop()
+
+		health := getRaw(t, addr, "/healthz")
+		if health.code != http.StatusOK {
+			t.Errorf("GET /healthz = %d %s", health.code, health.body)
+		}
+		ready := getRaw(t, addr, "/readyz")
+		if ready.code != http.StatusServiceUnavailable || !strings.Contains(ready.header.Get("Content-Type"), "application/problem+json") {
+			t.Fatalf("GET /readyz = %d %q %s", ready.code, ready.header.Get("Content-Type"), ready.body)
+		}
+		var problem struct {
+			Type   string `json:"type"`
+			Status int    `json:"status"`
+			Code   string `json:"code"`
+			Detail string `json:"detail"`
+		}
+		if err := json.Unmarshal(ready.body, &problem); err != nil {
+			t.Fatal(err)
+		}
+		if problem.Type != "about:blank" || problem.Status != http.StatusServiceUnavailable || problem.Code != "unavailable" || problem.Detail != "database is not reachable" || strings.Contains(string(ready.body), "postgres://") {
+			t.Errorf("problem %+v body %s", problem, ready.body)
+		}
+		p.Signal(t, syscall.SIGTERM)
+		if code := p.Exit(t); code != 0 {
+			t.Errorf("exit %d after SIGTERM, want 0", code)
+		}
+	})
+
 	t.Run("behind database is refused", func(t *testing.T) {
 		fresh := pgtest.Start(t)
 		code, stderr := cmdtest.Run(t, bin, []string{"CPANEL_DATABASE_URL=" + fresh.DSN()})
@@ -113,4 +168,39 @@ func TestBinary(t *testing.T) {
 			t.Errorf("exit %d, stderr %q", code, stderr)
 		}
 	})
+}
+
+type rawResponse struct {
+	code   int
+	header http.Header
+	body   []byte
+}
+
+func getRaw(t *testing.T, addr, path string) rawResponse {
+	t.Helper()
+	resp, err := http.Get("http://" + addr + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rawResponse{code: resp.StatusCode, header: resp.Header, body: body}
+}
+
+type jsonResponse[T any] struct {
+	code int
+	body T
+}
+
+func getJSON[T any](t *testing.T, addr, path string) jsonResponse[T] {
+	t.Helper()
+	raw := getRaw(t, addr, path)
+	var body T
+	if err := json.Unmarshal(raw.body, &body); err != nil {
+		t.Fatalf("%s: %v body %s", path, err, raw.body)
+	}
+	return jsonResponse[T]{code: raw.code, body: body}
 }

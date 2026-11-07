@@ -1,5 +1,5 @@
-// Command cpanel-api is cpanel's public HTTP server (ARCHITECTURE §4.7). It serves /healthz only; the OpenAPI
-// routes, /readyz, /metrics and the SPA come with C2-03. It must not link the code that opens sealed secrets
+// Command cpanel-api is cpanel's public HTTP server (ARCHITECTURE §4.7). It serves the OpenAPI routes
+// (/healthz, /readyz, /metrics) and the embedded SPA. It must not link the code that opens sealed secrets
 // (I6, internal/archtest).
 //
 // Settings are flags whose defaults come from environment variables; a flag wins over its variable:
@@ -8,11 +8,13 @@
 //	-database          $CPANEL_DATABASE_URL       PostgreSQL URL; required, logged as ***
 //	-log-level         $CPANEL_LOG_LEVEL          trace, debug, info, warn or error, default info
 //	-shutdown-timeout  $CPANEL_SHUTDOWN_TIMEOUT   how long to wait for in-flight requests after SIGTERM, default 10s
+//	-request-timeout   $CPANEL_REQUEST_TIMEOUT    per-request limit, default 30s; 0 disables it
 //
 // The effective settings are logged at startup, as JSON on stderr. Startup does not migrate: the database
 // must already be at the embedded version (cpanel-migrate up), or the process refuses to start and says why.
-// /healthz is 200 while the process is up. SIGTERM and SIGINT stop accepting, wait for in-flight requests
-// up to -shutdown-timeout, and exit 0.
+// /healthz is 200 while the process is up and does not touch the database. /readyz is 200 only when the
+// database is reachable and the schema is current. SIGTERM and SIGINT stop accepting, wait for in-flight
+// requests up to -shutdown-timeout, and exit 0.
 package main
 
 import (
@@ -25,6 +27,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/BullionBear/cpanel/internal/api"
 	"github.com/BullionBear/cpanel/internal/platform/config"
 	"github.com/BullionBear/cpanel/internal/platform/httpserver"
 	"github.com/BullionBear/cpanel/internal/platform/logger"
@@ -38,6 +43,7 @@ type options struct {
 	database        string
 	logLevel        logger.Level
 	shutdownTimeout time.Duration
+	requestTimeout  time.Duration
 }
 
 func parseArgs(args []string, getenv func(string) string) (options, *config.Set, error) {
@@ -48,6 +54,8 @@ func parseArgs(args []string, getenv func(string) string) (options, *config.Set,
 	set.Var(&opt.logLevel, "log-level", "CPANEL_LOG_LEVEL", "trace, debug, info, warn or error")
 	set.Duration(&opt.shutdownTimeout, "shutdown-timeout", "CPANEL_SHUTDOWN_TIMEOUT", 10*time.Second,
 		"how long to wait for in-flight requests after SIGTERM")
+	set.Duration(&opt.requestTimeout, "request-timeout", "CPANEL_REQUEST_TIMEOUT", 30*time.Second,
+		"per-request limit; 0 disables it")
 	if err := set.Parse(args); err != nil {
 		return options{}, nil, err
 	}
@@ -76,9 +84,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	pool, err := pgxpool.New(context.Background(), opt.database)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+		log.Error().Err(err).Msg("database")
+		os.Exit(1)
+	}
+	defer pool.Close()
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := httpserver.ListenAndServe(ctx, log, opt.listen, httpserver.NewMux(), opt.shutdownTimeout); err != nil {
+	h := api.Handler(api.Config{Log: log, Pool: pool, Database: opt.database, Timeout: opt.requestTimeout})
+	if err := httpserver.ListenAndServe(ctx, log, opt.listen, h, opt.shutdownTimeout); err != nil {
 		log.Error().Err(err).Msg("exit")
 		os.Exit(1)
 	}

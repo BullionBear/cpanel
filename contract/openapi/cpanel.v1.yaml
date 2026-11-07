@@ -1,0 +1,121 @@
+# cpanel-api 的對外契約（ARCHITECTURE §4.7）。C2-03 只有行程、就緒與指標。
+# 帳號、歷史與認證在後面的 ticket 加進來。SPA 不在這份契約裡。
+openapi: 3.0.3
+info:
+  title: cpanel API
+  version: 0.1.0
+  description: |
+    cpanel-api 的對外契約。
+
+    錯誤一律是 `application/problem+json`（RFC 9457），另帶穩定的 `code`。`type` 一律是 `about:blank`。
+servers:
+  - url: /
+    description: cpanel-api，與 SPA 同源。
+tags:
+  - name: system
+    description: 行程、就緒與指標。不需要認證。
+paths:
+  /healthz:
+    get:
+      tags: [system]
+      operationId: getHealthz
+      security: []
+      summary: 行程是否在跑
+      description: 只看這個行程。不連資料庫。回應帶建置版本與 commit。
+      responses:
+        '200':
+          description: 行程在跑。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        default:
+          $ref: '#/components/responses/Problem'
+  /readyz:
+    get:
+      tags: [system]
+      operationId: getReadyz
+      security: []
+      summary: 能否接受工作
+      description: 資料庫連得上，而且 schema 是目前嵌入的版本。否則 503。
+      responses:
+        '200':
+          description: 資料庫與 schema 都可用。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ready'
+        '503':
+          description: 資料庫連不上，或 schema 不是目前版本。`code` 是 `unavailable`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /metrics:
+    get:
+      tags: [system]
+      operationId: getMetrics
+      security: []
+      summary: Prometheus 指標
+      description: Prometheus 的 text exposition。
+      responses:
+        '200':
+          description: Prometheus text exposition。
+          content:
+            text/plain:
+              schema:
+                type: string
+        default:
+          $ref: '#/components/responses/Problem'
+components:
+  responses:
+    Problem:
+      description: 未預期的錯誤。`code` 是 `internal`、`timeout` 或 `method_not_allowed`。
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Health:
+      type: object
+      additionalProperties: false
+      required: [ok, version, commit]
+      properties:
+        ok:
+          type: boolean
+          description: 行程在跑時為 true。
+        version:
+          type: string
+          description: 建置版本。
+        commit:
+          type: string
+          description: git commit。
+    Ready:
+      type: object
+      additionalProperties: false
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+          description: 資料庫連得上且 schema 是目前版本時為 true。
+    Problem:
+      type: object
+      additionalProperties: false
+      description: RFC 9457。`code` 是給程式判斷的穩定值。
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          description: 一律是 `about:blank`；分類看 `code`。
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        code:
+          type: string
+          description: |
+            穩定的錯誤碼。這一版使用 `unavailable`、`timeout`、`internal`、`method_not_allowed`、`bad_request`。
