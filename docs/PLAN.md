@@ -70,15 +70,17 @@ C2 骨架 ──► C3 Job 系統 ──┬─► C4 Mirror ──┐
 | C2-06 | CI/CD：build → GHCR（新 image 名）→ migrate → deploy，依序；Discord 通知 | migrate 失敗時不換版 | C2-03、C1-02 |
 | C2-07 | 部署：cpanel-api 在 VPC 內、經公網 Traefik 進來；worker 與 DB 只在私網；worker 出口 IP 與 TD 主機分開；設定 mftiko token 與 SYM token | VPC 內以 GET 打得到 mftiko `/accounts`、SYM gRPC health | C2-06 |
 
-## C3 Job 系統
+## C3 Job 系統（#34）
+
+決策 C3-D001–D004 見 [DECISIONS.md](DECISIONS.md)。
 
 | Ticket | 內容 | 驗收 | 依賴 |
 |---|---|---|---|
-| C3-01 | `ingest` schema：`stream`、`job`（按天分區）、`job_failure`、`account_lease`；partial unique index（每條 stream、每個快照時間點、每個 singleton 各至多一個未完成 job）；分區建立與過期刪除 | 同一條 stream 插兩個 pending job，第二個被擋 | C2-02 |
-| C3-02 | ReconcileLoop 框架：規則註冊、只讀寫 DB、`INSERT … ON CONFLICT DO NOTHING`；singleton job 依間隔派工 | 起三個 ReconcileLoop 同時跑，job 數與一個時相同 | C3-01 |
-| C3-03 | Worker：租帳號、依 priority 依序跑、預算（請求數／秒數）、每頁一個 transaction、cursor 帶版本 CAS、回報 `more` | kill worker 後租約到期，另一台接手，資料不重複 | C3-01 |
-| C3-04 | 錯誤分類與退避：`auth`、`rate_limited`、`unavailable`、`bad_request`、`not_found`；stream 與 credential 的健康欄位；418 時整台 worker 暫停 | 以假交易所（httptest）逐類注入，各自走對的處理 | C3-03 |
-| C3-05 | 營運面：`GET /streams`、`GET /jobs`、metrics（stream lag、失敗率、快照缺口）、告警規則、UI 頁 | UI 依帳號、狀態、錯誤類別篩 job | C3-04、C2-05 |
+| C3-01 #64 | `ingest` schema：未完成的 job（`job`，不分區，`dedup_key` 去重）與完成的 job（`job_run`，按天分區加 default）分表；`stream`、`periodic`、`lease`、`pause`、`job_failure`；分區建立與過期的 SQL 函式 | 同一個 `dedup_key` 跨日也只能有一個未完成的 job；`job_run` 落到 default 不失敗，建分區時搬出；過期時失敗列留在 `job_failure` | — |
+| C3-02 #65 | ReconcileLoop 框架：規則只讀寫 DB、`INSERT … ON CONFLICT (dedup_key) DO NOTHING`；stream、periodic、分區維護三條規則 | 三個 ReconcileLoop 同時跑，job 數與一個時相同 | C3-01 |
+| C3-03 #66 | Worker：lease 取得、續約、接手、釋放；handler；預算；每頁一個 transaction、cursor CAS；graceful shutdown；`maint.partitions` | 隨機 kill worker，資料不重複不遺漏；SIGTERM 後立刻被接手 | C3-01 |
+| C3-04 #67 | 錯誤分類與退避：`auth`、`rate_limited`、`ip_banned`、`unavailable`、`bad_request`、`not_found`；stream 健康欄位；credential hook（C5-04 實作）；418 寫 `ingest.pause` | 以假交易所逐類注入，各自走對的處理 | C3-03 |
+| C3-05 #68 | 營運面：`GET /streams`、`/jobs`、`/job-runs`、`POST /streams/{id}/resume`；metrics；告警；Ops 頁 | UI 依 lease key、狀態、錯誤類別篩 job；故意失敗的 stream 觸發告警 | C3-04 |
 
 ## C4 mftiko 與 SYM mirror
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strings"
@@ -98,8 +99,12 @@ func TestUpStatusChangedAndConcurrent(t *testing.T) {
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM meta.schema_migrations`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 {
-		t.Fatalf("schema_migrations rows = %d", n)
+	ups, err := fs.Glob(migrations.FS, "*.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != len(ups) {
+		t.Fatalf("schema_migrations rows = %d, want %d (one per embedded migration)", n, len(ups))
 	}
 
 	code, stdout, stderr = cmdtest.RunOutput(t, bin, env, "up")

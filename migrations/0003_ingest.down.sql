@@ -1,0 +1,10 @@
+DROP FUNCTION IF EXISTS ingest.expire_job_runs(DATE);
+DROP FUNCTION IF EXISTS ingest.ensure_job_run_partition(DATE);
+DROP TABLE IF EXISTS ingest.pause;
+DROP TABLE IF EXISTS ingest.lease;
+DROP TABLE IF EXISTS ingest.job_failure;
+DROP TABLE IF EXISTS ingest.job_run;
+DROP TABLE IF EXISTS ingest.job;
+DROP TABLE IF EXISTS ingest.periodic;
+DROP TABLE IF EXISTS ingest.stream;
+DROP DOMAIN IF EXISTS ingest.error_class;

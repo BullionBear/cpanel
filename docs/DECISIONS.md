@@ -98,3 +98,27 @@ C2-D001–C2-D007 於 2026-11-06 定在 epic，原文照錄。
 - 主機不需要 GHCR 的登入憑證就能以 digest 拉 image，主機上少一把可以讀 org 其他 package 的 token。
 - image 裡沒有 secret：設定與 secret 都在部署時以 `config.env` 與 `secrets/` 給。repo 本身仍是 private。
 - 代價：任何人都拉得到 binary 與內嵌的 SPA。cpanel 沒有要對外保密的程式邏輯；之後若有，改回 private 並在主機上以只有 `read:packages` 的 token 登入。
+
+## C3 Job 系統（#34）
+
+### C3-D001 未完成與已完成的 job 分兩張表（#64）
+
+- `ingest.job` 只放 `pending`、`running`，不分區；完成時在同一個 transaction 裡刪除，並寫入按 UTC 日分區的 `ingest.job_run`。
+- 理由：Postgres 分區表上的 unique index 必須包含分區鍵。原設計「`ingest.job` 按天分區＋partial unique index」只在同一天的分區內互斥，跨日就失效。
+- `job_run` 有 default 分區，分區維護落後時寫入不會失敗；`ingest.ensure_job_run_partition` 建分區時先把 default 裡那一天的列搬出，因為 default 持有某個範圍的列時，那個範圍不能 attach。
+- 修訂 ARCHITECTURE §4.4、§5 原本的寫法。
+
+### C3-D002 去重只靠一個 `dedup_key`（#64）
+
+- `ingest.job.dedup_key TEXT UNIQUE`：`stream:<id>`、`periodic:<name>`、`bucket:<kind>:<lease_key>:<時間點>`（C6 的快照）。一個 index 涵蓋三種情況。
+- ReconcileLoop 一律 `INSERT … ON CONFLICT (dedup_key) DO NOTHING`，多副本同時跑也不重複。
+
+### C3-D003 lease 以字串為鍵（#64）
+
+- `ingest.lease.key`：`account:<id>`、`global:mftiko`、`global:sym`…。C3 不依賴 C5 才出現的 `pms.exchange_account`。
+- `token` 每次取得加一，job 執行時記下拿到的 token。
+
+### C3-D004 資料的正確性不依賴 lease（#64）
+
+- 每一頁一個 transaction：寫入以 native id 冪等，cursor 以 `ingest.stream.cursor_version` CAS 推進，CAS 失敗整頁 rollback。
+- lease 只負責把同一個帳號的限速預算留在一個進程裡。lease 判斷出錯（例如時鐘或續約延遲），最多是同一帳號短暫多一個進程在打交易所，資料不會重複。
