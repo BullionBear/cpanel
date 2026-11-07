@@ -1,9 +1,10 @@
 # cpanel-api 的對外契約（ARCHITECTURE §4.7）。SPA 不在這份契約裡。
+# 0.3.0 加上 stream、job、job 歷史與恢復暫停（C3-05）。
 # 0.2.1 的 /healthz 加上建置時間（C2-06）。0.2.0 加上 Discord 登入、session、bearer token（C2-04）。
 openapi: 3.0.3
 info:
   title: cpanel API
-  version: 0.2.1
+  version: 0.3.0
   description: |
     cpanel-api 的對外契約。
 
@@ -19,6 +20,8 @@ tags:
     description: 行程、就緒與指標。不需要認證。
   - name: auth
     description: Discord 登入、session 與 bearer token。
+  - name: ops
+    description: stream、未完成的 job 與 job 歷史。要登入。
 paths:
   /healthz:
     get:
@@ -275,7 +278,215 @@ paths:
                 $ref: '#/components/schemas/Problem'
         default:
           $ref: '#/components/responses/Problem'
+  /streams:
+    get:
+      tags: [ops]
+      operationId: listStreams
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: 列出 stream
+      description: |
+        依 kind、lease key、狀態、錯誤類別篩。狀態由資料算出：有 `paused_reason` 是 `paused`，
+        `consecutive_failures` 大於 0 是 `backing_off`，其餘是 `ok`。最多 500 筆，依 id 排序。
+      parameters:
+        - $ref: '#/components/parameters/Kind'
+        - $ref: '#/components/parameters/LeaseKey'
+        - name: status
+          in: query
+          required: false
+          description: 只留這個狀態。
+          schema:
+            $ref: '#/components/schemas/StreamStatus'
+        - $ref: '#/components/parameters/ErrorClass'
+        - $ref: '#/components/parameters/ListLimit'
+      responses:
+        '200':
+          description: stream 清單。
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Stream'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        default:
+          $ref: '#/components/responses/Problem'
+  /streams/{id}/resume:
+    post:
+      tags: [ops]
+      operationId: resumeStream
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: 恢復暫停的 stream
+      description: |
+        清掉 `paused_reason` 與 `paused_at`，並把 `next_due_at` 設成現在，下一輪才派得了工。
+        本來就沒有暫停則原樣回傳，不寫 audit。有暫停才寫 `meta.audit`，action 是 `stream.resume`。
+        cookie 登入的請求要帶對的 `Origin`。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: 這個 stream 的目前狀態。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stream'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          description: Origin 不符。`code` 是 `forbidden`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: 沒有這個 stream。`code` 是 `not_found`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /jobs:
+    get:
+      tags: [ops]
+      operationId: listJobs
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: 列出未完成的 job
+      description: |
+        只含 `pending` 與 `running`。錯誤類別用所屬 stream 的 `last_error_class`；沒有 stream 的 job 不會出現在錯誤類別篩選裡。
+        最多 500 筆，依入隊時間排序。
+      parameters:
+        - $ref: '#/components/parameters/Kind'
+        - $ref: '#/components/parameters/LeaseKey'
+        - name: status
+          in: query
+          required: false
+          description: 只留這個狀態。
+          schema:
+            $ref: '#/components/schemas/JobStatus'
+        - $ref: '#/components/parameters/ErrorClass'
+        - $ref: '#/components/parameters/ListLimit'
+      responses:
+        '200':
+          description: 未完成的 job。
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Job'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        default:
+          $ref: '#/components/responses/Problem'
+  /job-runs:
+    get:
+      tags: [ops]
+      operationId: listJobRuns
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: 列出已完成的 job
+      description: |
+        依完成時間新到舊。`cursor` 是上一頁的 `next_cursor`。`limit` 預設 50，最大 200。
+      parameters:
+        - name: from
+          in: query
+          required: false
+          description: 含這個時間之後完成的。
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          description: 不含這個時間之後完成的。
+          schema:
+            type: string
+            format: date-time
+        - $ref: '#/components/parameters/Kind'
+        - $ref: '#/components/parameters/LeaseKey'
+        - name: status
+          in: query
+          required: false
+          description: 只留這個狀態。
+          schema:
+            $ref: '#/components/schemas/JobRunStatus'
+        - $ref: '#/components/parameters/ErrorClass'
+        - name: limit
+          in: query
+          required: false
+          description: 一頁幾筆。預設 50，最大 200。
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+        - name: cursor
+          in: query
+          required: false
+          description: 上一頁回的 `next_cursor`。不是這個格式則 `bad_request`。
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 一頁歷史。沒有下一頁時不帶 `next_cursor`。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobRunPage'
+        '400':
+          description: cursor 無法解讀。`code` 是 `bad_request`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        default:
+          $ref: '#/components/responses/Problem'
 components:
+  parameters:
+    Kind:
+      name: kind
+      in: query
+      required: false
+      description: 只留這個 kind。
+      schema:
+        type: string
+    LeaseKey:
+      name: lease_key
+      in: query
+      required: false
+      description: 只留這個 lease key，例如 `account:1`。
+      schema:
+        type: string
+    ErrorClass:
+      name: error_class
+      in: query
+      required: false
+      description: 只留這個錯誤類別。
+      schema:
+        $ref: '#/components/schemas/ErrorClass'
+    ListLimit:
+      name: limit
+      in: query
+      required: false
+      description: 最多幾筆。預設 200，最大 500。
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
   securitySchemes:
     cookieAuth:
       type: apiKey
@@ -398,3 +609,153 @@ components:
         token:
           type: string
           description: 明文只出現這一次。
+    ErrorClass:
+      type: string
+      description: 錯誤類別（C3-04）。
+      enum: [auth, rate_limited, ip_banned, unavailable, bad_request, not_found, internal]
+    StreamStatus:
+      type: string
+      description: 有 `paused_reason` 是 `paused`；否則連續失敗大於 0 是 `backing_off`；其餘是 `ok`。
+      enum: [ok, backing_off, paused]
+    JobStatus:
+      type: string
+      enum: [pending, running]
+    JobRunStatus:
+      type: string
+      enum: [succeeded, failed, cancelled]
+    Stream:
+      type: object
+      additionalProperties: false
+      required: [id, kind, lease_key, key, status, next_due_at, consecutive_failures, created_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        kind:
+          type: string
+        lease_key:
+          type: string
+        key:
+          type: string
+        status:
+          $ref: '#/components/schemas/StreamStatus'
+        paused_reason:
+          type: string
+          nullable: true
+        paused_at:
+          type: string
+          format: date-time
+          nullable: true
+        next_due_at:
+          type: string
+          format: date-time
+        last_ok_at:
+          type: string
+          format: date-time
+          nullable: true
+        consecutive_failures:
+          type: integer
+        last_error_class:
+          type: string
+          nullable: true
+        last_error:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+    Job:
+      type: object
+      additionalProperties: false
+      required: [id, kind, dedup_key, lease_key, status, attempt, not_before, enqueued_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        kind:
+          type: string
+        dedup_key:
+          type: string
+        lease_key:
+          type: string
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        attempt:
+          type: integer
+        not_before:
+          type: string
+          format: date-time
+        enqueued_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        stream_id:
+          type: integer
+          format: int64
+          nullable: true
+        last_error_class:
+          type: string
+          nullable: true
+          description: 所屬 stream 的 `last_error_class`。沒有 stream 時是 null。
+    JobRun:
+      type: object
+      additionalProperties: false
+      required: [id, kind, dedup_key, lease_key, status, attempt, requests, items, more, enqueued_at, finished_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        kind:
+          type: string
+        dedup_key:
+          type: string
+        lease_key:
+          type: string
+        stream_id:
+          type: integer
+          format: int64
+          nullable: true
+        status:
+          $ref: '#/components/schemas/JobRunStatus'
+        attempt:
+          type: integer
+        requests:
+          type: integer
+        items:
+          type: integer
+        more:
+          type: boolean
+        error_class:
+          type: string
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        enqueued_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+        worker:
+          type: string
+          nullable: true
+    JobRunPage:
+      type: object
+      additionalProperties: false
+      required: [runs]
+      properties:
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobRun'
+        next_cursor:
+          type: string
+          description: 還有下一頁時才有。原樣傳回 `cursor`。

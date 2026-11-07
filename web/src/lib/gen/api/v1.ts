@@ -187,6 +187,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/streams": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 列出 stream
+         * @description 依 kind、lease key、狀態、錯誤類別篩。狀態由資料算出：有 `paused_reason` 是 `paused`，
+         *     `consecutive_failures` 大於 0 是 `backing_off`，其餘是 `ok`。最多 500 筆，依 id 排序。
+         */
+        get: operations["listStreams"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/streams/{id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 恢復暫停的 stream
+         * @description 清掉 `paused_reason` 與 `paused_at`，並把 `next_due_at` 設成現在，下一輪才派得了工。
+         *     本來就沒有暫停則原樣回傳，不寫 audit。有暫停才寫 `meta.audit`，action 是 `stream.resume`。
+         *     cookie 登入的請求要帶對的 `Origin`。
+         */
+        post: operations["resumeStream"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 列出未完成的 job
+         * @description 只含 `pending` 與 `running`。錯誤類別用所屬 stream 的 `last_error_class`；沒有 stream 的 job 不會出現在錯誤類別篩選裡。
+         *     最多 500 筆，依入隊時間排序。
+         */
+        get: operations["listJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/job-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 列出已完成的 job
+         * @description 依完成時間新到舊。`cursor` 是上一頁的 `next_cursor`。`limit` 預設 50，最大 200。
+         */
+        get: operations["listJobRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -244,6 +328,87 @@ export interface components {
             /** @description 明文只出現這一次。 */
             token: string;
         };
+        /**
+         * @description 錯誤類別（C3-04）。
+         * @enum {string}
+         */
+        ErrorClass: "auth" | "rate_limited" | "ip_banned" | "unavailable" | "bad_request" | "not_found" | "internal";
+        /**
+         * @description 有 `paused_reason` 是 `paused`；否則連續失敗大於 0 是 `backing_off`；其餘是 `ok`。
+         * @enum {string}
+         */
+        StreamStatus: "ok" | "backing_off" | "paused";
+        /** @enum {string} */
+        JobStatus: "pending" | "running";
+        /** @enum {string} */
+        JobRunStatus: "succeeded" | "failed" | "cancelled";
+        Stream: {
+            /** Format: int64 */
+            id: number;
+            kind: string;
+            lease_key: string;
+            key: string;
+            status: components["schemas"]["StreamStatus"];
+            paused_reason?: string | null;
+            /** Format: date-time */
+            paused_at?: string | null;
+            /** Format: date-time */
+            next_due_at: string;
+            /** Format: date-time */
+            last_ok_at?: string | null;
+            consecutive_failures: number;
+            last_error_class?: string | null;
+            last_error?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        Job: {
+            /** Format: int64 */
+            id: number;
+            kind: string;
+            dedup_key: string;
+            lease_key: string;
+            status: components["schemas"]["JobStatus"];
+            attempt: number;
+            /** Format: date-time */
+            not_before: string;
+            /** Format: date-time */
+            enqueued_at: string;
+            /** Format: date-time */
+            started_at?: string | null;
+            /** Format: int64 */
+            stream_id?: number | null;
+            /** @description 所屬 stream 的 `last_error_class`。沒有 stream 時是 null。 */
+            last_error_class?: string | null;
+        };
+        JobRun: {
+            /** Format: int64 */
+            id: number;
+            kind: string;
+            dedup_key: string;
+            lease_key: string;
+            /** Format: int64 */
+            stream_id?: number | null;
+            status: components["schemas"]["JobRunStatus"];
+            attempt: number;
+            requests: number;
+            items: number;
+            more: boolean;
+            error_class?: string | null;
+            error?: string | null;
+            /** Format: date-time */
+            enqueued_at: string;
+            /** Format: date-time */
+            started_at?: string | null;
+            /** Format: date-time */
+            finished_at: string;
+            worker?: string | null;
+        };
+        JobRunPage: {
+            runs: components["schemas"]["JobRun"][];
+            /** @description 還有下一頁時才有。原樣傳回 `cursor`。 */
+            next_cursor?: string;
+        };
     };
     responses: {
         /** @description 未預期的錯誤。`code` 是 `internal`、`timeout` 或 `method_not_allowed`。 */
@@ -265,7 +430,16 @@ export interface components {
             };
         };
     };
-    parameters: never;
+    parameters: {
+        /** @description 只留這個 kind。 */
+        Kind: string;
+        /** @description 只留這個 lease key，例如 `account:1`。 */
+        LeaseKey: string;
+        /** @description 只留這個錯誤類別。 */
+        ErrorClass: components["schemas"]["ErrorClass"];
+        /** @description 最多幾筆。預設 200，最大 500。 */
+        ListLimit: number;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -568,6 +742,162 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listStreams: {
+        parameters: {
+            query?: {
+                /** @description 只留這個 kind。 */
+                kind?: components["parameters"]["Kind"];
+                /** @description 只留這個 lease key，例如 `account:1`。 */
+                lease_key?: components["parameters"]["LeaseKey"];
+                /** @description 只留這個狀態。 */
+                status?: components["schemas"]["StreamStatus"];
+                /** @description 只留這個錯誤類別。 */
+                error_class?: components["parameters"]["ErrorClass"];
+                /** @description 最多幾筆。預設 200，最大 500。 */
+                limit?: components["parameters"]["ListLimit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description stream 清單。 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stream"][];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    resumeStream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 這個 stream 的目前狀態。 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stream"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Origin 不符。`code` 是 `forbidden`。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description 沒有這個 stream。`code` 是 `not_found`。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listJobs: {
+        parameters: {
+            query?: {
+                /** @description 只留這個 kind。 */
+                kind?: components["parameters"]["Kind"];
+                /** @description 只留這個 lease key，例如 `account:1`。 */
+                lease_key?: components["parameters"]["LeaseKey"];
+                /** @description 只留這個狀態。 */
+                status?: components["schemas"]["JobStatus"];
+                /** @description 只留這個錯誤類別。 */
+                error_class?: components["parameters"]["ErrorClass"];
+                /** @description 最多幾筆。預設 200，最大 500。 */
+                limit?: components["parameters"]["ListLimit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 未完成的 job。 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"][];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listJobRuns: {
+        parameters: {
+            query?: {
+                /** @description 含這個時間之後完成的。 */
+                from?: string;
+                /** @description 不含這個時間之後完成的。 */
+                to?: string;
+                /** @description 只留這個 kind。 */
+                kind?: components["parameters"]["Kind"];
+                /** @description 只留這個 lease key，例如 `account:1`。 */
+                lease_key?: components["parameters"]["LeaseKey"];
+                /** @description 只留這個狀態。 */
+                status?: components["schemas"]["JobRunStatus"];
+                /** @description 只留這個錯誤類別。 */
+                error_class?: components["parameters"]["ErrorClass"];
+                /** @description 一頁幾筆。預設 50，最大 200。 */
+                limit?: number;
+                /** @description 上一頁回的 `next_cursor`。不是這個格式則 `bad_request`。 */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 一頁歷史。沒有下一頁時不帶 `next_cursor`。 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRunPage"];
+                };
+            };
+            /** @description cursor 無法解讀。`code` 是 `bad_request`。 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
             default: components["responses"]["Problem"];
         };
     };

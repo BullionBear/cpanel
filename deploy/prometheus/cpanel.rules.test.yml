@@ -1,0 +1,73 @@
+# promtool unit test. `make rules-check` runs it. A stream that fails three
+# times in a row must raise CpanelStreamConsecutiveFailures; two must not.
+rule_files:
+  - cpanel.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'cpanel_stream_consecutive_failures{kind="trade",stream="7"}'
+        values: '3+0x20'
+      - series: 'cpanel_stream_consecutive_failures{kind="trade",stream="8"}'
+        values: '2+0x20'
+      - series: 'cpanel_stream_lag_seconds{kind="trade",stream="7"}'
+        values: '1000+0x20'
+      - series: 'cpanel_streams_paused'
+        values: '1+0x20'
+      - series: 'cpanel_egress_pauses'
+        values: '1+0x20'
+      - series: 'cpanel_job_oldest_age_seconds'
+        values: '700+0x20'
+      - series: 'cpanel_job_runs{status="failed",error_class="unavailable"}'
+        values: '8+0x20'
+      - series: 'cpanel_job_runs{status="succeeded",error_class="none"}'
+        values: '2+0x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: CpanelStreamConsecutiveFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              kind: trade
+              stream: "7"
+            exp_annotations:
+              summary: stream failed at least three times in a row
+      - eval_time: 11m
+        alertname: CpanelStreamLag
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              kind: trade
+              stream: "7"
+            exp_annotations:
+              summary: stream lag is over 15 minutes
+      - eval_time: 11m
+        alertname: CpanelStreamsPaused
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: a stream is paused
+      - eval_time: 3m
+        alertname: CpanelEgressPaused
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: an egress pause is in force
+      - eval_time: 6m
+        alertname: CpanelJobStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: the oldest unfinished job is over 10 minutes old
+      - eval_time: 11m
+        alertname: CpanelJobRunFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: more than half of the last hour of job runs failed

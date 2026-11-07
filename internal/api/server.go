@@ -32,7 +32,7 @@ type Config struct {
 	RoleRecheck time.Duration  // zero means auth.DefaultRoleRecheck
 }
 
-// Handler is /healthz, /readyz, /metrics, the auth routes, and the SPA for every other path.
+// Handler is /healthz, /readyz, /metrics, the auth routes, the ops routes, and the SPA for every other path.
 func Handler(cfg Config) http.Handler {
 	ttl := cfg.SessionTTL
 	if ttl == 0 {
@@ -80,6 +80,10 @@ func Handler(cfg Config) http.Handler {
 	mux.Handle("/me", getOnly(apiHandler))
 	mux.Handle("/tokens", methods(apiHandler, http.MethodGet, http.MethodPost))
 	mux.Handle("/tokens/{id}", methods(apiHandler, http.MethodDelete))
+	mux.Handle("/streams", getOnly(apiHandler))
+	mux.Handle("/streams/{id}/resume", methods(apiHandler, http.MethodPost))
+	mux.Handle("/jobs", getOnly(apiHandler))
+	mux.Handle("/job-runs", getOnly(apiHandler))
 	mux.Handle("/", spa(siteFiles()))
 	return wrap(cfg.Log, cfg.Timeout, mux)
 }

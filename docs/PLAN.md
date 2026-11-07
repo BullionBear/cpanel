@@ -72,7 +72,7 @@ C2 骨架 ──► C3 Job 系統 ──┬─► C4 Mirror ──┐
 
 ## C3 Job 系統（#34）
 
-決策 C3-D001–D004 見 [DECISIONS.md](DECISIONS.md)。
+決策 C3-D001–D005 見 [DECISIONS.md](DECISIONS.md)。
 
 | Ticket | 內容 | 驗收 | 依賴 |
 |---|---|---|---|

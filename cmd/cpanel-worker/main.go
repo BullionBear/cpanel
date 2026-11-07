@@ -154,6 +154,7 @@ func main() {
 	defer stop()
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	reg.MustRegister(newOpsCollector(pool, log))
 	rules := reconcile.Rules()
 	loop := &reconcile.Loop{
 		DB: pool, Rules: rules, Interval: opt.reconcileInterval, Log: log,

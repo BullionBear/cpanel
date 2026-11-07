@@ -1,0 +1,48 @@
+# Alert rules for cpanel-worker /metrics (C3-D005, #68).
+# Load this file in Prometheus. The worker does not publish a port; scrape it
+# from the host or the tailnet. Thresholds are the decision, not a secret.
+groups:
+  - name: cpanel
+    rules:
+      - alert: CpanelStreamLag
+        expr: cpanel_stream_lag_seconds > 900
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: stream lag is over 15 minutes
+      - alert: CpanelStreamConsecutiveFailures
+        expr: cpanel_stream_consecutive_failures >= 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: stream failed at least three times in a row
+      - alert: CpanelStreamsPaused
+        expr: cpanel_streams_paused > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: a stream is paused
+      - alert: CpanelEgressPaused
+        expr: cpanel_egress_pauses > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: an egress pause is in force
+      - alert: CpanelJobStale
+        expr: cpanel_job_oldest_age_seconds > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: the oldest unfinished job is over 10 minutes old
+      - alert: CpanelJobRunFailures
+        expr: (sum(cpanel_job_runs{status="failed"}) / sum(cpanel_job_runs)) > 0.5 and sum(cpanel_job_runs) >= 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: more than half of the last hour of job runs failed

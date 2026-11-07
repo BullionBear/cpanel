@@ -1,0 +1,1 @@
+import{F as e,I as t,L as n,N as r,_ as i,j as a,k as o,l as s,x as c,y as l}from"./Duj6H_S2.js";var u=c(`<h1> </h1> <p class="muted"> </p>`,1);function d(c,d){var f=u();s(`1tbziic`,e=>{o(()=>{r.title=`${d.title??``} · cpanel`})});var p=e(f),m=t(p,!0),h=n(p,2),g=t(h,!0);a(()=>{i(m,d.title),i(g,d.note)}),l(c,f)}export{d as t};

@@ -122,3 +122,10 @@ C2-D001–C2-D007 於 2026-11-06 定在 epic，原文照錄。
 
 - 每一頁一個 transaction：寫入以 native id 冪等，cursor 以 `ingest.stream.cursor_version` CAS 推進，CAS 失敗整頁 rollback。
 - lease 只負責把同一個帳號的限速預算留在一個進程裡。lease 判斷出錯（例如時鐘或續約延遲），最多是同一帳號短暫多一個進程在打交易所，資料不會重複。
+
+### C3-D005 告警走 Prometheus，不在行程裡送出（#68）
+
+- `cpanel-worker` 的 `/metrics` 以資料庫現況為準：沒暫停的 stream 的 lag 與連續失敗、暫停的 stream 數、生效中的 `ingest.pause`、未完成 job 的數量與最老年齡、最近一小時的 `job_run`（依狀態與錯誤類別）。重啟不會漏掉已經寫進資料庫的失敗。
+- 規則在 `deploy/prometheus/cpanel.rules.yml`，dashboard 在 `deploy/grafana/cpanel.json`。門檻：lag 超過 15 分鐘持續 10 分鐘；連續失敗至少 3 次持續 5 分鐘；有暫停的 stream 持續 10 分鐘；出口暫停持續 2 分鐘；最老的未完成 job 超過 10 分鐘持續 5 分鐘；最近一小時失敗率超過一半且至少 10 筆、持續 10 分鐘。
+- worker 不對公網開 port。Prometheus 從主機或 tailnet 抓容器的 `:8081/metrics`。不另做 Discord webhook，也不新增 secret。
+- `AlertHook` 仍只記 log。暫停與連續失敗的 gauge 才是會被送出的告警。

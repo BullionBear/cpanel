@@ -31,7 +31,8 @@ type AuthFailure struct {
 	Message  string
 }
 
-// Alert is a bad_request failure, as AlertHook sees it. C3-05 delivers it. The stream is already paused.
+// Alert is a bad_request failure, as AlertHook sees it. The hook only logs. C3-05 raises the
+// alert from the worker's paused-stream and consecutive-failure metrics, so a restart does not drop it.
 type Alert struct {
 	StreamID int64
 	LeaseKey string
