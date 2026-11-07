@@ -27,13 +27,16 @@ func (e MeAuth) Valid() bool {
 
 // Health defines model for Health.
 type Health struct {
-	// Commit git commit。
+	// BuiltAt 建置時間，UTC，RFC3339。
+	BuiltAt time.Time `json:"built_at"`
+
+	// Commit git commit 的前 12 碼。push `main` 時的 image tag 與這個值相同。
 	Commit string `json:"commit"`
 
 	// Ok 行程在跑時為 true。
 	Ok bool `json:"ok"`
 
-	// Version 建置版本。
+	// Version 建置版本，來自 `git describe`。在 `v*` tag 上建置時與 image tag 相同。
 	Version string `json:"version"`
 }
 

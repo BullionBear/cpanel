@@ -1,0 +1,12 @@
+.git
+bin
+web/node_modules
+web/.svelte-kit
+archive
+*.test
+*.out
+coverage.*
+.env
+*.env
+env.sh
+credentials

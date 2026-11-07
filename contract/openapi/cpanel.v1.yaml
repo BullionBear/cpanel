@@ -1,9 +1,9 @@
 # cpanel-api 的對外契約（ARCHITECTURE §4.7）。SPA 不在這份契約裡。
-# 0.2.0 加上 Discord 登入、session、bearer token（C2-04）。
+# 0.2.1 的 /healthz 加上建置時間（C2-06）。0.2.0 加上 Discord 登入、session、bearer token（C2-04）。
 openapi: 3.0.3
 info:
   title: cpanel API
-  version: 0.2.0
+  version: 0.2.1
   description: |
     cpanel-api 的對外契約。
 
@@ -26,7 +26,7 @@ paths:
       operationId: getHealthz
       security: []
       summary: 行程是否在跑
-      description: 只看這個行程。不連資料庫。回應帶建置版本與 commit。
+      description: 只看這個行程。不連資料庫。回應帶建置版本、commit 與建置時間。
       responses:
         '200':
           description: 行程在跑。
@@ -305,17 +305,21 @@ components:
     Health:
       type: object
       additionalProperties: false
-      required: [ok, version, commit]
+      required: [ok, version, commit, built_at]
       properties:
         ok:
           type: boolean
           description: 行程在跑時為 true。
         version:
           type: string
-          description: 建置版本。
+          description: 建置版本，來自 `git describe`。在 `v*` tag 上建置時與 image tag 相同。
         commit:
           type: string
-          description: git commit。
+          description: git commit 的前 12 碼。push `main` 時的 image tag 與這個值相同。
+        built_at:
+          type: string
+          format: date-time
+          description: 建置時間，UTC，RFC3339。
     Ready:
       type: object
       additionalProperties: false

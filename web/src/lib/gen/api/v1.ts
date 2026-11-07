@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * 行程是否在跑
-         * @description 只看這個行程。不連資料庫。回應帶建置版本與 commit。
+         * @description 只看這個行程。不連資料庫。回應帶建置版本、commit 與建置時間。
          */
         get: operations["getHealthz"];
         put?: never;
@@ -194,10 +194,15 @@ export interface components {
         Health: {
             /** @description 行程在跑時為 true。 */
             ok: boolean;
-            /** @description 建置版本。 */
+            /** @description 建置版本，來自 `git describe`。在 `v*` tag 上建置時與 image tag 相同。 */
             version: string;
-            /** @description git commit。 */
+            /** @description git commit 的前 12 碼。push `main` 時的 image tag 與這個值相同。 */
             commit: string;
+            /**
+             * Format: date-time
+             * @description 建置時間，UTC，RFC3339。
+             */
+            built_at: string;
         };
         Ready: {
             /** @description 資料庫連得上且 schema 是目前版本時為 true。 */
