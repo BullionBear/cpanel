@@ -159,7 +159,9 @@
 
 ### 4.3 ReconcileLoop
 
-每一輪只讀 DB，算出「應該存在的 job」，以 `INSERT … ON CONFLICT DO NOTHING` 寫入。它是 level-triggered：漏掉一輪無所謂，下一輪會補；多副本同時跑也安全（唯一性由 partial unique index 保證，§5），不需要選主。
+每一輪只讀 DB，算出「應該存在的 job」，以 `INSERT … ON CONFLICT (dedup_key) DO NOTHING` 寫入。它是 level-triggered：漏掉一輪無所謂，下一輪會補；多副本同時跑也安全（唯一性由 `ingest.job.dedup_key` 的 unique index 保證，C3-D002、§5），不需要選主。
+
+實作在 `internal/reconcile`，每個 `cpanel-worker` 副本都跑，預設每 5 秒一輪（`-reconcile-interval`）。一輪的規則在同一個 transaction 裡依序跑，任何一條失敗整輪 rollback。每條規則以固定順序（id 或 name）插入，多副本撞到同一個 key 時依序等待，不會互相死結。worker 的 `/metrics` 有每條規則插入的列數與耗時（`cpanel_reconcile_*`）；Prometheus client 會連到 `net/http`，所以由 worker 匯出，不在 `internal/reconcile` 裡（I5）。
 
 規則，依序：
 
@@ -167,10 +169,10 @@
 2. **stream 規劃**（upsert `ingest.stream`，不刪）：
    - scope：`api_id` → `mirror.account` 的 `(exchange, exch_account_uid)` → `pms.exchange_account`；對不到的計入 §4.1 的「PMS 沒涵蓋」告警，不建 stream。UID → `mirror.symbol` → `(venue, exch_ticker)`；同一個 exchange_account 內同一個 UID 取各 `api_id` 最早的 `since`，往前多讀 1 分鐘（TD 主機與交易所的時鐘差，E21-D085）。
    - discovery：funding／income 與持倉快照裡出現、但沒有 stream 的商品（手動單），加成 `source = discovered`。Binance UM／CM 的 income 帶 `COMMISSION` 的 symbol，能找出有成交的商品；Binance 現貨沒有帳號層級的成交端點，手動現貨交易要操作者加進 watch list（`source = manual`），UI 上明講。
-3. **stream 派工：** `next_due_at ≤ now`、而且沒有未完成 job 的 stream 派一個 job。上一個 job 回報 `more = true`（還沒追上現在）的，`next_due_at = now`。
+3. **stream 派工：** `next_due_at ≤ now`、沒有暫停（`paused_reason IS NULL`）、而且沒有未完成 job 的 stream 派一個 job。`next_due_at` 由 worker 在 job 結束時更新（C3-03）：上一個 job 回報 `more = true`（還沒追上現在）的，`next_due_at = now`。
 4. **待查訂單：** `ingest.pending_order` 裡到期的，依 `(exchange_account, venue)` 批次派 `order.resolve`（§4.5）。
 5. **快照：** 每個 active exchange_account，當前時間點 `b = floor(now, 1h)` 還沒有 batch、也沒有未完成 job，就派 `snapshot`。過去的時間點補不回來（不能對過去取快照），缺了就是看得見的缺口。
-6. **mirror：** `mftiko.sync`、`sym.sync` 依間隔派。
+6. **periodic：** `ingest.periodic` 裡啟用、到期、而且沒有未完成 job 的，各派一個 job，同時把 `next_due_at` 設成 `now + period`。間隔從派工時起算；上一個 job 到期時還沒完成，就等它完成後的下一輪再派。`mftiko.sync`、`sym.sync`（mirror）與 `maint.partitions`（每小時，`job_run` 的分區維護）都是 periodic。程式只在那一列不存在時登記，之後間隔與啟用由操作者在表上改。
 
 **頻率分層**（控制 Binance per-symbol 端點的 request weight）：
 

@@ -1,5 +1,6 @@
 // Command cpanel-worker runs cpanel's jobs: every call to mftiko, SYM and the exchanges (ARCHITECTURE §4.4). It
-// serves /healthz only; the job system comes with C3. It stays on the private network.
+// runs the ReconcileLoop (internal/reconcile, §4.3), which inserts the jobs that are due; every replica runs one.
+// Job handlers come with C3-03. It serves /healthz and /metrics and stays on the private network.
 //
 // Settings are flags whose defaults come from environment variables; a flag wins over its variable:
 //
@@ -7,6 +8,7 @@
 //	-database          $CPANEL_DATABASE_URL       PostgreSQL URL; required, logged as ***
 //	-log-level         $CPANEL_LOG_LEVEL          trace, debug, info, warn or error, default info
 //	-shutdown-timeout  $CPANEL_SHUTDOWN_TIMEOUT   how long to wait for in-flight requests after SIGTERM, default 10s
+//	-reconcile-interval $CPANEL_RECONCILE_INTERVAL  how often the ReconcileLoop starts a round, default 5s
 //	-mftiko-url        $CPANEL_MFTIKO_URL         mftiko-api base URL, e.g. http://100.65.26.119:8080/api/v1
 //	-mftiko-token      $CPANEL_MFTIKO_TOKEN       mftiko-api bearer token; logged as ***
 //	-sym-url           $CPANEL_SYM_URL            SYM gRPC listener, e.g. http://100.65.26.119:7450
@@ -21,8 +23,8 @@
 //
 // The effective settings are logged at startup, as JSON on stderr. Startup does not migrate: the database
 // must already be at the embedded version (cpanel-migrate up), or the process refuses to start and says why.
-// /healthz is 200 while the process is up. SIGTERM and SIGINT stop accepting, wait for in-flight requests
-// up to -shutdown-timeout, and exit 0.
+// /healthz is 200 while the process is up. SIGTERM and SIGINT stop the ReconcileLoop, whose unfinished round rolls
+// back, stop accepting, wait for in-flight requests up to -shutdown-timeout, and exit 0.
 package main
 
 import (
@@ -35,25 +37,32 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/BullionBear/cpanel/internal/doctor"
 	"github.com/BullionBear/cpanel/internal/platform/config"
 	"github.com/BullionBear/cpanel/internal/platform/httpserver"
 	"github.com/BullionBear/cpanel/internal/platform/logger"
+	"github.com/BullionBear/cpanel/internal/reconcile"
 	"github.com/BullionBear/cpanel/migrations"
 )
 
 const name = "cpanel-worker"
 
 type options struct {
-	listen          string
-	database        string
-	logLevel        logger.Level
-	shutdownTimeout time.Duration
-	mftikoURL       string
-	mftikoToken     string
-	symURL          string
-	symToken        string
-	doctor          bool
+	listen            string
+	database          string
+	logLevel          logger.Level
+	shutdownTimeout   time.Duration
+	reconcileInterval time.Duration
+	mftikoURL         string
+	mftikoToken       string
+	symURL            string
+	symToken          string
+	doctor            bool
 }
 
 func parseArgs(args []string, getenv func(string) string) (options, *config.Set, error) {
@@ -64,6 +73,8 @@ func parseArgs(args []string, getenv func(string) string) (options, *config.Set,
 	set.Var(&opt.logLevel, "log-level", "CPANEL_LOG_LEVEL", "trace, debug, info, warn or error")
 	set.Duration(&opt.shutdownTimeout, "shutdown-timeout", "CPANEL_SHUTDOWN_TIMEOUT", 10*time.Second,
 		"how long to wait for in-flight requests after SIGTERM")
+	set.Duration(&opt.reconcileInterval, "reconcile-interval", "CPANEL_RECONCILE_INTERVAL", reconcile.DefaultInterval,
+		"how often the ReconcileLoop starts a round")
 	set.String(&opt.mftikoURL, "mftiko-url", "CPANEL_MFTIKO_URL", "", "mftiko-api base URL")
 	set.Secret(&opt.mftikoToken, "mftiko-token", "CPANEL_MFTIKO_TOKEN", "mftiko-api bearer token")
 	set.String(&opt.symURL, "sym-url", "CPANEL_SYM_URL", "", "SYM gRPC listener URL")
@@ -71,6 +82,9 @@ func parseArgs(args []string, getenv func(string) string) (options, *config.Set,
 	rest, err := set.ParseRemaining(args)
 	if err != nil {
 		return options{}, nil, err
+	}
+	if opt.reconcileInterval <= 0 {
+		return options{}, nil, fmt.Errorf("-reconcile-interval ($CPANEL_RECONCILE_INTERVAL) must be positive, got %s", opt.reconcileInterval)
 	}
 	switch {
 	case len(rest) == 0:
@@ -115,9 +129,35 @@ func main() {
 		os.Exit(1)
 	}
 
+	pool, err := pgxpool.New(context.Background(), opt.database)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+		log.Error().Err(err).Msg("database")
+		os.Exit(1)
+	}
+	defer pool.Close()
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := httpserver.ListenAndServe(ctx, log, opt.listen, httpserver.NewMux(), opt.shutdownTimeout); err != nil {
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	rules := reconcile.Rules()
+	loop := &reconcile.Loop{
+		DB: pool, Rules: rules, Interval: opt.reconcileInterval, Log: log,
+		Observe: newReconcileMetrics(reg, rules).observe,
+	}
+	looping := make(chan struct{})
+	go func() {
+		defer close(looping)
+		loop.Run(ctx)
+	}()
+
+	mux := httpserver.NewMux()
+	mux.Handle("GET /metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+	err = httpserver.ListenAndServe(ctx, log, opt.listen, mux, opt.shutdownTimeout)
+	stop()
+	<-looping
+	if err != nil {
 		log.Error().Err(err).Msg("exit")
 		os.Exit(1)
 	}
