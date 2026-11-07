@@ -7,7 +7,7 @@
 | 元件 | 位置 | 對外 |
 |---|---|---|
 | cpanel-api | `172.237.19.123`，容器 `cpanel-api`，network `web_proxy` | 只經 Traefik：`https://cpanel.lynxlinkage.com` |
-| cpanel-worker | 同一台，容器 `cpanel-worker`，network `cpanel_default` | 不開 port；出口 IP 是 `172.237.19.123` |
+| cpanel-worker | 同一台，容器 `cpanel-worker`，network `cpanel_default` | 不開 port；出口 IP 是 `172.237.19.123`。`CPANEL_EGRESS` 設成這個 IP，HTTP 418 時同一個名字的副本一起暫停 |
 | cpanel-migrate | 同一台，部署時一次性執行 | — |
 | Postgres 17 | `100.65.26.119:5432`（Tailscale），database `cpanel_v3`，role `cpanel_v3` | 只在 Tailscale |
 | mftiko-api | `http://100.65.26.119:8080/api/v1`（Tailscale） | — |

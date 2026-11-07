@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 )
@@ -38,13 +39,18 @@ type Worker struct {
 	DB             *pgxpool.Pool
 	Name           string // owner of its leases and worker of its jobs; DefaultName() when empty
 	Handlers       Handlers
-	Slots          int           // lease keys run at once
-	LeaseTTL       time.Duration // how long an acquired or renewed lease lasts
-	RenewEvery     time.Duration // how often a held lease is renewed; must be under half of LeaseTTL
-	BudgetRequests int           // outbound requests one job may make
-	BudgetTime     time.Duration // how long one job may keep starting pages; it is cancelled at twice that
-	Poll           time.Duration // how long an idle slot waits before it looks for work again
-	Grace          time.Duration // how long the page in progress may take once the worker is told to stop
+	Slots          int                                              // lease keys run at once
+	LeaseTTL       time.Duration                                    // how long an acquired or renewed lease lasts
+	RenewEvery     time.Duration                                    // how often a held lease is renewed; must be under half of LeaseTTL
+	BudgetRequests int                                              // outbound requests one job may make
+	BudgetTime     time.Duration                                    // how long one job may keep starting pages; it is cancelled at twice that
+	Poll           time.Duration                                    // how long an idle slot waits before it looks for work again
+	Grace          time.Duration                                    // how long the page in progress may take once the worker is told to stop
+	Egress         string                                           // this process's egress; every replica behind it shares one IP-ban pause
+	Local          []string                                         // kinds that do not call out, so an egress pause does not hold them; maint.partitions always counts
+	Rand           func() float64                                   // jitter position in [0, 1]; nil is math/rand
+	CredentialHook func(context.Context, pgx.Tx, AuthFailure) error // nil records an auth failure and does nothing else
+	AlertHook      func(context.Context, Alert)                     // nil only logs a bad request
 	Log            zerolog.Logger
 }
 
@@ -70,6 +76,11 @@ type runner struct {
 	budgetRequests int
 	budgetTime     time.Duration
 	poll, grace    time.Duration
+	egress         string
+	local          []string
+	rand           func() float64
+	auth           func(context.Context, pgx.Tx, AuthFailure) error
+	alert          func(context.Context, Alert)
 	log            zerolog.Logger
 }
 
@@ -85,12 +96,21 @@ func (w *Worker) runner() *runner {
 		budgetTime:     cmp.Or(w.BudgetTime, DefaultBudgetTime),
 		poll:           cmp.Or(w.Poll, DefaultPoll),
 		grace:          cmp.Or(w.Grace, DefaultGrace),
+		egress:         w.Egress,
+		local:          append([]string{}, w.Local...),
+		rand:           w.Rand,
+		auth:           w.CredentialHook,
+		alert:          w.AlertHook,
 		log:            w.Log,
+	}
+	if !slices.Contains(r.local, maintPartitionsKind) {
+		r.local = append(r.local, maintPartitionsKind)
 	}
 	for k := range w.Handlers {
 		r.kinds = append(r.kinds, k)
 	}
 	slices.Sort(r.kinds)
+	slices.Sort(r.local)
 	return r
 }
 
@@ -115,7 +135,10 @@ func (w *Worker) Run(ctx context.Context) {
 	})
 	defer stopAfter()
 
-	r.log.Info().Str("worker", r.name).Int("slots", r.slots).Strs("kinds", r.kinds).Msg("worker started")
+	if r.egress == "" {
+		r.log.Warn().Str("worker", r.name).Msg("no egress name; an IP ban is not paused for other workers")
+	}
+	r.log.Info().Str("worker", r.name).Str("egress", r.egress).Int("slots", r.slots).Strs("kinds", r.kinds).Msg("worker started")
 	var wg sync.WaitGroup
 	for range r.slots {
 		wg.Go(func() { r.slot(ctx, hard) })

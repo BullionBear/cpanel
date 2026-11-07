@@ -38,6 +38,8 @@ func (r *runner) acquire(ctx context.Context) (*lease, error) {
 				LEFT JOIN ingest.lease l ON l.key = j.lease_key
 				WHERE (j.status = 'running' OR j.not_before <= now())
 				  AND j.kind = ANY($3)
+				  AND (j.kind = ANY($4) OR NOT EXISTS (
+				        SELECT FROM ingest.pause p WHERE p.scope = $5 AND p.until > now()))
 				  AND (l.key IS NULL OR l.until <= now())
 				GROUP BY j.lease_key
 				ORDER BY min(j.priority), min(j.not_before), j.lease_key
@@ -49,7 +51,7 @@ func (r *runner) acquire(ctx context.Context) (*lease, error) {
 			SET owner = excluded.owner, token = l.token + 1, acquired_at = excluded.acquired_at, until = excluded.until
 			WHERE l.until <= now()
 			RETURNING l.key, l.token`,
-			r.name, r.ttl, r.kinds).Scan(&l.key, &l.token)
+			r.name, r.ttl, r.kinds, r.local, r.scope()).Scan(&l.key, &l.token)
 		if err != nil {
 			return err
 		}
