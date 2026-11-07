@@ -11,7 +11,8 @@
 // nothing new is applied. status lists applied and pending files and does not lock. There is no down
 // command: down files are for tests.
 //
-// The database URL is a secret: the startup log shows it as ***.
+// The database URL is a secret: the startup log shows it as ***. $CPANEL_DATABASE_URL_FILE may name a file that
+// holds it instead (C2-D008).
 package main
 
 import (

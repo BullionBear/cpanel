@@ -308,9 +308,16 @@
 
 ## 8. 部署
 
-- worker 必須在 mftiko 的 private VPC 內（連 mftiko-api、SYM），並有自己的出口 IP（§6）。
-- 資料庫與 mftiko 的 Postgres 分開（不同 database、不同 role），可以同一個 cluster。
-- **UI 開放公網：** cpanel-api 放在 VPC 內，由公網的 Traefik（或 LB）轉進來；worker 與 DB 不對外。cpanel-api 只有 worker 的公鑰（I6）。§4.9 給 mftiko 的內部 API 是另一個只聽私網的 listener，不掛在 Traefik 上。
+實際的做法（C2-07，C2-D003、C2-D008–C2-D013）；操作步驟在 [operations.md](operations.md)。
+
+- **主機**：三個 process 都在 `172.237.19.123`，docker compose（project `cpanel`，`/root/cpanel/deployment/`）。image 只有一個，`ghcr.io/bullionbear/cpanel`，以 digest 指定。
+- **公網**：cpanel-api 掛既有的 Traefik（`web_proxy` network），`https://cpanel.lynxlinkage.com` 同源服務 SPA 與 API。`capi.lynxlinkage.com` 轉址到 `cpanel.`。cpanel-api 只有 worker 的公鑰（I6）。
+- **私網**：主機在 Tailscale 上。Postgres、mftiko-api、SYM gRPC 都在 `100.65.26.119`，只聽 tailnet；worker 與 migrate 直接連，不經公網、也不經 `mftiko-proxy`。worker 不開 port、不掛 Traefik。
+- **出口 IP**：worker 的出口是 `172.237.19.123`，沒有 Tailscale exit node；與 TD 主機分開（§6）。PMS 的唯讀 key 以這個 IP 設白名單。
+- **資料庫**：與 mftiko 同一個 Postgres instance，自己的 database `cpanel_v3` 與 role `cpanel_v3`（非 superuser，`pg_hba` 只放行這個 database、只從部署主機）。
+- **secret**：主機上的檔案，compose `secrets` 掛進容器；環境變數只放路徑。
+- **部署**：GitHub Actions 只 build 與發布 image（C2-06）。主機上的 `deploy.sh <digest>`：拉 image → migrate（失敗即停）→ 換版 → 等 `/readyz` → 不過就換回上一個 digest。
+- §4.9 給 mftiko 的內部 API 之後是另一個只聽私網的 listener，不掛在 Traefik 上。
 
 ---
 

@@ -19,6 +19,8 @@
 //	-session-ttl       $CPANEL_SESSION_TTL        session lifetime, default 12h
 //	-role-recheck      $CPANEL_ROLE_RECHECK       how often to recheck the Discord role, default 1h
 //
+// Every secret may instead come from a file named by $NAME_FILE, which is how compose mounts them (C2-D008).
+//
 // The effective settings are logged at startup, as JSON on stderr. Startup does not migrate: the database
 // must already be at the embedded version (cpanel-migrate up), or the process refuses to start and says why.
 // Discord settings may be empty: the process still serves /healthz, and login answers 503 until they are set.

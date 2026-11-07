@@ -48,3 +48,47 @@
 
 - `docker.yml` 監聽所有 tag，而 GitHub 執行的是 tag 所在 commit 上的 workflow 檔：不先停用，推 `v2-final` 會重新 build image。三個 workflow 於 2026-11-06 在 repo 層級停用，之後才建立 tag。
 - `:v2-final` 以停機前正式環境執行中的 digest 打。requirements 用 `>=`，重新 build 的依賴版本未必相同。
+
+## C2 骨架與平台（#33）
+
+C2-D001–C2-D007 於 2026-11-06 定在 epic，原文照錄。
+
+- **C2-D001** CI 拆成兩半：檢查（lint、test、archtest、OpenAPI）在 C2-01 就上線，每個 PR 都會跑；C2-06 只負責 build 與發布。
+- **C2-D002** 工具鏈比照 mftiko：Go 1.26、pgx v5、zerolog、connect、oapi-codegen 的 `std-http-server` 加 `strict-server`、embed 的 SQL migration 加自己的 migrate command、每個測試起一個用完即丟的 Postgres。mftiko 的 `internal/` 不能 import（I1），需要的部分在 cpanel 自己實作。
+- **C2-D003** 部署在 `172.237.19.123`，docker compose 加既有的 Traefik。GitHub Actions 只 build 與發布 image；部署由主機上的腳本執行：先 migrate，成功才換版，`/readyz` 不通過就換回上一個 digest。
+- **C2-D004** web 以 `go:embed` 打包進 cpanel-api：一個 artifact、API 與 UI 的版本一致、同源。
+- **C2-D005** session 存在資料庫，bearer token 由 UI 產生；兩者都只存 SHA-256。登出、撤銷與 Discord role 被拔掉都能立即生效。
+- **C2-D006** 沿用 v2 的 Discord OAuth app，只改 redirect URI。
+- **C2-D007** mftiko 以 commit 釘住，要升版就開 PR；契約的破壞性改動會在 compile 時出現。
+
+### C2-D008 secret 以檔案進容器（#54）
+
+- 每個 `Secret` 設定除了 `$NAME` 也接受 `$NAME_FILE`（檔案內容去掉前後空白）。兩個都設是錯誤。compose 的 `secrets` 掛在 `/run/secrets/`，環境變數只放路徑，`docker inspect` 看不到值。
+- 資料庫的 secret 是整個 URL（`database_url`），不是只有密碼：程式只認 URL，拆開反而要在容器裡組字串。
+- compose 的 file secret 是 bind mount，不改 owner，所以檔案的 owner 是 image 的 `nonroot`（65532），`0600`。
+
+### C2-D009 資料庫：同一個 instance，自己的 database 與 role（#54）
+
+- `100.65.26.119` 的 Postgres 17 上新建 database `cpanel_v3`、role `cpanel_v3`：`LOGIN`，不是 superuser，不能建 role 或 database，只擁有 `cpanel_v3`。`cpanel` 這個名字留給封存的 v2（C1-D005）。
+- `pg_hba.conf` 最前面：只放行 `cpanel_v3` 從部署主機的 Tailscale IP 連 `cpanel_v3`，其他一律 `reject`。`REVOKE ALL ON DATABASE cpanel_v3 FROM PUBLIC`。
+- 不沿用 `bullionbear`（#45）。
+
+### C2-D010 到 mftiko 與 SYM 走 Tailscale，不經 `mftiko-proxy`（#54）
+
+- 部署主機與 `100.65.26.119` 在同一個 tailnet；mftiko-api（`:8080`）、SYM gRPC（`:7450`，h2c）、Postgres 都只聽 tailnet。容器的流量經主機路由，直接連得到。
+- `mftiko-proxy` 是 Traefik 把公網的 `mftiko.lynxlinkage.com` 轉到 mftiko console 用的。cpanel 經它就等於繞公網，而且多一個不屬於 cpanel 的元件。
+- worker 的出口 IP 是主機的 `172.237.19.123`，沒有 exit node。
+
+### C2-D011 `/readyz` 從主機以容器 IP 檢查；有 migration 的版本不自動往回滾（#54）
+
+- image 是 distroless，沒有 shell 與 curl，不能用 compose 的 healthcheck；`deploy.sh` 在主機上以容器 IP 打 cpanel-api `/readyz` 與 cpanel-worker `/healthz`。
+- 換回上一個 digest 只在新版沒有加 migration 時有用：舊的 binary 看到不認識的 migration 拒絕啟動（`RequireCurrent`）。這種情況 `deploy.sh` 照樣嘗試，失敗就明說要往前修。不在 binary 裡放寬這條：放寬就等於讓舊程式跑在新 schema 上。
+
+### C2-D012 `capi.lynxlinkage.com` 永久轉址（#54）
+
+- v3 同源，`capi.` 不再有用途。以 Traefik `redirectregex`（permanent）轉到 `cpanel.` 的同一路徑，舊書籤與舊 redirect URI 至少會落到新站。
+
+### C2-D013 `cpanel-worker doctor`（#54）
+
+- 子命令，不開 server、不需要資料庫。依序：mftiko `GET /accounts?limit=1`（帶 token）、SYM `grpc.health.v1` Check（不需 token）、SYM `Revisions`（帶 token，證明 token 有效）。每項一行，全過 exit 0。
+- 只有讀的呼叫（I2）。

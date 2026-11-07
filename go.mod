@@ -10,10 +10,12 @@ require (
 	github.com/rs/zerolog v1.35.1
 )
 
-require github.com/oapi-codegen/runtime v1.7.0
+require (
+	connectrpc.com/connect v1.21.1
+	github.com/oapi-codegen/runtime v1.7.0
+)
 
 require (
-	connectrpc.com/connect v1.21.1 // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

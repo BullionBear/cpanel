@@ -3,6 +3,8 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -122,5 +124,52 @@ func TestDictShowsAnUnsetSecretAsEmpty(t *testing.T) {
 	}
 	if got := dict(t, set)["token"]; got != "" {
 		t.Errorf("token = %q, want empty", got)
+	}
+}
+
+func TestSecretFromFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("s3cret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, set, err := parse(t, map[string]string{"T_TOKEN_FILE": path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.token != "s3cret" {
+		t.Errorf("token %q, want s3cret (trailing newline trimmed)", s.token)
+	}
+	if got := dict(t, set)["token"]; got != Masked {
+		t.Errorf("dict token %q, want %q", got, Masked)
+	}
+
+	s, _, err = parse(t, map[string]string{"T_TOKEN_FILE": path}, "-token=flag")
+	if err != nil || s.token != "flag" {
+		t.Errorf("flag over file: token %q, err %v", s.token, err)
+	}
+}
+
+func TestSecretFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "empty")
+	if err := os.WriteFile(empty, []byte(" \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"both set", map[string]string{"T_TOKEN": "x", "T_TOKEN_FILE": empty}, "both set"},
+		{"missing file", map[string]string{"T_TOKEN_FILE": filepath.Join(dir, "nope")}, "$T_TOKEN_FILE"},
+		{"empty file", map[string]string{"T_TOKEN_FILE": empty}, "is empty"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, _, err := parse(t, c.env)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("err %v, want it to contain %q", err, c.want)
+			}
+		})
 	}
 }
