@@ -51,4 +51,6 @@ make build    # bin/cpanel-api、bin/cpanel-worker、bin/cpanel-migrate，並寫
 
 `cpanel-api` 提供 `GET /healthz`（只看行程，帶版本與 commit）、`GET /readyz`（資料庫連得上且 schema 是目前版本，否則 503 `application/problem+json`）、`GET /metrics`（Prometheus）。其他路徑回傳嵌入的 SPA：未知路徑是 `index.html`（不快取），`_app/immutable/*` 長快取。錯誤一律是 `application/problem+json`。oasdiff 比較 `OAS_BASE`（預設 `origin/main`）；那個 commit 還沒有契約時略過，不視為失敗。
 
+登入是 Discord OAuth。使用者必須在 `-discord-guild-id` 裡，而且有 `-discord-role-id`。cookie `cpanel_session` 是 `HttpOnly`、`Secure`、`SameSite=Strict`，資料庫只存 SHA-256。bearer token 前綴是 `cpanel_`，明文只在建立時出現一次。cookie 的寫入請求要帶與 `-public-origin` 相同的 `Origin`。Discord 的 client secret 與 bot token 沒設時，行程仍會啟動，`/auth/discord/login` 回 503。正式環境要在既有的 Discord application 加上 redirect URI：`{CPANEL_PUBLIC_ORIGIN}/auth/discord/callback`。
+
 設定是 flag，預設值來自環境變數，flag 優先；`<command> -h` 列出各自的設定與對應的環境變數。啟動時會以 JSON log 印出生效的設定，secret 以 `***` 遮掉。資料庫是 `-database`／`$CPANEL_DATABASE_URL`。`cpanel-migrate up` 才會改 schema；`cpanel-api` 與 `cpanel-worker` 只檢查版本，落後就拒絕啟動。

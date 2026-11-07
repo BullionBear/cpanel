@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -173,6 +174,21 @@ func (m *memWriter) flush(w http.ResponseWriter) {
 	}
 	w.WriteHeader(code)
 	_, _ = w.Write(m.body)
+}
+
+// methods lets the listed methods through. Anything else is problem+json.
+func methods(next http.Handler, allowed ...string) http.Handler {
+	allow := strings.Join(allowed, ", ")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, m := range allowed {
+			if r.Method == m {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		w.Header().Set("Allow", allow)
+		writeProblem(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", "")
+	})
 }
 
 // getOnly lets GET through and answers HEAD without a body. Anything else is problem+json.

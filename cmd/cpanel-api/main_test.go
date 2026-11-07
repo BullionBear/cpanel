@@ -13,6 +13,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/BullionBear/cpanel/internal/auth"
 	"github.com/BullionBear/cpanel/internal/cmdtest"
 	"github.com/BullionBear/cpanel/internal/platform/logger"
 	"github.com/BullionBear/cpanel/internal/platform/pgtest"
@@ -27,15 +28,16 @@ func TestParseArgs(t *testing.T) {
 		args []string
 		want options
 	}{
-		{"defaults", nil, nil, options{listen: ":8080", logLevel: logger.DefaultLevel, shutdownTimeout: 10 * time.Second, requestTimeout: 30 * time.Second}},
+		{"defaults", nil, nil, options{listen: ":8080", logLevel: logger.DefaultLevel, shutdownTimeout: 10 * time.Second, requestTimeout: 30 * time.Second, sessionTTL: auth.DefaultSessionTTL, roleRecheck: auth.DefaultRoleRecheck}},
 		{"environment", map[string]string{
 			"CPANEL_API_LISTEN": ":9000", "CPANEL_LOG_LEVEL": "debug", "CPANEL_SHUTDOWN_TIMEOUT": "3s", "CPANEL_REQUEST_TIMEOUT": "2s",
-			"CPANEL_DATABASE_URL":  "postgres://db/cpanel",
+			"CPANEL_DATABASE_URL": "postgres://db/cpanel", "CPANEL_PUBLIC_ORIGIN": "https://cpanel.example",
+			"CPANEL_DISCORD_CLIENT_ID": "cid", "CPANEL_DISCORD_CLIENT_SECRET": "sec", "CPANEL_SESSION_TTL": "2h",
 			"CPANEL_WORKER_LISTEN": ":1", // the worker's, not ours
-		}, nil, options{listen: ":9000", database: "postgres://db/cpanel", logLevel: logger.Level(zerolog.DebugLevel), shutdownTimeout: 3 * time.Second, requestTimeout: 2 * time.Second}},
-		{"flags over environment", map[string]string{"CPANEL_API_LISTEN": ":9000", "CPANEL_LOG_LEVEL": "debug", "CPANEL_DATABASE_URL": "postgres://env/cpanel", "CPANEL_REQUEST_TIMEOUT": "2s"},
-			[]string{"-listen=:7000", "-log-level=warn", "-shutdown-timeout=1m", "-request-timeout=1s", "-database=postgres://flag/cpanel"},
-			options{listen: ":7000", database: "postgres://flag/cpanel", logLevel: logger.Level(zerolog.WarnLevel), shutdownTimeout: time.Minute, requestTimeout: time.Second}},
+		}, nil, options{listen: ":9000", database: "postgres://db/cpanel", logLevel: logger.Level(zerolog.DebugLevel), shutdownTimeout: 3 * time.Second, requestTimeout: 2 * time.Second, publicOrigin: "https://cpanel.example", discordClientID: "cid", discordClientSecret: "sec", sessionTTL: 2 * time.Hour, roleRecheck: auth.DefaultRoleRecheck}},
+		{"flags over environment", map[string]string{"CPANEL_API_LISTEN": ":9000", "CPANEL_LOG_LEVEL": "debug", "CPANEL_DATABASE_URL": "postgres://env/cpanel", "CPANEL_REQUEST_TIMEOUT": "2s", "CPANEL_DISCORD_CLIENT_SECRET": "env-secret"},
+			[]string{"-listen=:7000", "-log-level=warn", "-shutdown-timeout=1m", "-request-timeout=1s", "-database=postgres://flag/cpanel", "-discord-client-secret=flag-secret", "-session-ttl=1h"},
+			options{listen: ":7000", database: "postgres://flag/cpanel", logLevel: logger.Level(zerolog.WarnLevel), shutdownTimeout: time.Minute, requestTimeout: time.Second, discordClientSecret: "flag-secret", sessionTTL: time.Hour, roleRecheck: auth.DefaultRoleRecheck}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -63,10 +65,10 @@ func TestBinary(t *testing.T) {
 	}
 
 	t.Run("healthz and graceful shutdown", func(t *testing.T) {
-		p := cmdtest.Start(t, bin, []string{"CPANEL_API_LISTEN=127.0.0.1:0", "CPANEL_DATABASE_URL=" + srv.DSN()}, "-shutdown-timeout=5s")
+		p := cmdtest.Start(t, bin, []string{"CPANEL_API_LISTEN=127.0.0.1:0", "CPANEL_DATABASE_URL=" + srv.DSN(), "CPANEL_DISCORD_CLIENT_SECRET=supersecret", "CPANEL_DISCORD_BOT_TOKEN=botsecret"}, "-shutdown-timeout=5s")
 		start := p.Log(t, "starting")
 		cfg, _ := start["config"].(map[string]any)
-		if start["component"] != name || cfg["listen"] != "127.0.0.1:0" || cfg["database"] != "***" || cfg["log-level"] != "info" || cfg["shutdown-timeout"] != "5s" || cfg["request-timeout"] != "30s" {
+		if start["component"] != name || cfg["listen"] != "127.0.0.1:0" || cfg["database"] != "***" || cfg["discord-client-secret"] != "***" || cfg["discord-bot-token"] != "***" || cfg["log-level"] != "info" || cfg["shutdown-timeout"] != "5s" || cfg["request-timeout"] != "30s" {
 			t.Errorf("startup line %v", start)
 		}
 		addr, _ := p.Log(t, "listening")["addr"].(string)
@@ -118,7 +120,7 @@ func TestBinary(t *testing.T) {
 
 	t.Run("help exits 0", func(t *testing.T) {
 		code, stderr := cmdtest.Run(t, bin, nil, "-h")
-		if code != 0 || !strings.Contains(stderr, "$CPANEL_API_LISTEN") || !strings.Contains(stderr, "$CPANEL_DATABASE_URL") || !strings.Contains(stderr, "$CPANEL_REQUEST_TIMEOUT") {
+		if code != 0 || !strings.Contains(stderr, "$CPANEL_API_LISTEN") || !strings.Contains(stderr, "$CPANEL_DATABASE_URL") || !strings.Contains(stderr, "$CPANEL_REQUEST_TIMEOUT") || !strings.Contains(stderr, "$CPANEL_DISCORD_CLIENT_SECRET") {
 			t.Errorf("exit %d, stderr %q", code, stderr)
 		}
 	})

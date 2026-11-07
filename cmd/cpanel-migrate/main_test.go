@@ -98,7 +98,7 @@ func TestUpStatusChangedAndConcurrent(t *testing.T) {
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM meta.schema_migrations`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
+	if n != 2 {
 		t.Fatalf("schema_migrations rows = %d", n)
 	}
 

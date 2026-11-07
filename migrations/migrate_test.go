@@ -63,14 +63,27 @@ func TestEachMigrationUpDownUp(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		assertSchema(t, ctx, conn, false)
+		assertDown(t, ctx, conn, f.version)
 
 		res, err := Up(ctx, srv.DSN())
 		if err != nil {
 			t.Fatalf("up again %s: %v", f.stem(), err)
 		}
-		if len(res.Applied) != 1 || res.Applied[0].String() != f.stem() {
-			t.Fatalf("reapplied %v, want %s", res.Applied, f.stem())
+		// 0001 down drops every schema, so the next up applies every file. A later down
+		// removes only that version's row, so only that file is pending.
+		want := []string{f.stem()}
+		if f.version == ups[0].version {
+			want = want[:0]
+			for _, u := range ups {
+				want = append(want, u.stem())
+			}
+		}
+		var got []string
+		for _, a := range res.Applied {
+			got = append(got, a.String())
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("reapplied %v, want %v", got, want)
 		}
 		assertSchema(t, ctx, conn, true)
 	}
@@ -141,7 +154,7 @@ func TestChangedMigrationIsRefused(t *testing.T) {
 		t.Fatalf("up after a changed file: applied %v, err %v", res.Applied, err)
 	}
 	rows, err := Status(ctx, srv.DSN())
-	if !errors.As(err, &drift) || len(rows) != 1 || rows[0].State != StateChanged {
+	if !errors.As(err, &drift) || len(rows) != 2 || rows[0].State != StateChanged || rows[1].State != StateChanged {
 		t.Fatalf("status: %v %v", rows, err)
 	}
 }
@@ -197,5 +210,42 @@ func assertSchema(t *testing.T, ctx context.Context, conn *pgx.Conn, want bool) 
 	}
 	if cols != 8 {
 		t.Fatalf("meta.audit columns = %d, want 8", cols)
+	}
+	for _, table := range []string{"meta.session", "meta.api_token"} {
+		var rel *string
+		if err := conn.QueryRow(ctx, `SELECT to_regclass($1)::text`, table).Scan(&rel); err != nil {
+			t.Fatal(err)
+		}
+		if rel == nil {
+			t.Fatalf("%s missing after up", table)
+		}
+	}
+}
+
+// assertDown checks the objects that migration version removes. 0001 drops every schema.
+// Later downs drop only their own tables.
+func assertDown(t *testing.T, ctx context.Context, conn *pgx.Conn, version int) {
+	t.Helper()
+	if version == 1 {
+		assertSchema(t, ctx, conn, false)
+		return
+	}
+	var n int
+	if err := conn.QueryRow(ctx, `
+		SELECT count(*) FROM pg_namespace
+		WHERE nspname IN ('pms', 'mirror', 'ingest', 'raw', 'ledger', 'meta')`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 6 {
+		t.Fatalf("schemas = %d after down %d, want 6", n, version)
+	}
+	for _, table := range []string{"meta.session", "meta.api_token"} {
+		var rel *string
+		if err := conn.QueryRow(ctx, `SELECT to_regclass($1)::text`, table).Scan(&rel); err != nil {
+			t.Fatal(err)
+		}
+		if rel != nil {
+			t.Fatalf("%s still present after down %d", table, version)
+		}
 	}
 }
