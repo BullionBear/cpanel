@@ -1,0 +1,5 @@
+# Models for cpanel.v1. `make openapi` runs this.
+package: cpanelv1
+output: contract/gen/cpanel/v1/types.gen.go
+generate:
+  models: true

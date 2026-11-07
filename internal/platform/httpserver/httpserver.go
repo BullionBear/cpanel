@@ -1,5 +1,5 @@
-// Package httpserver runs a cpanel process's HTTP listener: /healthz while the process is up, and a graceful
-// shutdown when the context ends. cpanel-api and cpanel-worker both use it.
+// Package httpserver runs a cpanel process's HTTP listener and a graceful shutdown when the context ends.
+// NewMux serves GET /healthz for cpanel-worker. cpanel-api builds its own handler.
 package httpserver
 
 import (

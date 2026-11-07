@@ -1,0 +1,7 @@
+# Strict server on the standard library's net/http. Same settings as mftiko
+# contract/openapi/oapi-codegen-server.yaml (C2-03).
+package: cpanelv1
+output: contract/gen/cpanel/v1/server.gen.go
+generate:
+  std-http-server: true
+  strict-server: true

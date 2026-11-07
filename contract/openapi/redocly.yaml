@@ -1,0 +1,9 @@
+# Redocly lint for cpanel.v1. `make openapi-lint` and CI run it.
+extends:
+  - recommended
+rules:
+  # The repository has no license file; the spec does not invent one.
+  info-license: off
+  # /healthz, /readyz and /metrics have no client-error status. A wrong method is
+  # still application/problem+json. Authenticated routes arrive with C2-04.
+  operation-4xx-response: off
