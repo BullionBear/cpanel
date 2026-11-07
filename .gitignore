@@ -21,5 +21,7 @@ credentials/
 venv/
 __pycache__/
 
-# Redocly, installed by `make openapi-lint` into contract/openapi
+# Redocly, installed by `make openapi-lint` into contract/openapi.
+# The SPA's dependencies live in web/node_modules.
 node_modules/
+web/.svelte-kit/

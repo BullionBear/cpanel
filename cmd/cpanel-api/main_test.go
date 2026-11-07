@@ -99,9 +99,10 @@ func TestBinary(t *testing.T) {
 		if root.header.Get("Cache-Control") != "no-cache" || page.header.Get("Cache-Control") != "no-cache" {
 			t.Errorf("SPA cache / %q /trades/1 %q", root.header.Get("Cache-Control"), page.header.Get("Cache-Control"))
 		}
-		asset := getRaw(t, addr, "/_app/immutable/app.js")
-		if asset.code != http.StatusOK || asset.header.Get("Cache-Control") != "public, max-age=31536000, immutable" || !strings.Contains(string(asset.body), "Placeholder") {
-			t.Errorf("asset %d %q %q", asset.code, asset.header.Get("Cache-Control"), asset.body)
+		assetPath, assetBody := embeddedJS(t)
+		asset := getRaw(t, addr, assetPath)
+		if asset.code != http.StatusOK || asset.header.Get("Cache-Control") != "public, max-age=31536000, immutable" || string(asset.body) != string(assetBody) {
+			t.Errorf("asset %d %q len %d", asset.code, asset.header.Get("Cache-Control"), len(asset.body))
 		}
 
 		p.Signal(t, syscall.SIGTERM)
@@ -176,6 +177,32 @@ type rawResponse struct {
 	code   int
 	header http.Header
 	body   []byte
+}
+
+func embeddedJS(t *testing.T) (string, []byte) {
+	t.Helper()
+	var urlPath string
+	var body []byte
+	err := fs.WalkDir(web.Build, "build", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || urlPath != "" {
+			return err
+		}
+		if strings.Contains(p, "/_app/immutable/") && strings.HasSuffix(p, ".js") {
+			body, err = fs.ReadFile(web.Build, p)
+			if err != nil {
+				return err
+			}
+			urlPath = "/" + strings.TrimPrefix(p, "build/")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if urlPath == "" || len(body) == 0 {
+		t.Fatal("embedded SPA has no immutable javascript")
+	}
+	return urlPath, body
 }
 
 func getRaw(t *testing.T, addr, path string) rawResponse {
