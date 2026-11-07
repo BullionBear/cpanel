@@ -1,19 +1,24 @@
-# cpanel-api 的對外契約（ARCHITECTURE §4.7）。C2-03 只有行程、就緒與指標。
-# 帳號、歷史與認證在後面的 ticket 加進來。SPA 不在這份契約裡。
+# cpanel-api 的對外契約（ARCHITECTURE §4.7）。SPA 不在這份契約裡。
+# 0.2.0 加上 Discord 登入、session、bearer token（C2-04）。
 openapi: 3.0.3
 info:
   title: cpanel API
-  version: 0.1.0
+  version: 0.2.0
   description: |
     cpanel-api 的對外契約。
 
     錯誤一律是 `application/problem+json`（RFC 9457），另帶穩定的 `code`。`type` 一律是 `about:blank`。
+
+    人用 Discord OAuth，cookie 是 `HttpOnly`、`Secure`、`SameSite=Strict`。程式用 bearer token，前綴是 `cpanel_`。
+    帶了 `Authorization: Bearer` 的請求不使用 cookie。cookie 的寫入請求必須帶與伺服器設定相同的 `Origin`。
 servers:
   - url: /
     description: cpanel-api，與 SPA 同源。
 tags:
   - name: system
     description: 行程、就緒與指標。不需要認證。
+  - name: auth
+    description: Discord 登入、session 與 bearer token。
 paths:
   /healthz:
     get:
@@ -69,10 +74,229 @@ paths:
                 type: string
         default:
           $ref: '#/components/responses/Problem'
+  /auth/discord/login:
+    get:
+      tags: [auth]
+      operationId: loginDiscord
+      security: []
+      summary: 轉向 Discord 登入
+      description: |
+        302 到 Discord。同時設下 `cpanel_oauth_state`（`HttpOnly`、`Secure`、`SameSite=Lax`，只送到 callback）。
+        Discord 尚未設定時回 503。
+      responses:
+        '302':
+          description: 轉向 Discord。
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+        '503':
+          description: Discord 尚未設定。`code` 是 `unavailable`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /auth/discord/callback:
+    get:
+      tags: [auth]
+      operationId: callbackDiscord
+      security: []
+      summary: Discord 把瀏覽器送回來
+      description: |
+        核對 state，交換 code，確認 guild 與 role。成功時設下 `cpanel_session`
+        （`HttpOnly`、`Secure`、`SameSite=Strict`）並轉向 `/`。不在 guild 或沒有 role 回 403，不建立 session。
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '302':
+          description: 已登入，轉向 `/`。
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+        '400':
+          description: state 不符。`code` 是 `bad_request`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: 不是指定 guild 的成員，或沒有指定的 role。`code` 是 `forbidden`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: 登出
+      description: 刪掉 session，清掉 cookie。cookie 登入的請求要帶對的 `Origin`。
+      responses:
+        '204':
+          description: 已登出。
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          description: Origin 不符。`code` 是 `forbidden`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /me:
+    get:
+      tags: [auth]
+      operationId: getMe
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: 目前的登入者
+      responses:
+        '200':
+          description: 登入者。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        default:
+          $ref: '#/components/responses/Problem'
+  /tokens:
+    get:
+      tags: [auth]
+      operationId: listTokens
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: 列出自己尚未撤銷的 token
+      description: 不回傳 token 明文。
+      responses:
+        '200':
+          description: token 清單。
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Token'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      tags: [auth]
+      operationId: createToken
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: 建立 token
+      description: token 明文只在這個回應出現一次。cookie 登入的請求要帶對的 `Origin`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenCreate'
+      responses:
+        '201':
+          description: 已建立。`token` 只出現這一次。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenCreated'
+        '400':
+          description: 名稱是空的。`code` 是 `bad_request`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          description: Origin 不符。`code` 是 `forbidden`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /tokens/{id}:
+    delete:
+      tags: [auth]
+      operationId: deleteToken
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: 撤銷 token
+      description: 撤銷後下一個帶這個 token 的請求被拒絕。cookie 登入的請求要帶對的 `Origin`。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 已撤銷。
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          description: Origin 不符。`code` 是 `forbidden`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: 沒有這個 token，或已經撤銷。`code` 是 `not_found`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
 components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: cpanel_session
+      description: |
+        `HttpOnly`、`Secure`、`SameSite=Strict`。值是亂數。資料庫只存它的 SHA-256。
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        前綴是 `cpanel_`。資料庫只存 SHA-256。帶了這個標頭就不使用 cookie。
   responses:
     Problem:
       description: 未預期的錯誤。`code` 是 `internal`、`timeout` 或 `method_not_allowed`。
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthenticated:
+      description: 沒有通過認證，或 session／token 已撤銷。`code` 是 `unauthenticated`。
       content:
         application/problem+json:
           schema:
@@ -118,4 +342,55 @@ components:
         code:
           type: string
           description: |
-            穩定的錯誤碼。這一版使用 `unavailable`、`timeout`、`internal`、`method_not_allowed`、`bad_request`。
+            穩定的錯誤碼。這一版使用 `unavailable`、`timeout`、`internal`、`method_not_allowed`、`bad_request`、`unauthenticated`、`forbidden`、`not_found`。
+    Me:
+      type: object
+      additionalProperties: false
+      required: [auth, discord_user_id, username, display_name]
+      properties:
+        auth:
+          type: string
+          enum: [session, token]
+        discord_user_id:
+          type: string
+        username:
+          type: string
+        display_name:
+          type: string
+    TokenCreate:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+    Token:
+      type: object
+      additionalProperties: false
+      required: [id, name, created_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+    TokenCreated:
+      type: object
+      additionalProperties: false
+      required: [id, name, created_at, token]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        token:
+          type: string
+          description: 明文只出現這一次。
