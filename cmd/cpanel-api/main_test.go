@@ -77,7 +77,11 @@ func TestBinary(t *testing.T) {
 			OK      bool   `json:"ok"`
 			Version string `json:"version"`
 			Commit  string `json:"commit"`
+			BuiltAt string `json:"built_at"`
 		}](t, addr, "/healthz")
+		if _, err := time.Parse(time.RFC3339, health.body.BuiltAt); err != nil {
+			t.Errorf("built_at %q: %v", health.body.BuiltAt, err)
+		}
 		if health.code != http.StatusOK || !health.body.OK || health.body.Version == "" || health.body.Commit == "" {
 			t.Errorf("GET /healthz = %d %+v", health.code, health.body)
 		}

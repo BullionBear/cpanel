@@ -12,10 +12,12 @@ TOOLS    := $(abspath $(BIN)/tools)
 NODE_BIN := $(abspath contract/openapi/node_modules/.bin)
 SPEC     := contract/openapi/cpanel.v1.yaml
 
-VERSION := $(shell git describe --tags --always --dirty --match='v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || echo dev)
-COMMIT  := $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo "")
-LDFLAGS := -X '$(PACKAGE)/internal/platform/buildinfo.Version=$(VERSION)' \
-           -X '$(PACKAGE)/internal/platform/buildinfo.Commit=$(COMMIT)'
+VERSION  := $(shell git describe --tags --always --dirty --match='v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || echo dev)
+COMMIT   := $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo "")
+BUILT_AT := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS  := -X '$(PACKAGE)/internal/platform/buildinfo.Version=$(VERSION)' \
+            -X '$(PACKAGE)/internal/platform/buildinfo.Commit=$(COMMIT)' \
+            -X '$(PACKAGE)/internal/platform/buildinfo.BuiltAt=$(BUILT_AT)'
 
 # Same tool versions as mftiko (C2-03).
 OAPI_CODEGEN_VERSION := v2.8.0
@@ -31,7 +33,7 @@ WEB_CLIENT := $(WEB)/src/lib/gen/api/v1.ts
 
 export PATH := $(TOOLS):$(NODE_BIN):$(WEB_BIN):$(PATH)
 
-.PHONY: help fmt vet test build check dev-db tools openapi openapi-lint openapi-breaking gen-check web web-install web-check web-dev
+.PHONY: help fmt vet test build check dev-db tools openapi openapi-lint openapi-breaking gen-check web web-install web-check web-dev image
 
 help: ## List targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-18s %s\n",$$1,$$2}'
@@ -45,6 +47,13 @@ vet: ## go vet
 # -count=1: internal/archtest reads the source through go list, and the test cache does not see those files change.
 test: ## go test with the race detector, uncached; includes internal/archtest (I1, I5, I6)
 	$(GO) test -race -count=1 ./...
+
+image: ## Build ghcr.io/bullionbear/cpanel:local. Does not push.
+	docker build -t ghcr.io/bullionbear/cpanel:local \
+		--build-arg VERSION='$(VERSION)' \
+		--build-arg COMMIT='$(COMMIT)' \
+		--build-arg BUILT_AT='$(BUILT_AT)' \
+		.
 
 build: ## Build cpanel-api, cpanel-worker and cpanel-migrate into bin/
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BIN)/ ./cmd/...

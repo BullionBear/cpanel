@@ -31,6 +31,10 @@ func TestHealthz(t *testing.T) {
 		t.Fatal(err)
 	}
 	version, _ := raw["version"].(string)
+	built, _ := raw["built_at"].(string)
+	if _, err := time.Parse(time.RFC3339, built); err != nil {
+		t.Fatalf("built_at %q: %v", built, err)
+	}
 	if _, ok := raw["commit"]; !ok || raw["ok"] != true || version == "" {
 		t.Fatalf("%s", rec.Body)
 	}

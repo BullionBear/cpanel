@@ -111,6 +111,7 @@ func (s *server) GetHealthz(context.Context, cpanelv1.GetHealthzRequestObject) (
 		Ok:      true,
 		Version: buildinfo.Version,
 		Commit:  buildinfo.Commit,
+		BuiltAt: buildinfo.Time(),
 	}, nil
 }
 
