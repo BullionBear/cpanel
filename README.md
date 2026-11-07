@@ -56,7 +56,7 @@ make build    # bin/cpanel-api、bin/cpanel-worker、bin/cpanel-migrate，並寫
 
 `cpanel-api` 提供 `GET /healthz`（只看行程，帶版本、commit 與建置時間）、`GET /readyz`（資料庫連得上且 schema 是目前版本，否則 503 `application/problem+json`）、`GET /metrics`（Prometheus）。
 
-`cpanel-worker` 跑 ReconcileLoop（`internal/reconcile`）：預設每 5 秒（`-reconcile-interval`）把到期的 stream 與 periodic 寫成 `ingest.job`，每個副本都跑，不選主。job 的 handler 在 C3-03。worker 只在私網提供 `GET /healthz` 與 `GET /metrics`。
+`cpanel-worker` 跑 ReconcileLoop（`internal/reconcile`）：預設每 5 秒（`-reconcile-interval`）把到期的 stream 與 periodic 寫成 `ingest.job`，每個副本都跑，不選主。同一個行程也跑 job runner（`internal/worker`）：以 lease 認領 job 並執行，同時跑 `-job-slots`（預設 4）個 lease key；目前只有 `maint.partitions`（`job_run` 的分區維護）。SIGTERM 時做完進行中的頁、交還 job 並釋放 lease。worker 只在私網提供 `GET /healthz` 與 `GET /metrics`。
 
 Image 是 `ghcr.io/bullionbear/cpanel`。同一個 image 有 `cpanel-api`、`cpanel-worker`、`cpanel-migrate`，預設跑 api；換成 `/usr/local/bin/cpanel-worker` 或 `/usr/local/bin/cpanel-migrate` 就跑另一個。push `main` 會推 `:main` 與 `:<12 碼 commit>`，push `v*` tag 會推該 tag。這個 workflow 只建置與發布，不連主機。`/healthz` 的 `commit` 與 `main` 上的 commit tag 相同。其他路徑回傳嵌入的 SPA：未知路徑是 `index.html`（不快取），`_app/immutable/*` 長快取。錯誤一律是 `application/problem+json`。oasdiff 比較 `OAS_BASE`（預設 `origin/main`）；那個 commit 還沒有契約時略過，不視為失敗。
 

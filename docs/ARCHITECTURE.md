@@ -203,6 +203,15 @@
 - **健康狀態放在 stream 與 credential 那一列上**（`last_ok_at`、`consecutive_failures`、`last_error_class`、`last_error`），UI 與告警讀這裡。job 表是證據，不是偵測機制。
 - **job 表的量：** 例如 3 個帳號 × 40 個商品 × 2 種、每 2 分鐘一輪，一天約 17 萬筆。這些都在 `ingest.job_run`：按 UTC 日分區、保留 30 天；過期分區的失敗列先複製到 `ingest.job_failure`（保留一年）再 drop。`ingest.job` 本身只有未完成的幾百列。
 
+實作在 `internal/worker`，每個 `cpanel-worker` 副本都跑，有 `-job-slots` 個 slot（預設 4），每個 slot 一次持有一個 lease。時間一律用資料庫的 `now()`。
+
+- **取得：** 挑一個 lease 空著或過期、而且有到期 job（或前一個持有者留下的 `running` job）的 `lease_key`，以 `INSERT … ON CONFLICT (key) DO UPDATE … WHERE until <= now()` 搶，`token` 加一。同一個 transaction 把舊 token 留下的 `running` job 改回 `pending`、`attempt` 加一。
+- **續租與釋放：** 租期 60 秒，每 20 秒續一次。續不到，或本地估計剩不到一個續租間隔，就不再開始新的一頁。該 key 沒有到期 job 時以 `until = now()` 釋放。
+- **handler：** `kind → Handler`，拿到 job、當下的 cursor 與預算（20 個請求或 30 秒；硬上限是兩倍時間）。每一頁以 `CommitPage` 寫入：同一個 transaction 先以 `cursor_version` CAS 推進 cursor 再寫資料。CAS 失敗整頁 rollback，job 記成 `cancelled`，stream 立刻再到期。
+- **結束：** 同一個 transaction 刪掉 job（條件含 worker 與 token，已被接手的就不寫）、寫 `job_run`、更新 stream。成功時寫 `last_ok_at`、`consecutive_failures = 0`；`more` 時 `next_due_at = now`，否則 `now + period`。失敗目前一律記成 `internal`，由 C3-04 細分並退避。handler panic 也記成失敗。
+- **停止：** SIGTERM 後不再認領；進行中的頁最多等 `-shutdown-timeout`，沒做完的 job 改回 `pending`（不算 attempt）並釋放 lease，另一個副本不必等租期。被 kill 的 worker 則等租期過後，由下一個持有者接手。
+- **`maint.partitions`：** 建今天與之後 7 天的分區、expire 30 天前的分區、刪一年前的 `job_failure`。每一步各用一個短 transaction 並設 `lock_timeout`。讀 `job_run` 的查詢先鎖 parent 再鎖各分區；如果同一個 transaction 先 attach（鎖 default 分區）再 drop（鎖 parent），會跟它死結。
+
 ### 4.5 History 的語意
 
 **TradeHistory（只新增）**

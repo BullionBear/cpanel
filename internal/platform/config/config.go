@@ -61,6 +61,12 @@ func (s *Set) Duration(p *time.Duration, name, env string, value time.Duration, 
 	s.add(name, env, false)
 }
 
+// Int registers a setting parsed by strconv.ParseInt with base 0.
+func (s *Set) Int(p *int, name, env string, value int, usage string) {
+	s.fs.IntVar(p, name, value, withEnv(usage, env))
+	s.add(name, env, false)
+}
+
 // Var registers a setting of any flag.Value; its current value is the default.
 func (s *Set) Var(v flag.Value, name, env, usage string) {
 	s.fs.Var(v, name, withEnv(usage, env))
