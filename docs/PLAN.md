@@ -88,11 +88,11 @@ C2 骨架 ──► C3 Job 系統 ──┬─► C4 Mirror ──┐
 
 | Ticket | 內容 | 驗收 | 依賴 |
 |---|---|---|---|
-| C4-01 | mftiko client：包 `contract/gen/api/v1`，只開放 GET（I2；`RoundTripper` 擋其他方法，archtest 限定 import）；`mirror.account`、`mirror.sync_state`；`mftiko.sync` 的帳號（`/accounts?include_deleted=true` 全量，列不刪）；archtest 擋 cpanel-api 連到 mirror 的 client；`GET /mirror/status`、Ops 頁的 Mirror 區塊；stale 告警 | mftiko 停掉時 `mirror.account` 不變並告警；非 GET 在送出前失敗 | C3 |
-| C4-02 | SYM client（gRPC over h2c，契約 S）；`mirror.symbol`；`sym.sync`：`Revisions` 比對、落後的 `(venue, category)` 以 `List` 重載、一致的快照裡沒有的列標成不活躍並以 `GetByUid` 補終結狀態；`(venue, category, exch_ticker)` 反查 UID | SYM 推進 revision 後一輪內重載；下架商品查得到 | C4-01 |
-| C4-03 | join 與 unmatched：`mirror.account` ↔ `pms.exchange_account`（身分 `(exchange, exch_account_uid)`，`exchange` 是 `binance`、`bybit`、`okx`，只對未刪除的）＋ `pms.exchange_account_kind`（`api_id` 的 kind 要在帳號上啟用）；unmatched 以身分計數，`reason` 是 `no_exchange_account`、`missing_identity`、`kind_not_enabled`；`BinancePM`、`BinanceEO`（以及 C8-01 之前的 `BinanceCM`）標成 `kind_out_of_scope`，另外計數；`GET /exchange-accounts/unmatched`、`GET /exchange-accounts` 帶 `api_id`；metric 與告警；Ops 頁列出 | mftiko 有、cpanel 沒有的帳號出現在 unmatched；同一個 Binance UID 的 `Binance`、`BinanceUM` 兩個 `api_id` 是一筆；有 scope 的 PM 帳號告警但不算 unmatched | C4-01、C4-04、C5-01 |
-| C4-04 | scope mirror：`/scopes` 全量 → `mirror.scope`（列不刪、`since` 只往小、`freshness` 有缺口時只新增；不依 kind 過濾）；不完整的告警 | mftiko API 停掉或回空的 scope 時，`mirror.scope` 不變 | C4-01 |
-| C4-05 | scope 的 UID 補齊：不在 `mirror.symbol` 的 UID 以 `GetByUid(include_inactive)` 補；查不到的計數與告警 | scope 指到已下架的商品也查得到 `exch_ticker`；查不到的看得見 | C4-02、C4-04 |
+| C4-01 #75 | mftiko client：包 `contract/gen/api/v1`，只開放 GET（I2；`RoundTripper` 擋其他方法，archtest 限定 import）；`mirror.account`、`mirror.sync_state`；`mftiko.sync` 的帳號（`/accounts?include_deleted=true` 全量，列不刪）；archtest 擋 cpanel-api 連到 mirror 的 client；`GET /mirror/status`、Ops 頁的 Mirror 區塊；stale 告警 | mftiko 停掉時 `mirror.account` 不變並告警；非 GET 在送出前失敗 | C3 |
+| C4-02 #76 | SYM client（gRPC over h2c，契約 S）；`mirror.symbol`；`sym.sync`：`Revisions` 比對、落後的 `(venue, category)` 以 `List` 重載、一致的快照裡沒有的列標成不活躍並以 `GetByUid` 補終結狀態；`(venue, category, exch_ticker)` 反查 UID | SYM 推進 revision 後一輪內重載；下架商品查得到 | C4-01 |
+| C4-03 #79 | join 與 unmatched：`mirror.account` ↔ `pms.exchange_account`（身分 `(exchange, exch_account_uid)`，`exchange` 是 `binance`、`bybit`、`okx`，只對未刪除的）＋ `pms.exchange_account_kind`（`api_id` 的 kind 要在帳號上啟用）；unmatched 以身分計數，`reason` 是 `no_exchange_account`、`missing_identity`、`kind_not_enabled`；`BinancePM`、`BinanceEO`（以及 C8-01 之前的 `BinanceCM`）標成 `kind_out_of_scope`，另外計數；`GET /exchange-accounts/unmatched`、`GET /exchange-accounts` 帶 `api_id`；metric 與告警；Ops 頁列出 | mftiko 有、cpanel 沒有的帳號出現在 unmatched；同一個 Binance UID 的 `Binance`、`BinanceUM` 兩個 `api_id` 是一筆；有 scope 的 PM 帳號告警但不算 unmatched | C4-01、C4-04、C5-01 |
+| C4-04 #77 | scope mirror：`/scopes` 全量 → `mirror.scope`（列不刪、`since` 只往小、`freshness` 有缺口時只新增；不依 kind 過濾）；不完整的告警 | mftiko API 停掉或回空的 scope 時，`mirror.scope` 不變 | C4-01 |
+| C4-05 #78 | scope 的 UID 補齊：不在 `mirror.symbol` 的 UID 以 `GetByUid(include_inactive)` 補；查不到的計數與告警 | scope 指到已下架的商品也查得到 `exch_ticker`；查不到的看得見 | C4-02、C4-04 |
 
 ## C5 Account／Key 管理
 
