@@ -236,6 +236,7 @@ var ownedTables = map[int][]string{
 	3: {"ingest.stream", "ingest.periodic", "ingest.job", "ingest.job_run", "ingest.job_run_default",
 		"ingest.job_failure", "ingest.lease", "ingest.pause"},
 	4: {"mirror.account", "mirror.sync_state"},
+	5: {"mirror.symbol"},
 }
 
 func relationExists(t *testing.T, ctx context.Context, conn *pgx.Conn, name string) bool {

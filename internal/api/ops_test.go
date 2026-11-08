@@ -121,6 +121,11 @@ func TestOps(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := pool.Exec(ctx, `
+			INSERT INTO mirror.sync_state (source, last_ok_at, items, revision, remote_revision)
+			VALUES ('sym:BinanceUM:Perp', now(), 2, 6, 6)`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `
 			INSERT INTO ingest.job_run (
 				id, kind, dedup_key, lease_key, periodic_name, priority, attempt, params, enqueued_at, finished_at, status, error_class, error)
 			VALUES (900, 'mftiko.sync', 'periodic:mftiko.sync', 'global:mftiko', 'mftiko.sync', 100, 1, '{}',
@@ -128,8 +133,11 @@ func TestOps(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := getJSON[mirrorStatus](t, h, "/mirror/status", authz)
-		if len(got.Sources) != 1 || got.Sources[0].Source != "mftiko.accounts" || got.Sources[0].Items == nil || *got.Sources[0].Items != 4 {
+		if len(got.Sources) != 2 || got.Sources[0].Source != "mftiko.accounts" || got.Sources[0].Items == nil || *got.Sources[0].Items != 4 {
 			t.Fatalf("%+v", got)
+		}
+		if got.Sources[1].Source != "sym:BinanceUM:Perp" || got.Sources[1].Revision == nil || *got.Sources[1].Revision != 6 || got.Sources[1].Remote == nil || *got.Sources[1].Remote != 6 {
+			t.Fatalf("sym %+v", got.Sources[1])
 		}
 		src := got.Sources[0]
 		if src.LastOK == nil || src.LastErrorClass == nil || *src.LastErrorClass != "unavailable" || src.LastError == nil || *src.LastError != "mftiko is down" {
@@ -304,6 +312,8 @@ type mirrorStatus struct {
 		LastErrorClass *string  `json:"last_error_class"`
 		LastError      *string  `json:"last_error"`
 		Regions        []string `json:"unavailable_regions"`
+		Revision       *int64   `json:"revision"`
+		Remote         *int64   `json:"remote_revision"`
 	} `json:"sources"`
 }
 

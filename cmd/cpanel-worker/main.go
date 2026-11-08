@@ -54,6 +54,7 @@ import (
 	"github.com/BullionBear/cpanel/internal/platform/httpserver"
 	"github.com/BullionBear/cpanel/internal/platform/logger"
 	"github.com/BullionBear/cpanel/internal/reconcile"
+	"github.com/BullionBear/cpanel/internal/sym"
 	"github.com/BullionBear/cpanel/internal/worker"
 	"github.com/BullionBear/cpanel/migrations"
 )
@@ -173,12 +174,19 @@ func main() {
 	} else {
 		accounts = client
 	}
+	var symbols mirror.Catalog
+	if client, err := sym.New(opt.symURL, opt.symToken); err != nil {
+		log.Warn().Err(err).Msg("sym client")
+	} else {
+		symbols = client
+	}
 	jobs := &worker.Worker{
 		DB: pool, Slots: opt.jobSlots, Grace: opt.shutdownTimeout, Egress: opt.egress, Log: log,
-		Local: []string{reconcile.MftikoSync.Name},
+		Local: []string{reconcile.MftikoSync.Name, reconcile.SymSync.Name},
 		Handlers: worker.Handlers{
 			reconcile.MaintPartitions.Name: worker.MaintPartitions,
 			reconcile.MftikoSync.Name:      mirror.MftikoSync(accounts),
+			reconcile.SymSync.Name:         mirror.SymSync(symbols),
 		},
 	}
 	working := make(chan struct{})

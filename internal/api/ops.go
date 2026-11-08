@@ -34,7 +34,7 @@ func (s *server) GetMirrorStatus(ctx context.Context, _ cpanelv1.GetMirrorStatus
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT s.source, s.last_attempt_at, s.last_ok_at, s.last_complete_at, s.items, s.unavailable_regions,
-		       r.error_class::text, r.error
+		       s.revision, s.remote_revision, r.error_class::text, r.error
 		FROM mirror.sync_state s
 		LEFT JOIN LATERAL (
 			SELECT error_class, error
@@ -55,7 +55,7 @@ func (s *server) GetMirrorStatus(ctx context.Context, _ cpanelv1.GetMirrorStatus
 	for rows.Next() {
 		var src cpanelv1.MirrorSource
 		if err := rows.Scan(&src.Source, &src.LastAttemptAt, &src.LastOkAt, &src.LastCompleteAt, &src.Items, &src.UnavailableRegions,
-			&src.LastErrorClass, &src.LastError); err != nil {
+			&src.Revision, &src.RemoteRevision, &src.LastErrorClass, &src.LastError); err != nil {
 			return cpanelv1.GetMirrorStatusdefaultApplicationProblemPlusJSONResponse{Body: s.opsProblem(err), StatusCode: http.StatusServiceUnavailable}, nil
 		}
 		if src.UnavailableRegions == nil {

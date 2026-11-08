@@ -102,6 +102,15 @@
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 20 },
       "targets": [{ "expr": "cpanel_mirror_account_identity_conflicts", "refId": "A" }],
       "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "SYM tables behind",
+      "datasource": { "type": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 28 },
+      "targets": [{ "expr": "cpanel_mirror_sym_tables_behind", "refId": "A" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
     }
   ]
 }

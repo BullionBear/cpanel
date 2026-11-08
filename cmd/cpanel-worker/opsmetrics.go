@@ -26,6 +26,7 @@ type opsCollector struct {
 	okAge     *prometheus.Desc
 	rows      *prometheus.Desc
 	conflicts *prometheus.Desc
+	behind    *prometheus.Desc
 }
 
 func newOpsCollector(db *pgxpool.Pool, log zerolog.Logger) *opsCollector {
@@ -72,6 +73,10 @@ func newOpsCollector(db *pgxpool.Pool, log zerolog.Logger) *opsCollector {
 			"cpanel_mirror_account_identity_conflicts",
 			"Mirrored accounts that refused a changed exchange identity.",
 			nil, nil),
+		behind: prometheus.NewDesc(
+			"cpanel_mirror_sym_tables_behind",
+			"SYM tables whose loaded revision is missing or behind the remote revision.",
+			nil, nil),
 	}
 }
 
@@ -86,6 +91,7 @@ func (c *opsCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.okAge
 	ch <- c.rows
 	ch <- c.conflicts
+	ch <- c.behind
 }
 
 func (c *opsCollector) Collect(ch chan<- prometheus.Metric) {
@@ -203,16 +209,30 @@ func (c *opsCollector) collect(ctx context.Context, ch chan<- prometheus.Metric)
 		return err
 	}
 
-	var accounts int
+	var accounts, symbols int
 	if err := c.db.QueryRow(ctx, `SELECT count(*) FROM mirror.account`).Scan(&accounts); err != nil {
 		return err
 	}
+	if err := c.db.QueryRow(ctx, `SELECT count(*) FROM mirror.symbol`).Scan(&symbols); err != nil {
+		return err
+	}
 	ch <- prometheus.MustNewConstMetric(c.rows, prometheus.GaugeValue, float64(accounts), "account")
+	ch <- prometheus.MustNewConstMetric(c.rows, prometheus.GaugeValue, float64(symbols), "symbol")
 
 	var conflicts int
 	if err := c.db.QueryRow(ctx, `SELECT count(*) FROM mirror.account WHERE identity_conflict IS NOT NULL`).Scan(&conflicts); err != nil {
 		return err
 	}
 	ch <- prometheus.MustNewConstMetric(c.conflicts, prometheus.GaugeValue, float64(conflicts))
+
+	var behind int
+	if err := c.db.QueryRow(ctx, `
+		SELECT count(*) FROM mirror.sync_state
+		WHERE source LIKE 'sym:%'
+		  AND remote_revision IS NOT NULL
+		  AND (revision IS NULL OR revision < remote_revision)`).Scan(&behind); err != nil {
+		return err
+	}
+	ch <- prometheus.MustNewConstMetric(c.behind, prometheus.GaugeValue, float64(behind))
 	return nil
 }

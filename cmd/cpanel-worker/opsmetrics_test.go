@@ -113,6 +113,27 @@ func TestOpsMetrics(t *testing.T) {
 	if got := gauge(t, fams, "cpanel_mirror_account_identity_conflicts", nil); got != 1 {
 		t.Fatalf("conflicts %v", got)
 	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO mirror.symbol (
+			uid, venue, category, exch_ticker, universal_ticker, base, quote, status, active, first_seen_at, last_seen_at)
+		VALUES (1, 'BinanceUM', 'Perp', 'BTCUSDT', 'BinanceUM_Perp_BTCUSDT', 'BTC', 'USDT', 'TRADABLE', true, now(), now())`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO mirror.sync_state (source, revision, remote_revision)
+		VALUES ('sym:BinanceUM:Perp', 5, 6)`); err != nil {
+		t.Fatal(err)
+	}
+	fams, err = reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gauge(t, fams, "cpanel_mirror_rows", map[string]string{"table": "symbol"}); got != 1 {
+		t.Fatalf("symbol rows %v", got)
+	}
+	if got := gauge(t, fams, "cpanel_mirror_sym_tables_behind", nil); got != 1 {
+		t.Fatalf("tables behind %v", got)
+	}
 }
 
 func gauge(t *testing.T, fams []*dto.MetricFamily, name string, labels map[string]string) float64 {

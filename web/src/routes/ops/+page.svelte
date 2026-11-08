@@ -256,7 +256,10 @@
 				<tr>
 					<th>來源</th>
 					<th>最後成功</th>
+					<th>載入完成</th>
 					<th>筆數</th>
+					<th>revision</th>
+					<th>remote</th>
 					<th>錯誤類別</th>
 					<th>錯誤</th>
 				</tr>
@@ -266,7 +269,10 @@
 					<tr>
 						<td>{source.source}</td>
 						<td>{when(source.last_ok_at)}</td>
+						<td>{when(source.last_complete_at)}</td>
 						<td>{source.items ?? ''}</td>
+						<td>{source.revision ?? ''}</td>
+						<td>{source.remote_revision ?? ''}</td>
 						<td>{source.last_error_class ?? ''}</td>
 						<td class="wrap">{source.last_error ?? ''}</td>
 					</tr>
