@@ -197,6 +197,26 @@ type Me struct {
 // MeAuth defines model for Me.Auth.
 type MeAuth string
 
+// MirrorSource defines model for MirrorSource.
+type MirrorSource struct {
+	// Items 這一輪讀到的筆數。
+	Items          *int64     `json:"items,omitempty"`
+	LastAttemptAt  *time.Time `json:"last_attempt_at,omitempty"`
+	LastCompleteAt *time.Time `json:"last_complete_at,omitempty"`
+	LastError      *string    `json:"last_error,omitempty"`
+	LastErrorClass *string    `json:"last_error_class,omitempty"`
+	LastOkAt       *time.Time `json:"last_ok_at,omitempty"`
+
+	// Source 例如 `mftiko.accounts`。
+	Source             string   `json:"source"`
+	UnavailableRegions []string `json:"unavailable_regions"`
+}
+
+// MirrorStatus defines model for MirrorStatus.
+type MirrorStatus struct {
+	Sources []MirrorSource `json:"sources"`
+}
+
 // Problem RFC 9457。`code` 是給程式判斷的穩定值。
 type Problem struct {
 	// Code 穩定的錯誤碼。這一版使用 `unavailable`、`timeout`、`internal`、`method_not_allowed`、`bad_request`、`unauthenticated`、`forbidden`、`not_found`。

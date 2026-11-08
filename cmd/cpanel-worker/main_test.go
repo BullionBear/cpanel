@@ -133,7 +133,8 @@ func TestBinary(t *testing.T) {
 		resp.Body.Close()
 		for _, want := range []string{
 			`cpanel_reconcile_inserted_total{rule="maint.partitions"} 1`,
-			`cpanel_reconcile_inserted_total{rule="periodics"} 1`,
+			`cpanel_reconcile_inserted_total{rule="mftiko.sync"} 1`,
+			`cpanel_reconcile_inserted_total{rule="periodics"} 2`,
 			`cpanel_reconcile_inserted_total{rule="streams"} 0`,
 			`cpanel_reconcile_rule_duration_seconds_count{rule="streams"}`,
 			`cpanel_reconcile_rounds_total{result="error"} 0`,

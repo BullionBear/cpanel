@@ -75,6 +75,33 @@
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 12 },
       "targets": [{ "expr": "cpanel_job_runs", "refId": "A" }],
       "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Mirror ok age",
+      "datasource": { "type": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "targets": [{ "expr": "cpanel_mirror_ok_age_seconds", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Mirror rows",
+      "datasource": { "type": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 20 },
+      "targets": [{ "expr": "cpanel_mirror_rows", "refId": "A" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Account identity conflicts",
+      "datasource": { "type": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 20 },
+      "targets": [{ "expr": "cpanel_mirror_account_identity_conflicts", "refId": "A" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
     }
   ]
 }

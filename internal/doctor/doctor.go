@@ -16,9 +16,10 @@ import (
 
 	"connectrpc.com/connect"
 
-	apiv1 "github.com/BullionBear/mftiko/contract/gen/api/v1"
 	symv1 "github.com/BullionBear/mftiko/contract/gen/mftiko/sym/v1"
 	"github.com/BullionBear/mftiko/contract/gen/mftiko/sym/v1/symv1connect"
+
+	"github.com/BullionBear/cpanel/internal/mftiko"
 )
 
 // Config is where mftiko and SYM are and the worker's tokens for them.
@@ -80,22 +81,15 @@ func bearer(token string) func(context.Context, *http.Request) error {
 }
 
 func mftikoAccounts(ctx context.Context, hc *http.Client, cfg Config) (string, error) {
-	if cfg.MftikoURL == "" || cfg.MftikoToken == "" {
-		return "", errors.New("mftiko URL or token is not set")
-	}
-	c, err := apiv1.NewClientWithResponses(cfg.MftikoURL, apiv1.WithHTTPClient(hc), apiv1.WithRequestEditorFn(bearer(cfg.MftikoToken)))
+	c, err := mftiko.New(cfg.MftikoURL, cfg.MftikoToken, hc)
 	if err != nil {
 		return "", err
 	}
-	limit := 1
-	resp, err := c.ListAccountsWithResponse(ctx, &apiv1.ListAccountsParams{Limit: &limit})
+	page, err := c.ListAccounts(ctx, "")
 	if err != nil {
 		return "", err
 	}
-	if resp.JSON200 == nil {
-		return "", fmt.Errorf("status %d: %s", resp.StatusCode(), snippet(resp.Body))
-	}
-	return fmt.Sprintf("200, %d account(s) on the first page of 1", len(resp.JSON200.Items)), nil
+	return fmt.Sprintf("200, %d account(s)", len(page.Accounts)), nil
 }
 
 // symHealth calls grpc.health.v1.Health/Check with the Connect protocol's JSON encoding; it needs no token

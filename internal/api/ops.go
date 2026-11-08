@@ -28,6 +28,47 @@ const streamSelect = `
 		last_error_class::text, last_error, created_at
 	FROM ingest.stream`
 
+func (s *server) GetMirrorStatus(ctx context.Context, _ cpanelv1.GetMirrorStatusRequestObject) (cpanelv1.GetMirrorStatusResponseObject, error) {
+	if resp, ok := mirrorGate(s.gate(ctx, false)); !ok {
+		return resp, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT s.source, s.last_attempt_at, s.last_ok_at, s.last_complete_at, s.items, s.unavailable_regions,
+		       r.error_class::text, r.error
+		FROM mirror.sync_state s
+		LEFT JOIN LATERAL (
+			SELECT error_class, error
+			FROM ingest.job_run
+			WHERE kind = CASE
+				WHEN s.source LIKE 'mftiko.%' THEN 'mftiko.sync'
+				WHEN s.source = 'sym' OR s.source LIKE 'sym:%' THEN 'sym.sync'
+			END
+			ORDER BY finished_at DESC, id DESC
+			LIMIT 1
+		) r ON true
+		ORDER BY s.source`)
+	if err != nil {
+		return cpanelv1.GetMirrorStatusdefaultApplicationProblemPlusJSONResponse{Body: s.opsProblem(err), StatusCode: http.StatusServiceUnavailable}, nil
+	}
+	defer rows.Close()
+	out := cpanelv1.MirrorStatus{Sources: []cpanelv1.MirrorSource{}}
+	for rows.Next() {
+		var src cpanelv1.MirrorSource
+		if err := rows.Scan(&src.Source, &src.LastAttemptAt, &src.LastOkAt, &src.LastCompleteAt, &src.Items, &src.UnavailableRegions,
+			&src.LastErrorClass, &src.LastError); err != nil {
+			return cpanelv1.GetMirrorStatusdefaultApplicationProblemPlusJSONResponse{Body: s.opsProblem(err), StatusCode: http.StatusServiceUnavailable}, nil
+		}
+		if src.UnavailableRegions == nil {
+			src.UnavailableRegions = []string{}
+		}
+		out.Sources = append(out.Sources, src)
+	}
+	if err := rows.Err(); err != nil {
+		return cpanelv1.GetMirrorStatusdefaultApplicationProblemPlusJSONResponse{Body: s.opsProblem(err), StatusCode: http.StatusServiceUnavailable}, nil
+	}
+	return cpanelv1.GetMirrorStatus200JSONResponse(out), nil
+}
+
 func (s *server) ListStreams(ctx context.Context, req cpanelv1.ListStreamsRequestObject) (cpanelv1.ListStreamsResponseObject, error) {
 	if resp, ok := streamGate(s.gate(ctx, false)); !ok {
 		return resp, nil
@@ -200,6 +241,19 @@ func (s *server) ListJobRuns(ctx context.Context, req cpanelv1.ListJobRunsReques
 		page.NextCursor = &cur
 	}
 	return cpanelv1.ListJobRuns200JSONResponse(page), nil
+}
+
+func mirrorGate(_ principal, kind int) (cpanelv1.GetMirrorStatusResponseObject, bool) {
+	switch kind {
+	case gateOK:
+		return nil, true
+	case gateUnauth:
+		return cpanelv1.GetMirrorStatus401ApplicationProblemPlusJSONResponse{UnauthenticatedApplicationProblemPlusJSONResponse: unauthProblem("")}, false
+	default:
+		return cpanelv1.GetMirrorStatusdefaultApplicationProblemPlusJSONResponse{
+			Body: problemValue(http.StatusServiceUnavailable, "unavailable", "Unavailable", ""), StatusCode: http.StatusServiceUnavailable,
+		}, false
+	}
 }
 
 func streamGate(_ principal, kind int) (cpanelv1.ListStreamsResponseObject, bool) {

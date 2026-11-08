@@ -84,6 +84,7 @@ func Handler(cfg Config) http.Handler {
 	mux.Handle("/streams/{id}/resume", methods(apiHandler, http.MethodPost))
 	mux.Handle("/jobs", getOnly(apiHandler))
 	mux.Handle("/job-runs", getOnly(apiHandler))
+	mux.Handle("/mirror/status", getOnly(apiHandler))
 	mux.Handle("/", spa(siteFiles()))
 	return wrap(cfg.Log, cfg.Timeout, mux)
 }

@@ -7,18 +7,21 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Rules are C3's rules in the order a round runs them. Registration comes before dispatch, so a singleton gets its
-// first job in the round that registers it. C5–C7 add theirs.
+// Rules are the rules in the order a round runs them. Registration comes before dispatch, so a singleton gets its
+// first job in the round that registers it. Later tickets add theirs.
 //
 // Replicas run the same statements at the same time. Each rule takes its keys in one fixed order, so a replica
 // that hits another's uncommitted key waits for it instead of deadlocking.
 func Rules() []Rule {
-	return []Rule{MaintPartitions, Streams, Periodics}
+	return []Rule{MaintPartitions, MftikoSync, Streams, Periodics}
 }
 
 // MaintPartitions registers maint.partitions, which makes and expires the ingest.job_run partitions every hour
 // (C3-03 runs it).
 var MaintPartitions = Singleton("maint.partitions", "global:maint", time.Hour)
+
+// MftikoSync registers mftiko.sync, which copies mftiko's accounts into mirror.account every minute (C4-01).
+var MftikoSync = Singleton("mftiko.sync", "global:mftiko", time.Minute)
 
 // Singleton returns a rule that inserts the ingest.periodic row name, whose jobs have kind name, due at once. It
 // inserts the row only when it is missing: after that the row is the operator's, and a changed period or

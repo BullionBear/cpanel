@@ -30,13 +30,13 @@ func TestRoundRunsTheRulesInOrder(t *testing.T) {
 	for _, r := range res.Rules {
 		got = append(got, fmt.Sprintf("%s=%d", r.Name, r.Inserted))
 	}
-	if want := []string{"maint.partitions=1", "streams=0", "periodics=1"}; !slices.Equal(got, want) {
+	if want := []string{"maint.partitions=1", "mftiko.sync=1", "streams=0", "periodics=2"}; !slices.Equal(got, want) {
 		t.Errorf("rules %v, want %v", got, want)
 	}
 	if !res.At.Equal(t0) || len(observed) != 1 {
 		t.Errorf("At %s, observed %d rounds", res.At, len(observed))
 	}
-	if k := keys(jobs(t, ctx, conn)); !slices.Equal(k, []string{"periodic:maint.partitions"}) {
+	if k := keys(jobs(t, ctx, conn)); !slices.Equal(k, []string{"periodic:maint.partitions", "periodic:mftiko.sync"}) {
 		t.Errorf("jobs %v", k)
 	}
 }
@@ -121,6 +121,7 @@ func TestThreeLoopsMakeTheSameJobsAsOne(t *testing.T) {
 		"stream:2":                  20,  // its job is finished only every fifth round
 		"stream:3":                  7,   // first due at minute 30, then every 10 minutes
 		"periodic:maint.partitions": 2,   // minutes 0 and 60
+		"periodic:mftiko.sync":      100, // every minute
 		"periodic:tick":             10,  // every 10 minutes
 	}
 	if !maps.Equal(count, want) {

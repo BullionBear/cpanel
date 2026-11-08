@@ -47,7 +47,7 @@ type Worker struct {
 	Poll           time.Duration                                    // how long an idle slot waits before it looks for work again
 	Grace          time.Duration                                    // how long the page in progress may take once the worker is told to stop
 	Egress         string                                           // this process's egress; every replica behind it shares one IP-ban pause
-	Local          []string                                         // kinds that do not call out, so an egress pause does not hold them; maint.partitions always counts
+	Local          []string                                         // kinds that do not go through the exchange egress, so an egress pause does not hold them; maint.partitions always counts
 	Rand           func() float64                                   // jitter position in [0, 1]; nil is math/rand
 	CredentialHook func(context.Context, pgx.Tx, AuthFailure) error // nil records an auth failure and does nothing else
 	AlertHook      func(context.Context, Alert)                     // nil only logs a bad request

@@ -25,7 +25,11 @@ export default defineConfig({
 			'/tokens': 'http://127.0.0.1:8080',
 			'/healthz': 'http://127.0.0.1:8080',
 			'/readyz': 'http://127.0.0.1:8080',
-			'/metrics': 'http://127.0.0.1:8080'
+			'/metrics': 'http://127.0.0.1:8080',
+			'/streams': 'http://127.0.0.1:8080',
+			'/jobs': 'http://127.0.0.1:8080',
+			'/job-runs': 'http://127.0.0.1:8080',
+			'/mirror': 'http://127.0.0.1:8080'
 		}
 	}
 });

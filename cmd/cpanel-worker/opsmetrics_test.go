@@ -90,6 +90,29 @@ func TestOpsMetrics(t *testing.T) {
 	if got := gauge(t, fams, "cpanel_job_runs", map[string]string{"status": "failed", "error_class": "unavailable"}); got != 1 {
 		t.Fatalf("runs %v", got)
 	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO mirror.sync_state (source, last_attempt_at, last_ok_at)
+		VALUES ('mftiko.accounts', now() - interval '20 minutes', now() - interval '12 minutes')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO mirror.account (api_id, name, kind, exchange, exch_account_uid, account_revision, first_seen_at, last_seen_at, identity_conflict)
+		VALUES (1, 'a', 'BinanceUM', 'binance', 'u', 1, now(), now(), '{"exchange":"bybit"}')`); err != nil {
+		t.Fatal(err)
+	}
+	fams, err = reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gauge(t, fams, "cpanel_mirror_ok_age_seconds", map[string]string{"source": "mftiko.accounts"}); got < 600 {
+		t.Fatalf("mirror age %v", got)
+	}
+	if got := gauge(t, fams, "cpanel_mirror_rows", map[string]string{"table": "account"}); got != 1 {
+		t.Fatalf("mirror rows %v", got)
+	}
+	if got := gauge(t, fams, "cpanel_mirror_account_identity_conflicts", nil); got != 1 {
+		t.Fatalf("conflicts %v", got)
+	}
 }
 
 func gauge(t *testing.T, fams []*dto.MetricFamily, name string, labels map[string]string) float64 {

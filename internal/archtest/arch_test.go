@@ -22,6 +22,15 @@ const (
 // sealboxOpen opens sealed secrets; cpanel-api must not link it (I6).
 const sealboxOpen = "internal/platform/sealbox/open"
 
+// mftikoAPI is the generated mftiko HTTP client. Only internal/mftiko may import it (I2).
+const mftikoAPI = mftiko + "/contract/gen/api/v1"
+
+// symConnect is the generated SYM connect client. cpanel-api must not link it (C4-D002).
+const symConnect = mftiko + "/contract/gen/mftiko/sym/v1/symv1connect"
+
+// mirrorOnly is what cpanel-api reads with SQL instead of linking (C4-D002).
+var mirrorOnly = []string{"internal/mftiko", "internal/sym", "internal/mirror"}
+
 // netCarriers are the only packages through which the ReconcileLoop may reach net (I5): the Postgres driver, which
 // dials the database, and zerolog, which uses only net's IP types.
 var netCarriers = []string{"github.com/jackc/pgx", "github.com/rs/zerolog"}
@@ -155,10 +164,23 @@ func check(pkgs []pkg) []string {
 				bad("net", how+"; the ReconcileLoop reaches net only through pgx and zerolog (I5)")
 			}
 		}
+		if from != "internal/mftiko" {
+			for _, imp := range p.Imports {
+				if imp == mftikoAPI {
+					bad(imp, "only internal/mftiko imports the mftiko API client (I2)")
+				}
+			}
+		}
 		if from == "cmd/cpanel-api" {
 			for _, d := range p.Deps {
 				if r, own := rel(d); own && under(r, sealboxOpen) {
 					bad(d, "the public layer holds no key that opens a secret (I6)")
+				}
+				if r, own := rel(d); own && under(r, mirrorOnly...) {
+					bad(d, "cpanel-api reads mirror.* with SQL and does not call mftiko (C4-D002)")
+				}
+				if d == mftikoAPI || d == symConnect {
+					bad(d, "cpanel-api reads mirror.* with SQL and does not call mftiko (C4-D002)")
 				}
 			}
 		}
@@ -215,7 +237,7 @@ func TestDependencyRules(t *testing.T) {
 		}
 	}
 	// The rules key on paths; if a package moved, they would pass by matching nothing.
-	for _, want := range []string{"cmd/cpanel-api", "internal/reconcile", sealboxOpen} {
+	for _, want := range []string{"cmd/cpanel-api", "internal/reconcile", "internal/mftiko", "internal/mirror", sealboxOpen} {
 		if !slices.Contains(own, want) {
 			t.Fatalf("package %s not found: update the rules in this package to the new layout", want)
 		}
@@ -259,8 +281,14 @@ func TestCheckReportsViolations(t *testing.T) {
 		{ImportPath: m("internal/reconciler"), Imports: []string{"net/http"}, Deps: []string{"net", "net/http"}}, // another package: free
 
 		// I6
-		{ImportPath: m("cmd/cpanel-api"), Deps: []string{m("internal/platform/sealbox"), m("internal/platform/sealbox/open")}},
-		{ImportPath: m("cmd/cpanel-worker"), Deps: []string{m("internal/platform/sealbox"), m("internal/platform/sealbox/open")}}, // the worker opens secrets
+		{ImportPath: m("cmd/cpanel-api"), Deps: []string{m("internal/platform/sealbox"), m("internal/platform/sealbox/open"),
+			m("internal/mftiko"), m("internal/mirror"), mf("contract/gen/api/v1"), mf("contract/gen/mftiko/sym/v1/symv1connect")}},
+		{ImportPath: m("cmd/cpanel-worker"), Deps: []string{m("internal/platform/sealbox"), m("internal/platform/sealbox/open"),
+			m("internal/mftiko"), m("internal/mirror"), mf("contract/gen/api/v1")}}, // the worker calls mftiko and opens secrets
+
+		// I2: the generated API client is imported only by internal/mftiko.
+		{ImportPath: m("internal/mftiko"), Imports: []string{mf("contract/gen/api/v1")}},
+		{ImportPath: m("internal/doctor"), Imports: []string{mf("contract/gen/api/v1"), mf("contract/gen/mftiko/sym/v1/symv1connect")}},
 	}
 	got := check(pkgs)
 	want := []string{
@@ -285,6 +313,11 @@ func TestCheckReportsViolations(t *testing.T) {
 		"internal/reconcile/rpc links net/rpc",
 		"internal/reconcile/rpc links net/smtp",
 		"cmd/cpanel-api links " + sealboxOpen,
+		"cmd/cpanel-api links internal/mftiko",
+		"cmd/cpanel-api links internal/mirror",
+		"cmd/cpanel-api links " + mf("contract/gen/api/v1"),
+		"cmd/cpanel-api links " + mf("contract/gen/mftiko/sym/v1/symv1connect"),
+		"internal/doctor links " + mf("contract/gen/api/v1"),
 	}
 	if len(got) != len(want) {
 		t.Errorf("%d violations, want %d:\n%s", len(got), len(want), strings.Join(got, "\n"))
