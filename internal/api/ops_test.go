@@ -38,6 +38,7 @@ func TestOps(t *testing.T) {
 	t.Run("unauthenticated", func(t *testing.T) {
 		problemOf(t, call(h, http.MethodGet, "/streams", "", nil), http.StatusUnauthorized, "unauthenticated")
 		problemOf(t, call(h, http.MethodPost, "/streams/1/resume", "", nil), http.StatusUnauthorized, "unauthenticated")
+		problemOf(t, call(h, http.MethodGet, "/mirror/status", "", nil), http.StatusUnauthorized, "unauthenticated")
 	})
 
 	t.Run("filters", func(t *testing.T) {
@@ -106,6 +107,36 @@ func TestOps(t *testing.T) {
 		recent := getJSON[runPage](t, h, "/job-runs?from="+url.QueryEscape(from), authz)
 		if len(recent.Runs) != 1 {
 			t.Fatalf("from %s got %d", from, len(recent.Runs))
+		}
+	})
+
+	t.Run("mirror status", func(t *testing.T) {
+		empty := getJSON[mirrorStatus](t, h, "/mirror/status", authz)
+		if len(empty.Sources) != 0 {
+			t.Fatalf("empty %+v", empty)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO mirror.sync_state (source, last_attempt_at, last_ok_at, last_complete_at, items)
+			VALUES ('mftiko.accounts', now() - interval '1 minute', now(), now(), 4)`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO ingest.job_run (
+				id, kind, dedup_key, lease_key, periodic_name, priority, attempt, params, enqueued_at, finished_at, status, error_class, error)
+			VALUES (900, 'mftiko.sync', 'periodic:mftiko.sync', 'global:mftiko', 'mftiko.sync', 100, 1, '{}',
+			        now() - interval '1 minute', now(), 'failed', 'unavailable', 'mftiko is down')`); err != nil {
+			t.Fatal(err)
+		}
+		got := getJSON[mirrorStatus](t, h, "/mirror/status", authz)
+		if len(got.Sources) != 1 || got.Sources[0].Source != "mftiko.accounts" || got.Sources[0].Items == nil || *got.Sources[0].Items != 4 {
+			t.Fatalf("%+v", got)
+		}
+		src := got.Sources[0]
+		if src.LastOK == nil || src.LastErrorClass == nil || *src.LastErrorClass != "unavailable" || src.LastError == nil || *src.LastError != "mftiko is down" {
+			t.Fatalf("%+v", src)
+		}
+		if src.Regions == nil {
+			t.Fatal("unavailable_regions is null")
 		}
 	})
 
@@ -263,6 +294,17 @@ type runJSON struct {
 type runPage struct {
 	Runs       []runJSON `json:"runs"`
 	NextCursor *string   `json:"next_cursor"`
+}
+
+type mirrorStatus struct {
+	Sources []struct {
+		Source         string   `json:"source"`
+		Items          *int64   `json:"items"`
+		LastOK         *string  `json:"last_ok_at"`
+		LastErrorClass *string  `json:"last_error_class"`
+		LastError      *string  `json:"last_error"`
+		Regions        []string `json:"unavailable_regions"`
+	} `json:"sources"`
 }
 
 func getJSON[T any](t *testing.T, h http.Handler, path string, header http.Header) T {

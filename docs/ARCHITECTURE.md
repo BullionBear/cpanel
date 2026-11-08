@@ -89,7 +89,7 @@
 **不變式**（CI 以依賴與 lint 檢查擋）：
 
 - I1 只 import `github.com/BullionBear/mftiko/contract/...`，不 import `internal/`、`exchange/`、etcd、mftiko 的 DB。
-- I2 對 mftiko API 只發 GET。PMS 的 token 是單一角色（E21-D010 沿用 E10-D009），實際上有完整寫權限；client wrapper 只開放 GET。
+- I2 對 mftiko API 只發 GET。PMS 的 token 是單一角色（E21-D010 沿用 E10-D009），實際上有完整寫權限；只有 `internal/mftiko` 能 import generated client，而且它的 `RoundTripper` 在送出前擋掉 GET、HEAD 以外的方法。CI 擋（`internal/archtest`），不只是慣例。
 - I3 PMS 的交易所 key 必須是唯讀，登記時驗證，IP 白名單綁 cpanel 的出口 IP。
 - I4 寫進 `ledger` 的每一列都能從 `raw` 重建。
 - I5 ReconcileLoop 不做 I/O，只讀寫 DB。

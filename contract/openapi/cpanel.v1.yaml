@@ -1,10 +1,11 @@
 # cpanel-api 的對外契約（ARCHITECTURE §4.7）。SPA 不在這份契約裡。
+# 0.4.0 加上 mirror 的同步狀態（C4-01）。
 # 0.3.0 加上 stream、job、job 歷史與恢復暫停（C3-05）。
 # 0.2.1 的 /healthz 加上建置時間（C2-06）。0.2.0 加上 Discord 登入、session、bearer token（C2-04）。
 openapi: 3.0.3
 info:
   title: cpanel API
-  version: 0.3.0
+  version: 0.4.0
   description: |
     cpanel-api 的對外契約。
 
@@ -21,7 +22,7 @@ tags:
   - name: auth
     description: Discord 登入、session 與 bearer token。
   - name: ops
-    description: stream、未完成的 job 與 job 歷史。要登入。
+    description: stream、未完成的 job、job 歷史與 mirror 狀態。要登入。
 paths:
   /healthz:
     get:
@@ -455,6 +456,29 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         default:
           $ref: '#/components/responses/Problem'
+  /mirror/status:
+    get:
+      tags: [ops]
+      operationId: getMirrorStatus
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: mirror 各來源的同步狀態
+      description: |
+        每個 `mirror.sync_state` 一列。`last_error_class` 與 `last_error` 是這個來源對應的
+        最近一次 job_run（`mftiko.*` 是 `mftiko.sync`，`sym` 與 `sym:*` 是 `sym.sync`）。
+        最近一次成功時這兩個欄位是空的。
+      responses:
+        '200':
+          description: 各來源的狀態。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MirrorStatus'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        default:
+          $ref: '#/components/responses/Problem'
 components:
   parameters:
     Kind:
@@ -623,6 +647,50 @@ components:
     JobRunStatus:
       type: string
       enum: [succeeded, failed, cancelled]
+    MirrorStatus:
+      type: object
+      additionalProperties: false
+      required: [sources]
+      properties:
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/MirrorSource'
+    MirrorSource:
+      type: object
+      additionalProperties: false
+      required: [source, unavailable_regions]
+      properties:
+        source:
+          type: string
+          description: 例如 `mftiko.accounts`。
+        last_attempt_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_ok_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_complete_at:
+          type: string
+          format: date-time
+          nullable: true
+        items:
+          type: integer
+          format: int64
+          nullable: true
+          description: 這一輪讀到的筆數。
+        unavailable_regions:
+          type: array
+          items:
+            type: string
+        last_error_class:
+          type: string
+          nullable: true
+        last_error:
+          type: string
+          nullable: true
     Stream:
       type: object
       additionalProperties: false

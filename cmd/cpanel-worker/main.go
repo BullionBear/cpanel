@@ -48,6 +48,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/BullionBear/cpanel/internal/doctor"
+	"github.com/BullionBear/cpanel/internal/mftiko"
+	"github.com/BullionBear/cpanel/internal/mirror"
 	"github.com/BullionBear/cpanel/internal/platform/config"
 	"github.com/BullionBear/cpanel/internal/platform/httpserver"
 	"github.com/BullionBear/cpanel/internal/platform/logger"
@@ -165,9 +167,19 @@ func main() {
 		defer close(looping)
 		loop.Run(ctx)
 	}()
+	var accounts mirror.Lister
+	if client, err := mftiko.New(opt.mftikoURL, opt.mftikoToken, nil); err != nil {
+		log.Warn().Err(err).Msg("mftiko client")
+	} else {
+		accounts = client
+	}
 	jobs := &worker.Worker{
 		DB: pool, Slots: opt.jobSlots, Grace: opt.shutdownTimeout, Egress: opt.egress, Log: log,
-		Handlers: worker.Handlers{reconcile.MaintPartitions.Name: worker.MaintPartitions},
+		Local: []string{reconcile.MftikoSync.Name},
+		Handlers: worker.Handlers{
+			reconcile.MaintPartitions.Name: worker.MaintPartitions,
+			reconcile.MftikoSync.Name:      mirror.MftikoSync(accounts),
+		},
 	}
 	working := make(chan struct{})
 	go func() {

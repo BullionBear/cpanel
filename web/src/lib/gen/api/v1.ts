@@ -271,6 +271,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/mirror/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * mirror 各來源的同步狀態
+         * @description 每個 `mirror.sync_state` 一列。`last_error_class` 與 `last_error` 是這個來源對應的
+         *     最近一次 job_run（`mftiko.*` 是 `mftiko.sync`，`sym` 與 `sym:*` 是 `sym.sync`）。
+         *     最近一次成功時這兩個欄位是空的。
+         */
+        get: operations["getMirrorStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -342,6 +364,27 @@ export interface components {
         JobStatus: "pending" | "running";
         /** @enum {string} */
         JobRunStatus: "succeeded" | "failed" | "cancelled";
+        MirrorStatus: {
+            sources: components["schemas"]["MirrorSource"][];
+        };
+        MirrorSource: {
+            /** @description 例如 `mftiko.accounts`。 */
+            source: string;
+            /** Format: date-time */
+            last_attempt_at?: string | null;
+            /** Format: date-time */
+            last_ok_at?: string | null;
+            /** Format: date-time */
+            last_complete_at?: string | null;
+            /**
+             * Format: int64
+             * @description 這一輪讀到的筆數。
+             */
+            items?: number | null;
+            unavailable_regions: string[];
+            last_error_class?: string | null;
+            last_error?: string | null;
+        };
         Stream: {
             /** Format: int64 */
             id: number;
@@ -895,6 +938,28 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getMirrorStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 各來源的狀態。 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MirrorStatus"];
                 };
             };
             401: components["responses"]["Unauthenticated"];

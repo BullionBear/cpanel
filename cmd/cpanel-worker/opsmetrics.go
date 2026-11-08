@@ -16,13 +16,16 @@ type opsCollector struct {
 	db  *pgxpool.Pool
 	log zerolog.Logger
 
-	lag      *prometheus.Desc
-	failures *prometheus.Desc
-	paused   *prometheus.Desc
-	egress   *prometheus.Desc
-	jobs     *prometheus.Desc
-	oldest   *prometheus.Desc
-	runs     *prometheus.Desc
+	lag       *prometheus.Desc
+	failures  *prometheus.Desc
+	paused    *prometheus.Desc
+	egress    *prometheus.Desc
+	jobs      *prometheus.Desc
+	oldest    *prometheus.Desc
+	runs      *prometheus.Desc
+	okAge     *prometheus.Desc
+	rows      *prometheus.Desc
+	conflicts *prometheus.Desc
 }
 
 func newOpsCollector(db *pgxpool.Pool, log zerolog.Logger) *opsCollector {
@@ -57,6 +60,18 @@ func newOpsCollector(db *pgxpool.Pool, log zerolog.Logger) *opsCollector {
 			"cpanel_job_runs",
 			"job_run rows finished in the last hour.",
 			[]string{"status", "error_class"}, nil),
+		okAge: prometheus.NewDesc(
+			"cpanel_mirror_ok_age_seconds",
+			"Seconds since a mirror source last succeeded, or since its first attempt when it never has.",
+			[]string{"source"}, nil),
+		rows: prometheus.NewDesc(
+			"cpanel_mirror_rows",
+			"Rows in a mirror table.",
+			[]string{"table"}, nil),
+		conflicts: prometheus.NewDesc(
+			"cpanel_mirror_account_identity_conflicts",
+			"Mirrored accounts that refused a changed exchange identity.",
+			nil, nil),
 	}
 }
 
@@ -68,6 +83,9 @@ func (c *opsCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.jobs
 	ch <- c.oldest
 	ch <- c.runs
+	ch <- c.okAge
+	ch <- c.rows
+	ch <- c.conflicts
 }
 
 func (c *opsCollector) Collect(ch chan<- prometheus.Metric) {
@@ -161,5 +179,40 @@ func (c *opsCollector) collect(ctx context.Context, ch chan<- prometheus.Metric)
 		}
 		ch <- prometheus.MustNewConstMetric(c.runs, prometheus.GaugeValue, float64(n), status, class)
 	}
-	return runRows.Err()
+	if err := runRows.Err(); err != nil {
+		return err
+	}
+
+	ageRows, err := c.db.Query(ctx, `
+		SELECT source, EXTRACT(EPOCH FROM (now() - COALESCE(last_ok_at, last_attempt_at)))::float8
+		FROM mirror.sync_state
+		WHERE last_ok_at IS NOT NULL OR last_attempt_at IS NOT NULL`)
+	if err != nil {
+		return err
+	}
+	defer ageRows.Close()
+	for ageRows.Next() {
+		var source string
+		var age float64
+		if err := ageRows.Scan(&source, &age); err != nil {
+			return err
+		}
+		ch <- prometheus.MustNewConstMetric(c.okAge, prometheus.GaugeValue, age, source)
+	}
+	if err := ageRows.Err(); err != nil {
+		return err
+	}
+
+	var accounts int
+	if err := c.db.QueryRow(ctx, `SELECT count(*) FROM mirror.account`).Scan(&accounts); err != nil {
+		return err
+	}
+	ch <- prometheus.MustNewConstMetric(c.rows, prometheus.GaugeValue, float64(accounts), "account")
+
+	var conflicts int
+	if err := c.db.QueryRow(ctx, `SELECT count(*) FROM mirror.account WHERE identity_conflict IS NOT NULL`).Scan(&conflicts); err != nil {
+		return err
+	}
+	ch <- prometheus.MustNewConstMetric(c.conflicts, prometheus.GaugeValue, float64(conflicts))
+	return nil
 }

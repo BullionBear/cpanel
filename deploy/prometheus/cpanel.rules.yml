@@ -46,3 +46,16 @@ groups:
           severity: warning
         annotations:
           summary: more than half of the last hour of job runs failed
+      - alert: CpanelMirrorStale
+        expr: cpanel_mirror_ok_age_seconds > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: a mirror source has not succeeded for 10 minutes
+      - alert: CpanelMftikoAccountIdentityConflict
+        expr: cpanel_mirror_account_identity_conflicts > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: a mirrored account kept its identity and refused a different one

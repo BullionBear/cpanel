@@ -24,6 +24,12 @@ tests:
         values: '8+0x20'
       - series: 'cpanel_job_runs{status="succeeded",error_class="none"}'
         values: '2+0x20'
+      - series: 'cpanel_mirror_ok_age_seconds{source="mftiko.accounts"}'
+        values: '700+0x20'
+      - series: 'cpanel_mirror_ok_age_seconds{source="fresh"}'
+        values: '10+0x20'
+      - series: 'cpanel_mirror_account_identity_conflicts'
+        values: '1+0x20'
     alert_rule_test:
       - eval_time: 6m
         alertname: CpanelStreamConsecutiveFailures
@@ -71,3 +77,21 @@ tests:
               severity: warning
             exp_annotations:
               summary: more than half of the last hour of job runs failed
+      - eval_time: 4m
+        alertname: CpanelMirrorStale
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: CpanelMirrorStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source: mftiko.accounts
+            exp_annotations:
+              summary: a mirror source has not succeeded for 10 minutes
+      - eval_time: 1m
+        alertname: CpanelMftikoAccountIdentityConflict
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: a mirrored account kept its identity and refused a different one

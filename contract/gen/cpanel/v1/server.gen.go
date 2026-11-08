@@ -42,6 +42,9 @@ type ServerInterface interface {
 	// GetMetrics Prometheus 指標
 	// (GET /metrics)
 	GetMetrics(w http.ResponseWriter, r *http.Request)
+	// GetMirrorStatus mirror 各來源的同步狀態
+	// (GET /mirror/status)
+	GetMirrorStatus(w http.ResponseWriter, r *http.Request)
 	// GetReadyz 能否接受工作
 	// (GET /readyz)
 	GetReadyz(w http.ResponseWriter, r *http.Request)
@@ -396,6 +399,20 @@ func (siw *ServerInterfaceWrapper) GetMetrics(w http.ResponseWriter, r *http.Req
 	handler.ServeHTTP(w, r)
 }
 
+// GetMirrorStatus operation middleware
+func (siw *ServerInterfaceWrapper) GetMirrorStatus(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMirrorStatus(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetReadyz operation middleware
 func (siw *ServerInterfaceWrapper) GetReadyz(w http.ResponseWriter, r *http.Request) {
 
@@ -709,6 +726,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/streams/{id}/resume", wrapper.ResumeStream)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/jobs", wrapper.ListJobs)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/job-runs", wrapper.ListJobRuns)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/mirror/status", wrapper.GetMirrorStatus)
 
 	return m
 }
@@ -1138,6 +1156,60 @@ type GetMetricsdefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response GetMetricsdefaultApplicationProblemPlusJSONResponse) VisitGetMetricsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMirrorStatusRequestObject struct {
+}
+
+type GetMirrorStatusResponseObject interface {
+	VisitGetMirrorStatusResponse(w http.ResponseWriter) error
+}
+
+type GetMirrorStatus200JSONResponse MirrorStatus
+
+func (response GetMirrorStatus200JSONResponse) VisitGetMirrorStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMirrorStatus401ApplicationProblemPlusJSONResponse struct {
+	UnauthenticatedApplicationProblemPlusJSONResponse
+}
+
+func (response GetMirrorStatus401ApplicationProblemPlusJSONResponse) VisitGetMirrorStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMirrorStatusdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetMirrorStatusdefaultApplicationProblemPlusJSONResponse) VisitGetMirrorStatusResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -1579,6 +1651,9 @@ type StrictServerInterface interface {
 	// GetMetrics Prometheus 指標
 	// (GET /metrics)
 	GetMetrics(ctx context.Context, request GetMetricsRequestObject) (GetMetricsResponseObject, error)
+	// GetMirrorStatus mirror 各來源的同步狀態
+	// (GET /mirror/status)
+	GetMirrorStatus(ctx context.Context, request GetMirrorStatusRequestObject) (GetMirrorStatusResponseObject, error)
 	// GetReadyz 能否接受工作
 	// (GET /readyz)
 	GetReadyz(ctx context.Context, request GetReadyzRequestObject) (GetReadyzResponseObject, error)
@@ -1829,6 +1904,30 @@ func (sh *strictHandler) GetMetrics(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetMetricsResponseObject); ok {
 		if err := validResponse.VisitGetMetricsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetMirrorStatus operation middleware
+func (sh *strictHandler) GetMirrorStatus(w http.ResponseWriter, r *http.Request) {
+	var request GetMirrorStatusRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetMirrorStatus(ctx, request.(GetMirrorStatusRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetMirrorStatus")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetMirrorStatusResponseObject); ok {
+		if err := validResponse.VisitGetMirrorStatusResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

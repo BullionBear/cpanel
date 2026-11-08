@@ -8,6 +8,7 @@
 		type JobRun,
 		type JobRunStatus,
 		type JobStatus,
+		type MirrorSource,
 		type Stream,
 		type StreamStatus
 	} from '#lib/api.ts';
@@ -47,6 +48,7 @@
 	let streams = $state<Stream[]>([]);
 	let jobs = $state<Job[]>([]);
 	let runs = $state<JobRun[]>([]);
+	let mirrors = $state<MirrorSource[]>([]);
 	let nextCursor = $state<string | null>(null);
 	let error = $state<string | null>(null);
 	let busy = $state(false);
@@ -85,7 +87,7 @@
 		nextCursor = null;
 		try {
 			const common = shared();
-			const [streamResult, jobResult, runResult] = await Promise.all([
+			const [streamResult, jobResult, runResult, mirrorResult] = await Promise.all([
 				api.GET('/streams', {
 					params: { query: { ...common, status: streamStatus === '' ? undefined : streamStatus } }
 				}),
@@ -101,19 +103,22 @@
 							to: iso(to)
 						}
 					}
-				})
+				}),
+				api.GET('/mirror/status')
 			]);
 			const message =
 				failureMessage(streamResult.error, streamResult.response) ??
 				failureMessage(jobResult.error, jobResult.response) ??
-				failureMessage(runResult.error, runResult.response);
-			if (message || !streamResult.data || !jobResult.data || !runResult.data) {
+				failureMessage(runResult.error, runResult.response) ??
+				failureMessage(mirrorResult.error, mirrorResult.response);
+			if (message || !streamResult.data || !jobResult.data || !runResult.data || !mirrorResult.data) {
 				error = message ?? '沒有內容';
 				return;
 			}
 			streams = streamResult.data;
 			jobs = jobResult.data;
 			runs = runResult.data.runs;
+			mirrors = mirrorResult.data.sources;
 			nextCursor = runResult.data.next_cursor ?? null;
 		} catch {
 			error = '連不到 API';
@@ -180,7 +185,7 @@
 </svelte:head>
 
 <h1>Ops</h1>
-<p class="muted">stream、未完成的 job，以及 job 歷史。恢復暫停的 stream 會寫進 audit。</p>
+<p class="muted">stream、未完成的 job、job 歷史，以及 mirror。恢復暫停的 stream 會寫進 audit。</p>
 
 <form class="row" onsubmit={load}>
 	<label>
@@ -239,6 +244,36 @@
 
 {#if error}
 	<p class="error" role="alert">{error}</p>
+{/if}
+
+<h2>Mirror</h2>
+{#if mirrors.length === 0}
+	<p class="muted">還沒有 mirror 來源。</p>
+{:else}
+	<div class="scroll">
+		<table>
+			<thead>
+				<tr>
+					<th>來源</th>
+					<th>最後成功</th>
+					<th>筆數</th>
+					<th>錯誤類別</th>
+					<th>錯誤</th>
+				</tr>
+			</thead>
+			<tbody>
+				{#each mirrors as source (source.source)}
+					<tr>
+						<td>{source.source}</td>
+						<td>{when(source.last_ok_at)}</td>
+						<td>{source.items ?? ''}</td>
+						<td>{source.last_error_class ?? ''}</td>
+						<td class="wrap">{source.last_error ?? ''}</td>
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+	</div>
 {/if}
 
 <h2>Streams</h2>
