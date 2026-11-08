@@ -28,7 +28,7 @@ C2 骨架 ──► C3 Job 系統 ──┬─► C4 Mirror ──┐
 | C1 | 封存 v2（#32） | 6 | v2 停機、DB 以權限唯讀、repo 重排、workflows 停用、tag `v1-final`／`v2-final`、key 已撤銷並清除 |
 | C2 | 骨架與平台（#33） | 7 | VPC 內的 cpanel-api 經公網可登入；打得到 mftiko `/accounts` 與 SYM |
 | C3 | Job 系統（#34） | 5 | 多副本 ReconcileLoop 不產生重複 job；錯誤分類與退避生效 |
-| C4 | mftiko 與 SYM mirror（#35） | 3 | mftiko 掛掉時 scope 不縮；symbol 跟得上 SYM revision；unmatched 可見 |
+| C4 | mftiko 與 SYM mirror（#35） | 5 | mftiko 掛掉時 scope 不縮；symbol 跟得上 SYM revision；unmatched 可見 |
 | C5 | Account／Key 管理（#36） | 6 | uid 不符或非唯讀的 key 被拒；cpanel-api 的環境裡沒有私鑰 |
 | C6 | 快照（#37） | 5 | BinanceUM 整點快照、缺口可見；key 失效演練通過 |
 | C7 | History（BinanceUM）（#38） | 8 | 與 `mftiko-pms-sim` 對拍一致；一致性檢查全綠 |
@@ -82,24 +82,28 @@ C2 骨架 ──► C3 Job 系統 ──┬─► C4 Mirror ──┐
 | C3-04 #67 | 錯誤分類與退避：`auth`、`rate_limited`、`ip_banned`、`unavailable`、`bad_request`、`not_found`；stream 健康欄位；credential hook（C5-04 實作）；418 寫 `ingest.pause` | 以假交易所逐類注入，各自走對的處理 | C3-03 |
 | C3-05 #68 | 營運面：`GET /streams`、`/jobs`、`/job-runs`、`POST /streams/{id}/resume`；metrics；告警；Ops 頁 | UI 依 lease key、狀態、錯誤類別篩 job；故意失敗的 stream 觸發告警 | C3-04 |
 
-## C4 mftiko 與 SYM mirror
+## C4 mftiko 與 SYM mirror（#35）
+
+決策 C4-D001–D017 見 [DECISIONS.md](DECISIONS.md)。
 
 | Ticket | 內容 | 驗收 | 依賴 |
 |---|---|---|---|
-| C4-01 | mftiko client：包 `contract/gen/api/v1`，只開放 GET（I2）；`mftiko.sync`：`/accounts?include_deleted=true`、`/scopes`（列不刪、`since` 只往小、`freshness` 有缺口時只新增） | mftiko API 停掉或回空的 scope 時，`mirror.scope` 不變 | C3-02 |
-| C4-02 | SYM client（connect，契約 S）；`sym.sync`：`Revisions` 比對、落後的 `(venue, category)` 以 `List` 重載、未知 UID 以 `GetByUid(include_inactive)` 補 | SYM 推進 revision 後一輪內重載；下架商品查得到 | C3-02 |
-| C4-03 | join 與 unmatched：`mirror.account` ↔ `pms.exchange_account`；`GET /exchange-accounts/unmatched`；metric 與告警 | mftiko 有、cpanel 沒有的帳號出現在 unmatched | C4-01、C5-01 |
+| C4-01 | mftiko client：包 `contract/gen/api/v1`，只開放 GET（I2；`RoundTripper` 擋其他方法，archtest 限定 import）；`mirror.account`、`mirror.sync_state`；`mftiko.sync` 的帳號（`/accounts?include_deleted=true` 全量，列不刪）；archtest 擋 cpanel-api 連到 mirror 的 client；`GET /mirror/status`、Ops 頁的 Mirror 區塊；stale 告警 | mftiko 停掉時 `mirror.account` 不變並告警；非 GET 在送出前失敗 | C3 |
+| C4-02 | SYM client（gRPC over h2c，契約 S）；`mirror.symbol`；`sym.sync`：`Revisions` 比對、落後的 `(venue, category)` 以 `List` 重載、一致的快照裡沒有的列標成不活躍並以 `GetByUid` 補終結狀態；`(venue, category, exch_ticker)` 反查 UID | SYM 推進 revision 後一輪內重載；下架商品查得到 | C4-01 |
+| C4-03 | join 與 unmatched：`mirror.account` ↔ `pms.exchange_account`（身分 `(exchange, exch_account_uid)`，`exchange` 是 `binance`、`bybit`、`okx`，只對未刪除的）＋ `pms.exchange_account_kind`（`api_id` 的 kind 要在帳號上啟用）；unmatched 以身分計數，`reason` 是 `no_exchange_account`、`missing_identity`、`kind_not_enabled`；`BinancePM`、`BinanceEO`（以及 C8-01 之前的 `BinanceCM`）標成 `kind_out_of_scope`，另外計數；`GET /exchange-accounts/unmatched`、`GET /exchange-accounts` 帶 `api_id`；metric 與告警；Ops 頁列出 | mftiko 有、cpanel 沒有的帳號出現在 unmatched；同一個 Binance UID 的 `Binance`、`BinanceUM` 兩個 `api_id` 是一筆；有 scope 的 PM 帳號告警但不算 unmatched | C4-01、C4-04、C5-01 |
+| C4-04 | scope mirror：`/scopes` 全量 → `mirror.scope`（列不刪、`since` 只往小、`freshness` 有缺口時只新增；不依 kind 過濾）；不完整的告警 | mftiko API 停掉或回空的 scope 時，`mirror.scope` 不變 | C4-01 |
+| C4-05 | scope 的 UID 補齊：不在 `mirror.symbol` 的 UID 以 `GetByUid(include_inactive)` 補；查不到的計數與告警 | scope 指到已下架的商品也查得到 `exch_ticker`；查不到的看得見 | C4-02、C4-04 |
 
 ## C5 Account／Key 管理
 
 | Ticket | 內容 | 驗收 | 依賴 |
 |---|---|---|---|
-| C5-01 | `pms.exchange_account`：穩定 id、`revision`、`exch_account_uid` 建立後不可改、軟刪除；API：建立、列表、讀取、刪除 | 改 uid 回 400；刪除後歷史仍查得到出處 | C2-03 |
+| C5-01 | `pms.exchange_account`：穩定 id、`revision`、`exch_account_uid` 建立後不可改、軟刪除；`exchange` 是 `binance`、`bybit`、`okx`（mftiko `/accounts` 的 `exchange`，不是 venue 或 kind 的 `Binance`、`BinanceUM`…，C4-D003）；一個交易所 UID 一個帳號，帳號底下記啟用的帳號種類 `pms.exchange_account_kind`，Bybit、OKX 自動啟用唯一的 kind（C4-D016）；帳號種類的參照表 `pms.account_kind` 與種子資料，`in_scope` 的是 `Binance`、`BinanceUM`、`Bybit`、`Okx`，`BinanceCM` 由 C8-01 打開（C4-D015、C4-D017）；API：建立、列表、讀取、刪除，啟用與停用 kind | 改 uid 回 400；刪除後歷史仍查得到出處；啟用別家交易所的 kind、或 `in_scope = false` 的 kind 回 400 | C2-03 |
 | C5-02 | sealbox：X25519 + NaCl anonymous sealed box，header 與 mftiko `internal/platform/sealbox` 相同（version、8 bytes 指紋）；封裝與解封拆成兩個套件；worker 金鑰對的設定與載入 | 與 mftiko 的測試向量對拍；archtest 確認 cpanel-api 沒有連到解封套件 | C2-01 |
-| C5-03 | 交易所 client 骨架：Binance、Bybit、OKX 的簽章；限速（Binance 的 request weight、Bybit／OKX 的帳號額度）；把交易所的錯誤對到 C3-04 的錯誤類別；只有唯讀 REST（GET，D2），只在 worker 裡用，不在 `internal/reconcile` 底下（I5）；套件路徑在這張票決定（例如 `internal/venue/<exchange>`），C6-01 的 venue profile 與之後的快照、History job 都建在它上面。登記 key：API 封裝、回 `202`、狀態 `unverified`；`credential.verify` job：Binance（`/api/v3/account` 的 `uid`、`apiRestrictions`）、Bybit（`query-api`）、OKX（`account/config`）驗證唯讀與 uid | 非唯讀或 uid 不符 → `rejected` 並寫明原因；通過 → `active`；簽章與各交易所文件的範例一致；只開放 GET；以假交易所（httptest）逐類注入錯誤，各自對到 C3-04 的錯誤類別；限速依交易所回報的用量節流；archtest 確認 `internal/reconcile` 與 cpanel-api 都沒有連到交易所 client | C5-01、C5-02、C3-03、C3-04；先於 C6-01 |
-| C5-04 | credential 健康：狀態機（`unverified`、`active`、`rejected`、`auth_failed`、`disabled`）、`credential.probe`、ReconcileLoop 的斷路規則、停用與刪除、告警 | `auth_failed` 的 credential 只剩 probe job | C5-03、C3-04 |
+| C5-03 | 交易所 client 骨架：Binance、Bybit、OKX 的簽章；限速（Binance 的 request weight、Bybit／OKX 的帳號額度）；把交易所的錯誤對到 C3-04 的錯誤類別；只有唯讀 REST（GET，D2），只在 worker 裡用，不在 `internal/reconcile` 底下（I5）；套件路徑在這張票決定（例如 `internal/venue/<exchange>`），C6-01 的 venue profile 與之後的快照、History job 都建在它上面。登記 key：API 封裝、回 `202`、狀態 `unverified`；`credential.verify` job：Binance（`/api/v3/account` 的 `uid`、`apiRestrictions`）、Bybit（`query-api`）、OKX（`account/config`）驗證唯讀與 uid。依 kind 的 API 家族選 client（`api`、`fapi`、Bybit／OKX v5；`dapi` 由 C8-01 補，`eapi`、`papi` 一期不做）；`credential.verify` 驗一次 uid，再對每個啟用的 kind 確認唯讀 key 讀得到，結果記在 kind 那一列（C4-D016） | 非唯讀或 uid 不符 → `rejected` 並寫明原因；通過 → `active`；一個 kind 讀不到時只有那個 kind 記成失敗；簽章與各交易所文件的範例一致；只開放 GET；以假交易所（httptest）逐類注入錯誤，各自對到 C3-04 的錯誤類別；限速依交易所回報的用量節流；archtest 確認 `internal/reconcile` 與 cpanel-api 都沒有連到交易所 client | C5-01、C5-02、C3-03、C3-04；先於 C6-01 |
+| C5-04 | credential 健康：狀態機（`unverified`、`active`、`rejected`、`auth_failed`、`disabled`）、`credential.probe`、ReconcileLoop 的斷路規則、停用與刪除、告警；credential hook 只處理 `account:<id>` 的 lease key，`global:mftiko`、`global:sym` 的 `auth` 失敗只記錄（C4-D008） | `auth_failed` 的 credential 只剩 probe job | C5-03、C3-04 |
 | C5-05 | 換鑰：新舊私鑰並存，背景 job 重新封裝 | 換鑰中途重啟 worker，所有 key 都還解得開 | C5-02、C3-03 |
-| C5-06 | Account UI：帳號列表、建立帳號、登記 key、狀態與原因、join 到的 `api_id`、unmatched | | C5-04、C4-03、C2-05 |
+| C5-06 | Account UI：帳號列表、建立帳號、登記 key、狀態與原因、join 到的 `api_id`、unmatched；顯示與啟用 kind，從 unmatched 建帳號時預先勾好 mftiko 的 kind | | C5-04、C4-03、C2-05 |
 
 ## C6 快照（BinanceUM 起步）
 
@@ -116,7 +120,7 @@ C2 骨架 ──► C3 Job 系統 ──┬─► C4 Mirror ──┐
 | Ticket | 內容 | 驗收 | 依賴 |
 |---|---|---|---|
 | C7-01 | `raw.venue_trade`、`raw.venue_order`、`raw.venue_income`；`ledger.trade`、`ledger.order`、`ledger.funding`（帶 `norm_version`）；從 raw 重建的指令 | 刪掉 ledger 後重建，結果相同 | C2-02 |
-| C7-02 | stream 規劃規則：scope join（`api_id` → `(exchange, exch_account_uid)` → exchange_account）、同一 UID 取最早的 `since` 減 1 分鐘、hot／cold 分層 | 規則的單元測試只用 DB fixture | C3-02、C4-03 |
+| C7-02 | stream 規劃規則：scope join（`api_id` → `(exchange, exch_account_uid)` → exchange_account）、同一 UID 取最早的 `since` 減 1 分鐘、hot／cold 分層 | 規則的單元測試只用 DB fixture | C3-02、C4-03、C4-04、C4-05 |
 | C7-03 | TradeHistory BinanceUM：從 `since` 以 7 天窗回補，追上後改 `fromId`；成交裡沒見過的 `orderId` 寫進 `pending_order` | 回補與增量交界處不漏不重 | C7-01、C7-02、C5-03 |
 | C7-04 | OrderHistory：`order.resolve`（少量逐筆 `GET /order`，大量 `allOrders(orderId=最小值)`）；終態定義；`not_found` → `unresolved`；cloid 解碼存 `cloid_ver`、`algo`、`cloid_ts_ms`；一致性檢查（成交量等於成交加總、每單至少一筆成交） | 部分成交中的單留在 pending，結束後才寫入 | C7-03 |
 | C7-05 | FundingHistory BinanceUM：income `FUNDING_FEE`，時間窗 cursor，每小時 | 與 Binance 網頁的 funding 紀錄一致 | C7-01、C5-03 |
@@ -130,9 +134,9 @@ C2 骨架 ──► C3 Job 系統 ──┬─► C4 Mirror ──┐
 
 | Ticket | 內容 | 依賴 |
 |---|---|---|
-| C8-01 | Binance CM（inverse；qty 以 quote 計） | C6、C7 |
+| C8-01 | Binance CM（inverse；qty 以 quote 計）。SYM 有 `BinanceCM` 之前不做，跟著 mftiko 的範圍，不另外提需求。開始時打開參照表的 `BinanceCM`、補 `dapi` 的 client 與 `credential.verify`，操作者在帳號上啟用 | C6、C7、SYM 有 `BinanceCM` |
 | C8-02 | Binance Spot（沒有 funding；手動交易只能靠 watch list） | C6、C7 |
 | C8-03 | Bybit UTA（帳號層級的 execution、order history、transaction log 的 `SETTLEMENT`） | C6、C7 |
 | C8-04 | OKX（fills-history、orders-history、bills 的 funding） | C6、C7 |
 
-Binance PM（`papi`）與 Binance EO：有帳號用到時再開票。
+Binance PM（`papi`）與 Binance EO：有帳號用到時再開票。在那之前，C4 把它們標成 `kind_out_of_scope`，有 scope 的另外告警（C4-D017）。
