@@ -129,3 +129,128 @@ C2-D001–C2-D007 於 2026-11-06 定在 epic，原文照錄。
 - 規則在 `deploy/prometheus/cpanel.rules.yml`，dashboard 在 `deploy/grafana/cpanel.json`。門檻：lag 超過 15 分鐘持續 10 分鐘；連續失敗至少 3 次持續 5 分鐘；有暫停的 stream 持續 10 分鐘；出口暫停持續 2 分鐘；最老的未完成 job 超過 10 分鐘持續 5 分鐘；最近一小時失敗率超過一半且至少 10 筆、持續 10 分鐘。
 - worker 不對公網開 port。Prometheus 從主機或 tailnet 抓容器的 `:8081/metrics`。不另做 Discord webhook，也不新增 secret。
 - `AlertHook` 仍只記 log。暫停與連續失敗的 gauge 才是會被送出的告警。
+
+## C4 mftiko 與 SYM mirror（#35）
+
+C4-D001–C4-D017 於 2026-11-08 定在 epic #35。
+
+### C4-D001 I2 由 CI 擋（C4-01，#35）
+
+- 只有 `internal/mftiko` 能 import `contract/gen/api/v1`（archtest）。它只匯出讀取的方法，回傳 cpanel 自己的型別。
+- `internal/mftiko` 的 `http.RoundTripper` 在送出前擋掉 GET、HEAD 以外的方法。
+- 理由：PMS 的 token 是單一角色，實際上有完整的寫權限，mftiko 也不另做唯讀角色（E21-D010）。generated client 有建立、刪除帳號與結束 session 的方法，誰 import 誰就能呼叫。
+- 修訂 ARCHITECTURE §2 的 I2：由 CI 擋，不只是慣例。
+
+### C4-D002 cpanel-api 只讀副本（C4-01，#35）
+
+- archtest：`cmd/cpanel-api` 不得連結 `internal/mftiko`、`internal/sym`、`internal/mirror`、`contract/gen/api/v1`、`symv1connect`。API 以 SQL 讀 `mirror.*`。
+
+### C4-D003 用詞、`exchange` 的值與身分的 join（C4-03，#35）
+
+- 用詞（E03-D001）：
+  - **venue** 是行情的分類：一條連線的公開行情與一組商品，`universal_ticker` 的第一段。`Binance`、`BinanceUM`、`BinanceCM`、`BinanceEO`、`Bybit`、`Okx`。
+  - **帳號種類（kind）** 是帳號依 API 的分類：沿用 venue 的名稱，Binance 多一個不是 venue 的 `BinancePM`。`Binance`、`BinanceUM`、`BinanceCM`、`BinanceEO`、`BinancePM`、`Bybit`、`Okx`。
+  - **exchange** 是交易所。
+  - 三者是不同的 enum，名稱可能重疊，不能互查。
+- `pms.exchange_account.exchange` 用 mftiko `/accounts` 的 `exchange` 上線的值：`binance`、`bybit`、`okx`。也就是 registry 的 `Declaration.Exchange`，mftiko 原始碼裡是 `exchange/{binance,bybit,okx}/venues.go` 的 `const Exchange`（E21-D008）。
+- 身分的 join 鍵是 `(exchange, exch_account_uid)`。`exch_account_uid` 兩邊都在寫入時去掉前後空白，join 時逐字相等，不改大小寫。kind 也逐字比對。
+- mftiko 帳號缺 `exchange` 或 `exch_account_uid` 時對不到，列成 unmatched，`reason` 是 `missing_identity`。
+
+### C4-D004 unmatched 的定義（C4-03，#35）
+
+- 未刪除的 mftiko 帳號，加上已刪除但有 scope 的，對不到任何**未刪除**的 `pms.exchange_account`，或對到了但它的 kind 在帳號上沒啟用（C4-D016）。
+- 只有在 cpanel 的帳號是正常的（D9），不列、不告警。
+- 一期不做的 kind 不算 unmatched（C4-D017）。
+- 只有 `traded`（有 scope）的會告警。
+
+### C4-D005 mirror 的告警（C4-01～C4-05，#35）
+
+- 規則在 `deploy/prometheus/cpanel.rules.yml`（C3-D005）。
+- `CpanelMirrorStale`：任一個來源超過 10 分鐘沒成功，持續 5 分鐘。
+- `CpanelSymTablesBehind`：持續 10 分鐘。
+- `CpanelMftikoScopePartial`、`CpanelScopeUidUnresolved`、`CpanelMftikoAccountUncovered`（只算 `traded`）、`CpanelMftikoKindOutOfScope`（只算 `traded`）：持續 30 分鐘。
+- `CpanelMftikoAccountIdentityConflict`：立即。
+
+### C4-D006 套件與防腐層（C4-01，#35）
+
+- `internal/mftiko`（API client）、`internal/sym`（SYM client）是防腐層，generated 型別不出這兩個套件。
+- `internal/mirror` 寫 `mirror.*`，也是兩個 handler 與 worker 端查詢的所在，只有 `cpanel-worker` 連結它。
+- 不放在 `internal/reconcile` 底下（I5）。
+- archtest：`symv1connect` 只在 `internal/sym`。
+
+### C4-D007 SYM 走 gRPC over h2c（C4-01，#35）
+
+- `connect.WithGRPC()`，transport 開未加密的 HTTP/2。契約只承諾 gRPC，Connect 協議只給除錯用（E22-D005）。`doctor` 一起改。
+
+### C4-D008 錯誤對應與出口暫停（C4-01，#35）
+
+- mftiko：401／403 → `auth`；429 → `rate_limited`；5xx、連線失敗、逾時 → `unavailable`；其他 4xx → `bad_request`。不產生 `ip_banned`。
+- SYM：`Unauthenticated` → `auth`；`InvalidArgument` → `bad_request`；`NotFound` 由 handler 處理；`Unavailable`、`DeadlineExceeded`、`ResourceExhausted`、`Internal` → `unavailable`。
+- `mftiko.sync`、`sym.sync` 列進 `Worker.Local`：它們走 tailnet，交易所的出口暫停不擋它們。
+- credential hook 會收到 lease key `global:*` 的 `auth` 失敗；C5-04 只處理 `account:<id>`。
+
+### C4-D009 每輪全量讀，完整性記在 `sync_state`（C4-01，#35）
+
+- 每一輪從第一頁讀到最後一頁，不跨 job 保存 cursor。每頁一個 transaction。寫入只新增或往小改，中斷是安全的。
+- `mirror.sync_state(source)`：`mftiko.accounts`、`mftiko.scopes`、`sym`、`sym:<venue>:<category>`。`last_ok_at` 是這一輪沒有錯誤，`last_complete_at` 是讀完而且沒有不可用的 region。
+- 不受每個 job 20 個請求的預算限制；以 `BudgetTime` 與頁數上限保護。
+
+### C4-D010 mirror 的表與型別（C4-01，#35）
+
+- `mirror.account` 只存要用的欄位，不存原始 payload。`kind`、`exchange` 原樣存，不依 kind 過濾（C4-D017）。
+- `mirror.scope` 不加外鍵到 `mirror.account`。
+- `since` 從奈秒往下取整到微秒。
+- `mirror.symbol` 的 `(venue, category, exch_ticker)` index 不 unique。`venue`、`category` 原樣存 SYM 上線的值（`BinanceUM`、`Perp`…）。`SymbolInfo` 沒有這兩個欄位：`List` 的列取自請求，`GetByUid` 的列以 `contract/symbol.Parse(universal_ticker)` 拆出來。
+- 每張表都只有 mirror job 寫，列都不刪。
+
+### C4-D011 SYM 表的重載與下架（C4-02，#35）
+
+- 只讀活躍表（`include_inactive=false`）。已載入的 revision 記的是 List **之前**看到的值。
+- List 之後 revision 沒變，才把不在清單裡的列標成不活躍；變了就只 upsert，下一輪重載。
+- 標成不活躍的列以 `GetByUid(include_inactive=true)` 補上終結狀態，每輪有上限。
+- 列永不刪；反查時活躍列優先，規則同 SYM 的 `Reverse`。
+
+### C4-D012 未知 UID 的補齊（C4-05，#35）
+
+- scope 的 UID 不在 `mirror.symbol` 時，以 `GetByUid(include_inactive=true)` 補，每輪有上限，最久沒試的優先。
+- `NotFound` 記進 `mirror.uid_lookup`，不算 job 失敗，計入 gauge 並告警。`universal_ticker` 拆不開的也一樣，`last_result` 是 `unparsable`。
+
+### C4-D013 帳號身分衝突（C4-01，#35）
+
+- 同一個 `api_id` 讀到不同的 `(exchange, exch_account_uid)` 時，mirror 不覆寫，記進 `identity_conflict` 並立即告警。
+- mftiko 保證兩者不能改（E21-D008、E21-D031）。覆寫會讓已經寫進去的歸屬悄悄換到另一個交易所帳號。
+
+### C4-D014 unmatched 以交易所帳號身分計數（C4-03，#35）
+
+- unmatched 的一列、gauge 與告警的單位是 `(exchange, exch_account_uid)`，不是 `api_id`。每一列帶這個身分底下的 `api_id`、kind 與 `deleted_at`。缺身分的 `api_id` 自己一列，跟 mftiko-pms-sim 的 `groupAccounts` 一樣。
+- 每一列只有一個 `reason`：`no_exchange_account`、`missing_identity`，或 `kind_not_enabled`（有帳號但缺 kind，帶 `missing_kinds`）。
+- 理由：同一個 Binance UID 常登記成好幾個 kind（E21-D008）。在 cpanel 建一個帳號、啟用它的 kind，就把整組解決了；以 `api_id` 計數會讓告警膨脹。
+
+### C4-D015 帳號種類的參照表 `pms.account_kind`（C4-03，#35；表在 C5-01）
+
+- 欄位：`kind` 主鍵、`exchange`、`venues`（可交易的 venue）、`api_family`、`in_scope`（cpanel 現在做不做）。由 migration 寫入種子資料，SQL（Coverage view、C7-02 的規則）與 Go（C5-03 依 `api_family` 選 client）共用。
+- 一期的種子資料：`Binance`（`api`）、`BinanceUM`（`fapi`）、`Bybit`、`Okx` 是 `in_scope`；`BinanceCM`（`dapi`）、`BinanceEO`（`eapi`）、`BinancePM`（`papi`，可交易 `Binance`、`BinanceUM`、`BinanceCM`）不是。
+- `BinanceCM` 由 C8-01 改成 `in_scope`。C8-01 等 SYM 有 `BinanceCM` 才做，跟著 mftiko 的範圍（PLAN.md C8-01）。mftiko 開始交易 CM 時，`CpanelMftikoKindOutOfScope` 會響，就是做 C8-01 的時候。
+- 理由：mftiko 的 API 沒有完整的對照：`/account-kinds` 只有 kind → venue，`/accounts` 只有 kind → exchange，兩者都沒有 API 家族。registry 在 `exchange/`，I1 不准 import。Coverage 與 C7-02 是 SQL，對照要能 join，所以放在 DB，不只放在 Go。
+- mirror 原樣存 kind 與 venue，不轉換。C7-02 用這張表確認 scope 的 venue 在 `api_id` 的 kind 的 `venues` 裡。
+- 不為這張表向 mftiko 提需求（跟著 mftiko 的範圍，同 PLAN.md C8-01）。mftiko 之後若在 `/account-kinds` 加上 `exchange`，C4-03 再拿來對這張表做一致性檢查。
+
+### C4-D016 cpanel 帳號的粒度（C4-03，#35；表在 C5-01）
+
+- 一個 cpanel 帳號是一個 `(exchange, exch_account_uid)`。帳號底下以 `pms.exchange_account_kind(exchange_account_id, kind)` 記啟用的帳號種類。kind 必須是 `in_scope` 的，而且屬於帳號的 exchange；停用以 `disabled_at` 標記，不刪。
+- kind 決定要打哪一組 API、`credential.verify` 要驗哪些權限、快照要打哪些錢包、stream 走哪個 client。身分、key 與 uid 的驗證一個帳號一份。
+- kind 由操作者啟用，不從 mftiko 自動帶入（D9）。Bybit、OKX 只有一個 kind，建帳號時自動啟用。
+- 不以 `(kind, exch_account_uid)` 為帳號的理由：
+  - Binance 的 API key 建在 UID 上，不屬於某條產品線；讀不讀得到某條產品線看 key 的權限，由逐 kind 的驗證確認。UM 與 CM 共用持倉模式與 IP weight。
+  - 跨錢包的總額是 UID 層級。
+  - mftiko 的 PMS 身分（E21-D008）與 mftiko-pms-sim 都是 `(exchange, uid)` 一組、一把 key。
+  - 以 kind 為帳號，同一把 key 要登記好幾次，C7-08 的對拍也要重新分組。
+- 不採「不記 kind」的理由：那樣看不出 mftiko 在交易的某個 kind，cpanel 這邊有沒有在抓、key 有沒有驗過那組 API。
+
+### C4-D017 一期不做的帳號種類（C4-03，#35）
+
+- 一期不做 `BinancePM` 與 `BinanceEO`（Brian，2026-11-08）。EO 的理由：SYM 一期沒有 EO 的 feed，mftiko 的 EO 交易未實作，PLAN.md 原本就排在之後。
+- 規則適用於這兩個 kind、參照表裡沒有的 kind，以及任何 `in_scope = false` 的 kind（例如 C8-01 之前的 `BinanceCM`，C4-D015）。
+- mirror 照抄這些 `api_id` 與它們的 scope，不過濾。
+- Coverage 標成 `kind_out_of_scope`：不算 unmatched，另外以 `cpanel_mftiko_kinds_out_of_scope{kind, traded}` 計數；有 scope 的持續 30 分鐘觸發 `CpanelMftikoKindOutOfScope`。C7-02 不建 stream。
+- 之後要做時：參照表改成 `in_scope`、補上那組 API 的 client 與驗證、操作者啟用 kind。Coverage 不用改；C7-02 從 mirror 裡最早的 `since` 建 stream。PM 與 classic kind 是否互斥、切換前的歷史在哪組 API，留到做 PM 時查證。
