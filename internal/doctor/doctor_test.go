@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 
 	symv1 "github.com/BullionBear/mftiko/contract/gen/mftiko/sym/v1"
 	"github.com/BullionBear/mftiko/contract/gen/mftiko/sym/v1/symv1connect"
@@ -49,7 +52,7 @@ func (f fakeSym) Revisions(_ context.Context, req *connect.Request[symv1.Revisio
 	return connect.NewResponse(&symv1.RevisionsResponse{Revisions: &symv1.RevisionList{Tables: []*symv1.TableRevision{{}, {}}}}), nil
 }
 
-func fakeSymServer(t *testing.T, token, health string) *httptest.Server {
+func fakeSymServer(t *testing.T, token, health string) string {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.Handle(symv1connect.NewSymServiceHandler(fakeSym{token: token}))
@@ -57,16 +60,21 @@ func fakeSymServer(t *testing.T, token, health string) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		io.WriteString(w, `{"status":"`+health+`"}`)
 	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: h2c.NewHandler(mux, &http2.Server{})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return "http://" + ln.Addr().String()
 }
 
 func TestRunAllPass(t *testing.T) {
 	var methods []string
 	mf := fakeMftiko(t, "mt", &methods)
 	sym := fakeSymServer(t, "st", "SERVING_STATUS_SERVING")
-	results := Run(context.Background(), Config{MftikoURL: mf.URL + "/api/v1", MftikoToken: "mt", SymURL: sym.URL, SymToken: "st"})
+	results := Run(context.Background(), Config{MftikoURL: mf.URL + "/api/v1", MftikoToken: "mt", SymURL: sym, SymToken: "st"})
 	var out bytes.Buffer
 	if !Write(&out, results) {
 		t.Fatalf("not all passed:\n%s", out.String())
@@ -85,7 +93,7 @@ func TestRunReportsEachFailure(t *testing.T) {
 	var methods []string
 	mf := fakeMftiko(t, "mt", &methods)
 	sym := fakeSymServer(t, "st", "NOT_SERVING")
-	results := Run(context.Background(), Config{MftikoURL: mf.URL + "/api/v1", MftikoToken: "wrong", SymURL: sym.URL, SymToken: "wrong"})
+	results := Run(context.Background(), Config{MftikoURL: mf.URL + "/api/v1", MftikoToken: "wrong", SymURL: sym, SymToken: "wrong"})
 	if len(results) != 3 {
 		t.Fatalf("%d results", len(results))
 	}

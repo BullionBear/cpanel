@@ -14,12 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"connectrpc.com/connect"
-
-	symv1 "github.com/BullionBear/mftiko/contract/gen/mftiko/sym/v1"
-	"github.com/BullionBear/mftiko/contract/gen/mftiko/sym/v1/symv1connect"
-
 	"github.com/BullionBear/cpanel/internal/mftiko"
+	"github.com/BullionBear/cpanel/internal/sym"
 )
 
 // Config is where mftiko and SYM are and the worker's tokens for them.
@@ -98,7 +94,7 @@ func symHealth(ctx context.Context, hc *http.Client, cfg Config) (string, error)
 	if cfg.SymURL == "" {
 		return "", errors.New("SYM URL is not set")
 	}
-	body, _ := json.Marshal(map[string]string{"service": symv1connect.SymServiceName})
+	body, _ := json.Marshal(map[string]string{"service": "mftiko.sym.v1.SymService"})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimRight(cfg.SymURL, "/")+"/grpc.health.v1.Health/Check", bytes.NewReader(body))
 	if err != nil {
@@ -125,19 +121,18 @@ func symHealth(ctx context.Context, hc *http.Client, cfg Config) (string, error)
 	return out.Status, nil
 }
 
-// symRevisions is the cheapest SymService call; it proves the token.
-func symRevisions(ctx context.Context, hc *http.Client, cfg Config) (string, error) {
-	if cfg.SymURL == "" || cfg.SymToken == "" {
-		return "", errors.New("SYM URL or token is not set")
-	}
-	c := symv1connect.NewSymServiceClient(hc, cfg.SymURL)
-	req := connect.NewRequest(&symv1.RevisionsRequest{})
-	req.Header().Set("Authorization", "Bearer "+cfg.SymToken)
-	resp, err := c.Revisions(ctx, req)
+// symRevisions is the cheapest SymService call; it proves the token. It uses the same gRPC-over-h2c
+// client as sym.sync (C4-D007). hc is unused: that client brings its own HTTP/2 transport.
+func symRevisions(ctx context.Context, _ *http.Client, cfg Config) (string, error) {
+	c, err := sym.New(cfg.SymURL, cfg.SymToken)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%d table(s)", len(resp.Msg.GetRevisions().GetTables())), nil
+	tables, err := c.Revisions(ctx)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d table(s)", len(tables)), nil
 }
 
 func snippet(b []byte) string {

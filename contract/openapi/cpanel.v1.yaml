@@ -1,11 +1,12 @@
 # cpanel-api 的對外契約（ARCHITECTURE §4.7）。SPA 不在這份契約裡。
+# 0.5.0 的 mirror 狀態加上 SYM 表的 revision（C4-02）。
 # 0.4.0 加上 mirror 的同步狀態（C4-01）。
 # 0.3.0 加上 stream、job、job 歷史與恢復暫停（C3-05）。
 # 0.2.1 的 /healthz 加上建置時間（C2-06）。0.2.0 加上 Discord 登入、session、bearer token（C2-04）。
 openapi: 3.0.3
 info:
   title: cpanel API
-  version: 0.4.0
+  version: 0.5.0
   description: |
     cpanel-api 的對外契約。
 
@@ -680,7 +681,17 @@ components:
           type: integer
           format: int64
           nullable: true
-          description: 這一輪讀到的筆數。
+          description: 這一輪讀到的筆數。SYM 的表是 mirror 裡的列數。
+        revision:
+          type: integer
+          format: int64
+          nullable: true
+          description: 這張 SYM 表已載入的 revision。其他來源是空的。
+        remote_revision:
+          type: integer
+          format: int64
+          nullable: true
+          description: SYM 上這張表的 revision。
         unavailable_regions:
           type: array
           items:

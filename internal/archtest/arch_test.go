@@ -25,7 +25,7 @@ const sealboxOpen = "internal/platform/sealbox/open"
 // mftikoAPI is the generated mftiko HTTP client. Only internal/mftiko may import it (I2).
 const mftikoAPI = mftiko + "/contract/gen/api/v1"
 
-// symConnect is the generated SYM connect client. cpanel-api must not link it (C4-D002).
+// symConnect is the generated SYM connect client. Only internal/sym may import it (C4-D006).
 const symConnect = mftiko + "/contract/gen/mftiko/sym/v1/symv1connect"
 
 // mirrorOnly is what cpanel-api reads with SQL instead of linking (C4-D002).
@@ -171,6 +171,13 @@ func check(pkgs []pkg) []string {
 				}
 			}
 		}
+		if from != "internal/sym" {
+			for _, imp := range p.Imports {
+				if imp == symConnect {
+					bad(imp, "only internal/sym imports the SYM client (C4-D006)")
+				}
+			}
+		}
 		if from == "cmd/cpanel-api" {
 			for _, d := range p.Deps {
 				if r, own := rel(d); own && under(r, sealboxOpen) {
@@ -237,7 +244,7 @@ func TestDependencyRules(t *testing.T) {
 		}
 	}
 	// The rules key on paths; if a package moved, they would pass by matching nothing.
-	for _, want := range []string{"cmd/cpanel-api", "internal/reconcile", "internal/mftiko", "internal/mirror", sealboxOpen} {
+	for _, want := range []string{"cmd/cpanel-api", "internal/reconcile", "internal/mftiko", "internal/sym", "internal/mirror", sealboxOpen} {
 		if !slices.Contains(own, want) {
 			t.Fatalf("package %s not found: update the rules in this package to the new layout", want)
 		}
@@ -288,6 +295,7 @@ func TestCheckReportsViolations(t *testing.T) {
 
 		// I2: the generated API client is imported only by internal/mftiko.
 		{ImportPath: m("internal/mftiko"), Imports: []string{mf("contract/gen/api/v1")}},
+		{ImportPath: m("internal/sym"), Imports: []string{mf("contract/gen/mftiko/sym/v1/symv1connect")}},
 		{ImportPath: m("internal/doctor"), Imports: []string{mf("contract/gen/api/v1"), mf("contract/gen/mftiko/sym/v1/symv1connect")}},
 	}
 	got := check(pkgs)
@@ -318,6 +326,7 @@ func TestCheckReportsViolations(t *testing.T) {
 		"cmd/cpanel-api links " + mf("contract/gen/api/v1"),
 		"cmd/cpanel-api links " + mf("contract/gen/mftiko/sym/v1/symv1connect"),
 		"internal/doctor links " + mf("contract/gen/api/v1"),
+		"internal/doctor links " + mf("contract/gen/mftiko/sym/v1/symv1connect"),
 	}
 	if len(got) != len(want) {
 		t.Errorf("%d violations, want %d:\n%s", len(got), len(want), strings.Join(got, "\n"))

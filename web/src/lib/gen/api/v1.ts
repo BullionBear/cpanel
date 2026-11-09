@@ -378,9 +378,19 @@ export interface components {
             last_complete_at?: string | null;
             /**
              * Format: int64
-             * @description 這一輪讀到的筆數。
+             * @description 這一輪讀到的筆數。SYM 的表是 mirror 裡的列數。
              */
             items?: number | null;
+            /**
+             * Format: int64
+             * @description 這張 SYM 表已載入的 revision。其他來源是空的。
+             */
+            revision?: number | null;
+            /**
+             * Format: int64
+             * @description SYM 上這張表的 revision。
+             */
+            remote_revision?: number | null;
             unavailable_regions: string[];
             last_error_class?: string | null;
             last_error?: string | null;

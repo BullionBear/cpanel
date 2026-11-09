@@ -13,7 +13,7 @@ import (
 // Replicas run the same statements at the same time. Each rule takes its keys in one fixed order, so a replica
 // that hits another's uncommitted key waits for it instead of deadlocking.
 func Rules() []Rule {
-	return []Rule{MaintPartitions, MftikoSync, Streams, Periodics}
+	return []Rule{MaintPartitions, MftikoSync, SymSync, Streams, Periodics}
 }
 
 // MaintPartitions registers maint.partitions, which makes and expires the ingest.job_run partitions every hour
@@ -22,6 +22,9 @@ var MaintPartitions = Singleton("maint.partitions", "global:maint", time.Hour)
 
 // MftikoSync registers mftiko.sync, which copies mftiko's accounts into mirror.account every minute (C4-01).
 var MftikoSync = Singleton("mftiko.sync", "global:mftiko", time.Minute)
+
+// SymSync registers sym.sync, which copies SYM's instruments into mirror.symbol every minute (C4-02).
+var SymSync = Singleton("sym.sync", "global:sym", time.Minute)
 
 // Singleton returns a rule that inserts the ingest.periodic row name, whose jobs have kind name, due at once. It
 // inserts the row only when it is missing: after that the row is the operator's, and a changed period or

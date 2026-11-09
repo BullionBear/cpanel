@@ -59,3 +59,10 @@ groups:
           severity: warning
         annotations:
           summary: a mirrored account kept its identity and refused a different one
+      - alert: CpanelSymTablesBehind
+        expr: cpanel_mirror_sym_tables_behind > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: a SYM table is behind its remote revision

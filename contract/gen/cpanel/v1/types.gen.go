@@ -199,13 +199,19 @@ type MeAuth string
 
 // MirrorSource defines model for MirrorSource.
 type MirrorSource struct {
-	// Items 這一輪讀到的筆數。
+	// Items 這一輪讀到的筆數。SYM 的表是 mirror 裡的列數。
 	Items          *int64     `json:"items,omitempty"`
 	LastAttemptAt  *time.Time `json:"last_attempt_at,omitempty"`
 	LastCompleteAt *time.Time `json:"last_complete_at,omitempty"`
 	LastError      *string    `json:"last_error,omitempty"`
 	LastErrorClass *string    `json:"last_error_class,omitempty"`
 	LastOkAt       *time.Time `json:"last_ok_at,omitempty"`
+
+	// RemoteRevision SYM 上這張表的 revision。
+	RemoteRevision *int64 `json:"remote_revision,omitempty"`
+
+	// Revision 這張 SYM 表已載入的 revision。其他來源是空的。
+	Revision *int64 `json:"revision,omitempty"`
 
 	// Source 例如 `mftiko.accounts`。
 	Source             string   `json:"source"`
