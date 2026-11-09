@@ -79,6 +79,53 @@ func TestListAccountsPagesDeletedAndKinds(t *testing.T) {
 	}
 }
 
+func TestListScopesTruncatesAndSkipsAPIID(t *testing.T) {
+	var seen string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.URL.RequestURI()
+		if r.URL.Query().Get("api_id") != "" || r.URL.Query().Get("limit") != "1000" {
+			t.Errorf("query %s", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{
+			"freshness":{"unavailable_regions":["eu"]},
+			"items":[{"api_id":9,"uid":1,"since":"2026-11-07T01:02:03.123456789Z"}]
+		}`)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := New(srv.URL+"/api/v1", "tok", srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := c.ListScopes(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(seen, "/scopes") || strings.Contains(seen, "api_id") {
+		t.Fatalf("uri %s", seen)
+	}
+	want := time.Date(2026, 11, 7, 1, 2, 3, 123456000, time.UTC)
+	if page.Next != "" || len(page.Unavailable) != 1 || page.Unavailable[0] != "eu" || len(page.Scopes) != 1 {
+		t.Fatalf("%+v", page)
+	}
+	if page.Scopes[0].APIID != 9 || page.Scopes[0].UID != 1 || !page.Scopes[0].Since.Equal(want) {
+		t.Fatalf("%+v", page.Scopes[0])
+	}
+
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"freshness":{"unavailable_regions":[]},"items":[{"api_id":1,"uid":0,"since":"2026-11-07T00:00:00Z"}]}`)
+	}))
+	t.Cleanup(bad.Close)
+	c, err = New(bad.URL, "tok", bad.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ListScopes(context.Background(), ""); !classify.Is(err, classify.Internal) {
+		t.Fatalf("uid 0: %v", err)
+	}
+}
+
 func TestWritesNeverLeave(t *testing.T) {
 	var seen []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

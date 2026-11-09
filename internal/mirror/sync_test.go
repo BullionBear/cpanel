@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -141,6 +142,10 @@ func TestSyncCopiesPagesKindsAndDeleted(t *testing.T) {
 			t.Errorf("method %s", r.Method)
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/scopes") {
+			io.WriteString(w, `{"freshness":{"unavailable_regions":[]},"items":[]}`)
+			return
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		if calls >= len(script) {
@@ -313,3 +318,7 @@ type pageClient struct {
 }
 
 func (p pageClient) ListAccounts(context.Context, string) (mftiko.Page, error) { return p.next() }
+
+func (p pageClient) ListScopes(context.Context, string) (mftiko.ScopePage, error) {
+	return mftiko.ScopePage{}, nil
+}

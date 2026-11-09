@@ -111,6 +111,15 @@
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 28 },
       "targets": [{ "expr": "cpanel_mirror_sym_tables_behind", "refId": "A" }],
       "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Scope regions unavailable",
+      "datasource": { "type": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 28 },
+      "targets": [{ "expr": "cpanel_mirror_scope_unavailable_regions", "refId": "A" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
     }
   ]
 }

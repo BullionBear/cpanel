@@ -18,14 +18,18 @@ const (
 	// SourceAccounts is mirror.sync_state.source for the account copy.
 	SourceAccounts = "mftiko.accounts"
 
-	// maxPages bounds one mftiko.sync round. The 20-request job budget does not: a partial read
-	// is not a complete copy (C4-D009).
+	// SourceScopes is mirror.sync_state.source for the scope copy.
+	SourceScopes = "mftiko.scopes"
+
+	// maxPages bounds one phase of mftiko.sync. The 20-request job budget does not: a partial
+	// read is not a complete copy (C4-D009). Accounts and scopes each get this many pages.
 	maxPages = 200
 )
 
 // Lister is the part of the mftiko client mftiko.sync uses.
 type Lister interface {
 	ListAccounts(ctx context.Context, cursor string) (mftiko.Page, error)
+	ListScopes(ctx context.Context, cursor string) (mftiko.ScopePage, error)
 }
 
 // MftikoSync is the mftiko.sync handler. A nil client fails the job without calling out, so a
@@ -71,10 +75,14 @@ func MftikoSync(client Lister) worker.Handler {
 			}
 			res.Items = seen
 			if last {
-				return res, nil
+				break
 			}
 			cursor = got.Next
 		}
+		if err := syncScopes(ctx, job, client, &res); err != nil {
+			return res, err
+		}
+		return res, nil
 	}
 }
 

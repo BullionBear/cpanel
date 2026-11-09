@@ -28,6 +28,10 @@ tests:
         values: '700+0x20'
       - series: 'cpanel_mirror_ok_age_seconds{source="sym"}'
         values: '700+0x20'
+      - series: 'cpanel_mirror_ok_age_seconds{source="mftiko.scopes"}'
+        values: '700+0x20'
+      - series: 'cpanel_mirror_scope_unavailable_regions'
+        values: '1+0x40'
       - series: 'cpanel_mirror_ok_age_seconds{source="fresh"}'
         values: '10+0x20'
       - series: 'cpanel_mirror_sym_tables_behind'
@@ -94,6 +98,11 @@ tests:
               summary: a mirror source has not succeeded for 10 minutes
           - exp_labels:
               severity: warning
+              source: mftiko.scopes
+            exp_annotations:
+              summary: a mirror source has not succeeded for 10 minutes
+          - exp_labels:
+              severity: warning
               source: sym
             exp_annotations:
               summary: a mirror source has not succeeded for 10 minutes
@@ -114,3 +123,13 @@ tests:
               severity: warning
             exp_annotations:
               summary: a mirrored account kept its identity and refused a different one
+      - eval_time: 29m
+        alertname: CpanelMftikoScopePartial
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: CpanelMftikoScopePartial
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: mftiko scopes are missing a region
