@@ -146,6 +146,18 @@ func TestOps(t *testing.T) {
 		if src.Regions == nil {
 			t.Fatal("unavailable_regions is null")
 		}
+		if len(got.Unresolved) != 0 {
+			t.Fatalf("unresolved %+v", got.Unresolved)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO mirror.uid_lookup (uid, first_tried_at, last_tried_at, attempts, last_result)
+			VALUES (42, now(), now(), 3, 'not_found')`); err != nil {
+			t.Fatal(err)
+		}
+		got = getJSON[mirrorStatus](t, h, "/mirror/status", authz)
+		if len(got.Unresolved) != 1 || got.Unresolved[0].UID != 42 || got.Unresolved[0].Attempts != 3 || got.Unresolved[0].Result != "not_found" {
+			t.Fatalf("unresolved %+v", got.Unresolved)
+		}
 	})
 
 	t.Run("bad cursor", func(t *testing.T) {
@@ -315,6 +327,11 @@ type mirrorStatus struct {
 		Revision       *int64   `json:"revision"`
 		Remote         *int64   `json:"remote_revision"`
 	} `json:"sources"`
+	Unresolved []struct {
+		UID      int64  `json:"uid"`
+		Attempts int64  `json:"attempts"`
+		Result   string `json:"last_result"`
+	} `json:"unresolved_uids"`
 }
 
 func getJSON[T any](t *testing.T, h http.Handler, path string, header http.Header) T {

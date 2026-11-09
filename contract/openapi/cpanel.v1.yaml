@@ -1,4 +1,5 @@
 # cpanel-api 的對外契約（ARCHITECTURE §4.7）。SPA 不在這份契約裡。
+# 0.6.0 的 mirror 狀態列出查不到的 scope UID（C4-05）。
 # 0.5.0 的 mirror 狀態加上 SYM 表的 revision（C4-02）。
 # 0.4.0 加上 mirror 的同步狀態（C4-01）。
 # 0.3.0 加上 stream、job、job 歷史與恢復暫停（C3-05）。
@@ -6,7 +7,7 @@
 openapi: 3.0.3
 info:
   title: cpanel API
-  version: 0.5.0
+  version: 0.6.0
   description: |
     cpanel-api 的對外契約。
 
@@ -657,6 +658,31 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/MirrorSource'
+        unresolved_uids:
+          type: array
+          description: scope 指到、還沒寫進 `mirror.symbol` 的 UID，以及查過幾次（C4-05）。沒有時是空陣列。
+          items:
+            $ref: '#/components/schemas/UnresolvedUid'
+    UnresolvedUid:
+      type: object
+      additionalProperties: false
+      required: [uid, attempts, last_result]
+      properties:
+        uid:
+          type: integer
+          format: int64
+        attempts:
+          type: integer
+          format: int64
+        last_result:
+          type: string
+          description: "`not_found` 是 SYM 沒有這個 UID。`unparsable` 是 `universal_ticker` 拆不出 venue 與 category。"
+        first_tried_at:
+          type: string
+          format: date-time
+        last_tried_at:
+          type: string
+          format: date-time
     MirrorSource:
       type: object
       additionalProperties: false

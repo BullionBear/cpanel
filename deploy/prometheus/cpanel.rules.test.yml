@@ -32,6 +32,8 @@ tests:
         values: '700+0x20'
       - series: 'cpanel_mirror_scope_unavailable_regions'
         values: '1+0x40'
+      - series: 'cpanel_mirror_scope_uids_unresolved'
+        values: '1+0x40'
       - series: 'cpanel_mirror_ok_age_seconds{source="fresh"}'
         values: '10+0x20'
       - series: 'cpanel_mirror_sym_tables_behind'
@@ -133,3 +135,13 @@ tests:
               severity: warning
             exp_annotations:
               summary: mftiko scopes are missing a region
+      - eval_time: 29m
+        alertname: CpanelScopeUidUnresolved
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: CpanelScopeUidUnresolved
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: a scope UID is not in the symbol mirror

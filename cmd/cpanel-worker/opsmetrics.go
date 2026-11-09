@@ -16,18 +16,19 @@ type opsCollector struct {
 	db  *pgxpool.Pool
 	log zerolog.Logger
 
-	lag       *prometheus.Desc
-	failures  *prometheus.Desc
-	paused    *prometheus.Desc
-	egress    *prometheus.Desc
-	jobs      *prometheus.Desc
-	oldest    *prometheus.Desc
-	runs      *prometheus.Desc
-	okAge     *prometheus.Desc
-	rows      *prometheus.Desc
-	conflicts *prometheus.Desc
-	behind    *prometheus.Desc
-	partial   *prometheus.Desc
+	lag        *prometheus.Desc
+	failures   *prometheus.Desc
+	paused     *prometheus.Desc
+	egress     *prometheus.Desc
+	jobs       *prometheus.Desc
+	oldest     *prometheus.Desc
+	runs       *prometheus.Desc
+	okAge      *prometheus.Desc
+	rows       *prometheus.Desc
+	conflicts  *prometheus.Desc
+	behind     *prometheus.Desc
+	partial    *prometheus.Desc
+	unresolved *prometheus.Desc
 }
 
 func newOpsCollector(db *pgxpool.Pool, log zerolog.Logger) *opsCollector {
@@ -82,6 +83,10 @@ func newOpsCollector(db *pgxpool.Pool, log zerolog.Logger) *opsCollector {
 			"cpanel_mirror_scope_unavailable_regions",
 			"Regions mftiko omitted from the latest finished scope read.",
 			nil, nil),
+		unresolved: prometheus.NewDesc(
+			"cpanel_mirror_scope_uids_unresolved",
+			"Scope UIDs that are not in the symbol mirror.",
+			nil, nil),
 	}
 }
 
@@ -98,6 +103,7 @@ func (c *opsCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.conflicts
 	ch <- c.behind
 	ch <- c.partial
+	ch <- c.unresolved
 }
 
 func (c *opsCollector) Collect(ch chan<- prometheus.Metric) {
@@ -237,6 +243,16 @@ func (c *opsCollector) collect(ctx context.Context, ch chan<- prometheus.Metric)
 		return err
 	}
 	ch <- prometheus.MustNewConstMetric(c.partial, prometheus.GaugeValue, float64(partial))
+
+	var unresolved int
+	if err := c.db.QueryRow(ctx, `
+		SELECT count(DISTINCT s.uid)
+		FROM mirror.scope s
+		LEFT JOIN mirror.symbol y ON y.uid = s.uid
+		WHERE y.uid IS NULL`).Scan(&unresolved); err != nil {
+		return err
+	}
+	ch <- prometheus.MustNewConstMetric(c.unresolved, prometheus.GaugeValue, float64(unresolved))
 
 	var conflicts int
 	if err := c.db.QueryRow(ctx, `SELECT count(*) FROM mirror.account WHERE identity_conflict IS NOT NULL`).Scan(&conflicts); err != nil {

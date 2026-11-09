@@ -140,9 +140,12 @@ func TestOpsMetrics(t *testing.T) {
 	if got := gauge(t, fams, "cpanel_mirror_scope_unavailable_regions", nil); got != 0 {
 		t.Fatalf("partial %v", got)
 	}
+	if got := gauge(t, fams, "cpanel_mirror_scope_uids_unresolved", nil); got != 0 {
+		t.Fatalf("unresolved %v", got)
+	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO mirror.scope (api_id, uid, since, first_seen_at, last_seen_at)
-		VALUES (9, 1, '2026-11-07T01:02:03.123456Z', now(), now())`); err != nil {
+		VALUES (9, 99, '2026-11-07T01:02:03.123456Z', now(), now())`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
@@ -159,6 +162,22 @@ func TestOpsMetrics(t *testing.T) {
 	}
 	if got := gauge(t, fams, "cpanel_mirror_scope_unavailable_regions", nil); got != 2 {
 		t.Fatalf("partial %v", got)
+	}
+	if got := gauge(t, fams, "cpanel_mirror_scope_uids_unresolved", nil); got != 1 {
+		t.Fatalf("unresolved %v", got)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO mirror.symbol (
+			uid, venue, category, exch_ticker, universal_ticker, base, quote, status, active, first_seen_at, last_seen_at)
+		VALUES (99, 'BinanceUM', 'Perp', 'BTCUSDT', 'BinanceUM_Perp_BTCUSDT', 'BTC', 'USDT', 'TRADING', true, now(), now())`); err != nil {
+		t.Fatal(err)
+	}
+	fams, err = reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gauge(t, fams, "cpanel_mirror_scope_uids_unresolved", nil); got != 0 {
+		t.Fatalf("unresolved after fill %v", got)
 	}
 }
 

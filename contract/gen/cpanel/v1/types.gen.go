@@ -221,6 +221,9 @@ type MirrorSource struct {
 // MirrorStatus defines model for MirrorStatus.
 type MirrorStatus struct {
 	Sources []MirrorSource `json:"sources"`
+
+	// UnresolvedUids scope 指到、還沒寫進 `mirror.symbol` 的 UID，以及查過幾次（C4-05）。沒有時是空陣列。
+	UnresolvedUids *[]UnresolvedUid `json:"unresolved_uids,omitempty"`
 }
 
 // Problem RFC 9457。`code` 是給程式判斷的穩定值。
@@ -284,6 +287,17 @@ type TokenCreated struct {
 
 	// Token 明文只出現這一次。
 	Token string `json:"token"`
+}
+
+// UnresolvedUid defines model for UnresolvedUid.
+type UnresolvedUid struct {
+	Attempts     int64      `json:"attempts"`
+	FirstTriedAt *time.Time `json:"first_tried_at,omitempty"`
+
+	// LastResult `not_found` 是 SYM 沒有這個 UID。`unparsable` 是 `universal_ticker` 拆不出 venue 與 category。
+	LastResult  string     `json:"last_result"`
+	LastTriedAt *time.Time `json:"last_tried_at,omitempty"`
+	Uid         int64      `json:"uid"`
 }
 
 // Kind defines model for Kind.
