@@ -262,6 +262,7 @@
 					<th>remote</th>
 					<th>錯誤類別</th>
 					<th>錯誤</th>
+					<th>不可用 region</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -275,6 +276,7 @@
 						<td>{source.remote_revision ?? ''}</td>
 						<td>{source.last_error_class ?? ''}</td>
 						<td class="wrap">{source.last_error ?? ''}</td>
+						<td>{source.unavailable_regions.join(', ')}</td>
 					</tr>
 				{/each}
 			</tbody>

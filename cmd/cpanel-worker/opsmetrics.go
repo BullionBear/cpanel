@@ -27,6 +27,7 @@ type opsCollector struct {
 	rows      *prometheus.Desc
 	conflicts *prometheus.Desc
 	behind    *prometheus.Desc
+	partial   *prometheus.Desc
 }
 
 func newOpsCollector(db *pgxpool.Pool, log zerolog.Logger) *opsCollector {
@@ -77,6 +78,10 @@ func newOpsCollector(db *pgxpool.Pool, log zerolog.Logger) *opsCollector {
 			"cpanel_mirror_sym_tables_behind",
 			"SYM tables whose loaded revision is missing or behind the remote revision.",
 			nil, nil),
+		partial: prometheus.NewDesc(
+			"cpanel_mirror_scope_unavailable_regions",
+			"Regions mftiko omitted from the latest finished scope read.",
+			nil, nil),
 	}
 }
 
@@ -92,6 +97,7 @@ func (c *opsCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.rows
 	ch <- c.conflicts
 	ch <- c.behind
+	ch <- c.partial
 }
 
 func (c *opsCollector) Collect(ch chan<- prometheus.Metric) {
@@ -209,15 +215,28 @@ func (c *opsCollector) collect(ctx context.Context, ch chan<- prometheus.Metric)
 		return err
 	}
 
-	var accounts, symbols int
+	var accounts, symbols, scopes int
 	if err := c.db.QueryRow(ctx, `SELECT count(*) FROM mirror.account`).Scan(&accounts); err != nil {
 		return err
 	}
 	if err := c.db.QueryRow(ctx, `SELECT count(*) FROM mirror.symbol`).Scan(&symbols); err != nil {
 		return err
 	}
+	if err := c.db.QueryRow(ctx, `SELECT count(*) FROM mirror.scope`).Scan(&scopes); err != nil {
+		return err
+	}
 	ch <- prometheus.MustNewConstMetric(c.rows, prometheus.GaugeValue, float64(accounts), "account")
 	ch <- prometheus.MustNewConstMetric(c.rows, prometheus.GaugeValue, float64(symbols), "symbol")
+	ch <- prometheus.MustNewConstMetric(c.rows, prometheus.GaugeValue, float64(scopes), "scope")
+
+	var partial int
+	if err := c.db.QueryRow(ctx, `
+		SELECT COALESCE((
+			SELECT cardinality(unavailable_regions) FROM mirror.sync_state WHERE source = 'mftiko.scopes'
+		), 0)`).Scan(&partial); err != nil {
+		return err
+	}
+	ch <- prometheus.MustNewConstMetric(c.partial, prometheus.GaugeValue, float64(partial))
 
 	var conflicts int
 	if err := c.db.QueryRow(ctx, `SELECT count(*) FROM mirror.account WHERE identity_conflict IS NOT NULL`).Scan(&conflicts); err != nil {

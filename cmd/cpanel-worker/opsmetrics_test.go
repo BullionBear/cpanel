@@ -134,6 +134,32 @@ func TestOpsMetrics(t *testing.T) {
 	if got := gauge(t, fams, "cpanel_mirror_sym_tables_behind", nil); got != 1 {
 		t.Fatalf("tables behind %v", got)
 	}
+	if got := gauge(t, fams, "cpanel_mirror_rows", map[string]string{"table": "scope"}); got != 0 {
+		t.Fatalf("scope rows %v", got)
+	}
+	if got := gauge(t, fams, "cpanel_mirror_scope_unavailable_regions", nil); got != 0 {
+		t.Fatalf("partial %v", got)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO mirror.scope (api_id, uid, since, first_seen_at, last_seen_at)
+		VALUES (9, 1, '2026-11-07T01:02:03.123456Z', now(), now())`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO mirror.sync_state (source, unavailable_regions)
+		VALUES ('mftiko.scopes', ARRAY['eu','ap'])`); err != nil {
+		t.Fatal(err)
+	}
+	fams, err = reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gauge(t, fams, "cpanel_mirror_rows", map[string]string{"table": "scope"}); got != 1 {
+		t.Fatalf("scope rows %v", got)
+	}
+	if got := gauge(t, fams, "cpanel_mirror_scope_unavailable_regions", nil); got != 2 {
+		t.Fatalf("partial %v", got)
+	}
 }
 
 func gauge(t *testing.T, fams []*dto.MetricFamily, name string, labels map[string]string) float64 {

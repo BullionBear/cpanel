@@ -36,6 +36,25 @@ type Page struct {
 	Next     string
 }
 
+// maxUID is the SYM instrument UID range (E02-D003).
+const maxUID int64 = 4294967295
+
+// Scope is one account's start time on one instrument. Since is truncated down to a microsecond,
+// which is what Postgres stores (C4-D010).
+type Scope struct {
+	APIID int64
+	UID   int64
+	Since time.Time
+}
+
+// ScopePage is one page of ListScopes. Next is empty on the last page. Unavailable is that page's
+// freshness.unavailable_regions; a missing region means its scopes are absent from this page.
+type ScopePage struct {
+	Scopes      []Scope
+	Next        string
+	Unavailable []string
+}
+
 // Client calls mftiko-api. It exports only reads. Its transport refuses every method but GET and
 // HEAD before the request is sent: the PMS token can write, and mftiko has no read-only role (I2).
 type Client struct {
@@ -114,6 +133,56 @@ func (c *Client) ListAccounts(ctx context.Context, cursor string) (Page, error) 
 	if resp.JSON200.NextCursor != nil {
 		out.Next = *resp.JSON200.NextCursor
 	}
+	return out, nil
+}
+
+// ListScopes reads one page of every account's scopes. It does not send api_id. cursor empty
+// starts at the first page. The caller follows Next and unions Unavailable; a sync does not keep
+// the cursor across jobs.
+func (c *Client) ListScopes(ctx context.Context, cursor string) (ScopePage, error) {
+	limit := apiv1.Limit(pageSize)
+	params := &apiv1.ListScopesParams{Limit: &limit}
+	if cursor != "" {
+		params.Cursor = &cursor
+	}
+	resp, err := c.api.ListScopesWithResponse(ctx, params)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ScopePage{}, ctx.Err()
+		}
+		return ScopePage{}, &classify.ClassifiedError{Class: classify.Unavailable, Detail: err.Error()}
+	}
+	if resp.StatusCode() < 200 || resp.StatusCode() >= 300 {
+		retry := ""
+		if resp.HTTPResponse != nil {
+			retry = resp.HTTPResponse.Header.Get("Retry-After")
+		}
+		return ScopePage{}, classifyStatus(resp.StatusCode(), retry, resp.Body)
+	}
+	if resp.JSON200 == nil {
+		return ScopePage{}, &classify.ClassifiedError{Class: classify.Internal, Status: resp.StatusCode(), Detail: "scope list had no JSON body"}
+	}
+	out := ScopePage{Scopes: make([]Scope, 0, len(resp.JSON200.Items))}
+	for _, item := range resp.JSON200.Items {
+		if item.ApiId < 1 || item.ApiId > maxAPIID {
+			return ScopePage{}, &classify.ClassifiedError{Class: classify.Internal, Detail: fmt.Sprintf("api_id %d is outside 1..2^53-1", item.ApiId)}
+		}
+		if item.Uid < 1 || item.Uid > maxUID {
+			return ScopePage{}, &classify.ClassifiedError{Class: classify.Internal, Detail: fmt.Sprintf("uid %d is outside 1..2^32-1", item.Uid)}
+		}
+		if item.Since.IsZero() {
+			return ScopePage{}, &classify.ClassifiedError{Class: classify.Internal, Detail: "scope since is missing"}
+		}
+		out.Scopes = append(out.Scopes, Scope{
+			APIID: item.ApiId,
+			UID:   item.Uid,
+			Since: item.Since.UTC().Truncate(time.Microsecond),
+		})
+	}
+	if resp.JSON200.NextCursor != nil {
+		out.Next = *resp.JSON200.NextCursor
+	}
+	out.Unavailable = append([]string(nil), resp.JSON200.Freshness.UnavailableRegions...)
 	return out, nil
 }
 

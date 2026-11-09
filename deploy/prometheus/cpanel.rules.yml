@@ -66,3 +66,10 @@ groups:
           severity: warning
         annotations:
           summary: a SYM table is behind its remote revision
+      - alert: CpanelMftikoScopePartial
+        expr: cpanel_mirror_scope_unavailable_regions > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: mftiko scopes are missing a region
