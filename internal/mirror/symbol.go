@@ -21,6 +21,11 @@ const (
 
 	// maxInactive is how many deactivated rows one round asks SYM to finish (C4-D011).
 	maxInactive = 100
+
+	// maxScopeUIDs is how many scope UIDs missing from mirror.symbol one round asks SYM
+	// about. Never-tried UIDs sort first, so a full table of misses cannot starve a new one
+	// (C4-D012).
+	maxScopeUIDs = 200
 )
 
 // Catalog is the part of the SYM client sym.sync uses.
@@ -77,6 +82,9 @@ func SymSync(client Catalog) worker.Handler {
 			}
 		}
 		if err := fillInactive(ctx, job, client, &res); err != nil {
+			return res, err
+		}
+		if err := fillScopeUIDs(ctx, job, client, &res); err != nil {
 			return res, err
 		}
 		if err := job.CommitPage(ctx, func(tx pgx.Tx) error { return markSymCaughtUp(ctx, tx) }, nil); err != nil {

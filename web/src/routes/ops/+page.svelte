@@ -10,6 +10,7 @@
 		type JobStatus,
 		type MirrorSource,
 		type Stream,
+		type UnresolvedUid,
 		type StreamStatus
 	} from '#lib/api.ts';
 
@@ -49,6 +50,7 @@
 	let jobs = $state<Job[]>([]);
 	let runs = $state<JobRun[]>([]);
 	let mirrors = $state<MirrorSource[]>([]);
+	let unresolved = $state<UnresolvedUid[]>([]);
 	let nextCursor = $state<string | null>(null);
 	let error = $state<string | null>(null);
 	let busy = $state(false);
@@ -119,6 +121,7 @@
 			jobs = jobResult.data;
 			runs = runResult.data.runs;
 			mirrors = mirrorResult.data.sources;
+			unresolved = mirrorResult.data.unresolved_uids ?? [];
 			nextCursor = runResult.data.next_cursor ?? null;
 		} catch {
 			error = '連不到 API';
@@ -277,6 +280,32 @@
 						<td>{source.last_error_class ?? ''}</td>
 						<td class="wrap">{source.last_error ?? ''}</td>
 						<td>{source.unavailable_regions.join(', ')}</td>
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+	</div>
+{/if}
+
+<h3>查不到的 UID</h3>
+{#if unresolved.length === 0}
+	<p class="muted">沒有。</p>
+{:else}
+	<div class="scroll">
+		<table>
+			<thead>
+				<tr>
+					<th>UID</th>
+					<th>嘗試次數</th>
+					<th>結果</th>
+				</tr>
+			</thead>
+			<tbody>
+				{#each unresolved as row (row.uid)}
+					<tr>
+						<td>{row.uid}</td>
+						<td>{row.attempts}</td>
+						<td>{row.last_result}</td>
 					</tr>
 				{/each}
 			</tbody>

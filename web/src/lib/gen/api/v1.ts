@@ -366,6 +366,20 @@ export interface components {
         JobRunStatus: "succeeded" | "failed" | "cancelled";
         MirrorStatus: {
             sources: components["schemas"]["MirrorSource"][];
+            /** @description scope 指到、還沒寫進 `mirror.symbol` 的 UID，以及查過幾次（C4-05）。沒有時是空陣列。 */
+            unresolved_uids?: components["schemas"]["UnresolvedUid"][];
+        };
+        UnresolvedUid: {
+            /** Format: int64 */
+            uid: number;
+            /** Format: int64 */
+            attempts: number;
+            /** @description `not_found` 是 SYM 沒有這個 UID。`unparsable` 是 `universal_ticker` 拆不出 venue 與 category。 */
+            last_result: string;
+            /** Format: date-time */
+            first_tried_at?: string;
+            /** Format: date-time */
+            last_tried_at?: string;
         };
         MirrorSource: {
             /** @description 例如 `mftiko.accounts`。 */

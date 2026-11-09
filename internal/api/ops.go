@@ -66,6 +66,26 @@ func (s *server) GetMirrorStatus(ctx context.Context, _ cpanelv1.GetMirrorStatus
 	if err := rows.Err(); err != nil {
 		return cpanelv1.GetMirrorStatusdefaultApplicationProblemPlusJSONResponse{Body: s.opsProblem(err), StatusCode: http.StatusServiceUnavailable}, nil
 	}
+	lookups, err := s.pool.Query(ctx, `
+		SELECT uid, attempts, last_result, first_tried_at, last_tried_at
+		FROM mirror.uid_lookup
+		ORDER BY attempts DESC, uid`)
+	if err != nil {
+		return cpanelv1.GetMirrorStatusdefaultApplicationProblemPlusJSONResponse{Body: s.opsProblem(err), StatusCode: http.StatusServiceUnavailable}, nil
+	}
+	defer lookups.Close()
+	found := []cpanelv1.UnresolvedUid{}
+	for lookups.Next() {
+		var row cpanelv1.UnresolvedUid
+		if err := lookups.Scan(&row.Uid, &row.Attempts, &row.LastResult, &row.FirstTriedAt, &row.LastTriedAt); err != nil {
+			return cpanelv1.GetMirrorStatusdefaultApplicationProblemPlusJSONResponse{Body: s.opsProblem(err), StatusCode: http.StatusServiceUnavailable}, nil
+		}
+		found = append(found, row)
+	}
+	out.UnresolvedUids = &found
+	if err := lookups.Err(); err != nil {
+		return cpanelv1.GetMirrorStatusdefaultApplicationProblemPlusJSONResponse{Body: s.opsProblem(err), StatusCode: http.StatusServiceUnavailable}, nil
+	}
 	return cpanelv1.GetMirrorStatus200JSONResponse(out), nil
 }
 
