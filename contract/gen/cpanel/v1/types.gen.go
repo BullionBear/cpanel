@@ -40,6 +40,27 @@ func (e ErrorClass) Valid() bool {
 	}
 }
 
+// Defines values for Exchange.
+const (
+	Binance Exchange = "binance"
+	Bybit   Exchange = "bybit"
+	Okx     Exchange = "okx"
+)
+
+// Valid indicates whether the value is a known member of the Exchange enum.
+func (e Exchange) Valid() bool {
+	switch e {
+	case Binance:
+		return true
+	case Bybit:
+		return true
+	case Okx:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for JobRunStatus.
 const (
 	Cancelled JobRunStatus = "cancelled"
@@ -120,6 +141,55 @@ func (e StreamStatus) Valid() bool {
 
 // ErrorClass 錯誤類別（C3-04）。
 type ErrorClass string
+
+// Exchange defines model for Exchange.
+type Exchange string
+
+// ExchangeAccount defines model for ExchangeAccount.
+type ExchangeAccount struct {
+	DeletedAt      *time.Time            `json:"deleted_at"`
+	ExchAccountUid string                `json:"exch_account_uid"`
+	Exchange       Exchange              `json:"exchange"`
+	Id             int64                 `json:"id"`
+	Kinds          []ExchangeAccountKind `json:"kinds"`
+	Label          string                `json:"label"`
+	Revision       int64                 `json:"revision"`
+}
+
+// ExchangeAccountCreate defines model for ExchangeAccountCreate.
+type ExchangeAccountCreate struct {
+	ExchAccountUid string   `json:"exch_account_uid"`
+	Exchange       Exchange `json:"exchange"`
+
+	// Kinds 省略或空陣列時，Bybit、OKX 自動啟用唯一的 in_scope kind；Binance 不啟用任何 kind。
+	Kinds *[]string `json:"kinds,omitempty"`
+	Label string    `json:"label"`
+}
+
+// ExchangeAccountKind defines model for ExchangeAccountKind.
+type ExchangeAccountKind struct {
+	// DisabledAt 有值表示這個 kind 已停用。列還在。
+	DisabledAt *time.Time `json:"disabled_at"`
+	Kind       string     `json:"kind"`
+
+	// LastError C5-03 才寫。這張票留空，再啟用時清掉。
+	LastError *string `json:"last_error"`
+
+	// VerifiedAt C5-03 才寫。這張票留空，再啟用時清掉。
+	VerifiedAt *time.Time `json:"verified_at"`
+}
+
+// ExchangeAccountKindEnable defines model for ExchangeAccountKindEnable.
+type ExchangeAccountKindEnable struct {
+	Kind string `json:"kind"`
+}
+
+// ExchangeAccountUpdate defines model for ExchangeAccountUpdate.
+type ExchangeAccountUpdate struct {
+	// ExchAccountUid 與現值不同則整筆回 400。沒有改 uid 的 API。
+	ExchAccountUid *string `json:"exch_account_uid,omitempty"`
+	Label          *string `json:"label,omitempty"`
+}
 
 // Health defines model for Health.
 type Health struct {
@@ -300,6 +370,9 @@ type UnresolvedUid struct {
 	Uid         int64      `json:"uid"`
 }
 
+// ExchangeAccountId defines model for ExchangeAccountId.
+type ExchangeAccountId = int64
+
 // Kind defines model for Kind.
 type Kind = string
 
@@ -380,6 +453,15 @@ type ListStreamsParams struct {
 	// Limit 最多幾筆。預設 200，最大 500。
 	Limit *ListLimit `form:"limit,omitempty" json:"limit,omitempty"`
 }
+
+// CreateExchangeAccountJSONRequestBody defines body for CreateExchangeAccount for application/json ContentType.
+type CreateExchangeAccountJSONRequestBody = ExchangeAccountCreate
+
+// UpdateExchangeAccountJSONRequestBody defines body for UpdateExchangeAccount for application/json ContentType.
+type UpdateExchangeAccountJSONRequestBody = ExchangeAccountUpdate
+
+// EnableExchangeAccountKindJSONRequestBody defines body for EnableExchangeAccountKind for application/json ContentType.
+type EnableExchangeAccountKindJSONRequestBody = ExchangeAccountKindEnable
 
 // CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
 type CreateTokenJSONRequestBody = TokenCreate

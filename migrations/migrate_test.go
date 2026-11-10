@@ -239,6 +239,7 @@ var ownedTables = map[int][]string{
 	5: {"mirror.symbol"},
 	6: {"mirror.scope"},
 	7: {"mirror.uid_lookup"},
+	8: {"pms.account_kind", "pms.exchange_account", "pms.exchange_account_kind"},
 }
 
 func relationExists(t *testing.T, ctx context.Context, conn *pgx.Conn, name string) bool {

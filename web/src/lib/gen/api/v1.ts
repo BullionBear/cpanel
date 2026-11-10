@@ -293,6 +293,119 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/exchange-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 列出未刪除的交易所帳號
+         * @description 軟刪除的帳號不在這份清單裡。每一筆帶上 kind 列，含已停用的。
+         *     `verified_at` 與 `last_error` 這張票留空。不 join `api_id`，也沒有 unmatched。
+         */
+        get: operations["listExchangeAccounts"];
+        put?: never;
+        /**
+         * 建立交易所帳號
+         * @description `exch_account_uid` 與 `label` 必填。同一對 `(exchange, exch_account_uid)` 再建立回 409，
+         *     軟刪除之後也一樣。Bybit、OKX 沒帶 kind 時自動啟用該所唯一的 `in_scope` kind。
+         *     Binance 不自動啟用；`kinds` 裡每一項都要屬於這個 exchange 且 `in_scope`。
+         *     cookie 登入的請求要帶對的 `Origin`。
+         */
+        post: operations["createExchangeAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/exchange-accounts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description pms.exchange_account.id。 */
+                id: components["parameters"]["ExchangeAccountId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * 讀取一個交易所帳號
+         * @description 軟刪除的帳號仍用這個 id 查得到。形狀與列表的一筆相同。
+         */
+        get: operations["getExchangeAccount"];
+        put?: never;
+        post?: never;
+        /**
+         * 軟刪除交易所帳號
+         * @description 寫入 `deleted_at`。列還在，`(exchange, exch_account_uid)` 仍被佔住。`revision` 不加。
+         *     已經刪除的再刪一次回同一筆，不再寫 audit。cookie 登入的請求要帶對的 `Origin`。
+         */
+        delete: operations["deleteExchangeAccount"];
+        options?: never;
+        head?: never;
+        /**
+         * 修改帳號的 label
+         * @description 沒有改 uid 的 API。body 帶了 `exch_account_uid` 且與現值不同時回 400，`revision` 不加。
+         *     label 有變才讓 `revision` 加 1，並寫 `meta.audit`。已軟刪除的帳號回 409。
+         *     cookie 登入的請求要帶對的 `Origin`。
+         */
+        patch: operations["updateExchangeAccount"];
+        trace?: never;
+    };
+    "/exchange-accounts/{id}/kinds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description pms.exchange_account.id。 */
+                id: components["parameters"]["ExchangeAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 啟用一個 kind
+         * @description kind 必須屬於帳號的 exchange，且 `in_scope`。否則 400，不新增列。
+         *     新列，或把停用列的 `disabled_at`、`verified_at`、`last_error` 清掉，`revision` 加 1。
+         *     本來就啟用則原樣回傳，不加 revision、不寫 audit。已軟刪除的帳號回 409。
+         *     cookie 登入的請求要帶對的 `Origin`。
+         */
+        post: operations["enableExchangeAccountKind"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/exchange-accounts/{id}/kinds/{kind}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description pms.exchange_account.id。 */
+                id: components["parameters"]["ExchangeAccountId"];
+                kind: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 停用一個 kind
+         * @description 只寫 `disabled_at`，列留著。本來就停用則不加 revision、不寫 audit。
+         *     沒有這列回 404。已軟刪除的帳號回 409。cookie 登入的請求要帶對的 `Origin`。
+         */
+        post: operations["disableExchangeAccountKind"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -476,6 +589,50 @@ export interface components {
             /** @description 還有下一頁時才有。原樣傳回 `cursor`。 */
             next_cursor?: string;
         };
+        /** @enum {string} */
+        Exchange: "binance" | "bybit" | "okx";
+        ExchangeAccountKind: {
+            kind: string;
+            /**
+             * Format: date-time
+             * @description 有值表示這個 kind 已停用。列還在。
+             */
+            disabled_at: string | null;
+            /**
+             * Format: date-time
+             * @description C5-03 才寫。這張票留空，再啟用時清掉。
+             */
+            verified_at: string | null;
+            /** @description C5-03 才寫。這張票留空，再啟用時清掉。 */
+            last_error: string | null;
+        };
+        ExchangeAccount: {
+            /** Format: int64 */
+            id: number;
+            exchange: components["schemas"]["Exchange"];
+            exch_account_uid: string;
+            label: string;
+            /** Format: int64 */
+            revision: number;
+            /** Format: date-time */
+            deleted_at: string | null;
+            kinds: components["schemas"]["ExchangeAccountKind"][];
+        };
+        ExchangeAccountCreate: {
+            exchange: components["schemas"]["Exchange"];
+            exch_account_uid: string;
+            label: string;
+            /** @description 省略或空陣列時，Bybit、OKX 自動啟用唯一的 in_scope kind；Binance 不啟用任何 kind。 */
+            kinds?: string[];
+        };
+        ExchangeAccountUpdate: {
+            label?: string;
+            /** @description 與現值不同則整筆回 400。沒有改 uid 的 API。 */
+            exch_account_uid?: string;
+        };
+        ExchangeAccountKindEnable: {
+            kind: string;
+        };
     };
     responses: {
         /** @description 未預期的錯誤。`code` 是 `internal`、`timeout` 或 `method_not_allowed`。 */
@@ -506,6 +663,8 @@ export interface components {
         ErrorClass: components["schemas"]["ErrorClass"];
         /** @description 最多幾筆。預設 200，最大 500。 */
         ListLimit: number;
+        /** @description pms.exchange_account.id。 */
+        ExchangeAccountId: number;
     };
     requestBodies: never;
     headers: never;
@@ -987,6 +1146,341 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listExchangeAccounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 未刪除的帳號，依 id 排序。 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeAccount"][];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    createExchangeAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExchangeAccountCreate"];
+            };
+        };
+        responses: {
+            /** @description 已建立。`revision` 是 1。 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeAccount"];
+                };
+            };
+            /** @description 欄位不完整，或 kind 不屬於這個交易所、或不在範圍內。`code` 是 `bad_request`。沒有新列。 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Origin 不符。`code` 是 `forbidden`。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description 這一對 `(exchange, exch_account_uid)` 已經存在，含已軟刪除的。`code` 是 `conflict`。 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getExchangeAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description pms.exchange_account.id。 */
+                id: components["parameters"]["ExchangeAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 這個帳號。 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeAccount"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description 沒有這個帳號。`code` 是 `not_found`。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    deleteExchangeAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description pms.exchange_account.id。 */
+                id: components["parameters"]["ExchangeAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 刪除後的帳號。 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeAccount"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Origin 不符。`code` 是 `forbidden`。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description 沒有這個帳號。`code` 是 `not_found`。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    updateExchangeAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description pms.exchange_account.id。 */
+                id: components["parameters"]["ExchangeAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExchangeAccountUpdate"];
+            };
+        };
+        responses: {
+            /** @description 更新後的帳號。沒有變更時 `revision` 不變。 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeAccount"];
+                };
+            };
+            /** @description uid 與現值不同，或 label 是空的。`code` 是 `bad_request`。 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Origin 不符。`code` 是 `forbidden`。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description 沒有這個帳號。`code` 是 `not_found`。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description 帳號已軟刪除。`code` 是 `conflict`。 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    enableExchangeAccountKind: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description pms.exchange_account.id。 */
+                id: components["parameters"]["ExchangeAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExchangeAccountKindEnable"];
+            };
+        };
+        responses: {
+            /** @description 這個帳號的目前狀態。 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeAccount"];
+                };
+            };
+            /** @description kind 不存在、不屬於這個交易所，或 `in_scope` 是 false。`code` 是 `bad_request`。 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Origin 不符。`code` 是 `forbidden`。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description 沒有這個帳號。`code` 是 `not_found`。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description 帳號已軟刪除。`code` 是 `conflict`。 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    disableExchangeAccountKind: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description pms.exchange_account.id。 */
+                id: components["parameters"]["ExchangeAccountId"];
+                kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 這個帳號的目前狀態。 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeAccount"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Origin 不符。`code` 是 `forbidden`。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description 沒有這個帳號，或這個 kind 沒有列。`code` 是 `not_found`。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description 帳號已軟刪除。`code` 是 `conflict`。 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             default: components["responses"]["Problem"];
         };
     };

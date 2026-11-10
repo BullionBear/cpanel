@@ -27,6 +27,27 @@ type ServerInterface interface {
 	// Logout 登出
 	// (POST /auth/logout)
 	Logout(w http.ResponseWriter, r *http.Request)
+	// ListExchangeAccounts 列出未刪除的交易所帳號
+	// (GET /exchange-accounts)
+	ListExchangeAccounts(w http.ResponseWriter, r *http.Request)
+	// CreateExchangeAccount 建立交易所帳號
+	// (POST /exchange-accounts)
+	CreateExchangeAccount(w http.ResponseWriter, r *http.Request)
+	// DeleteExchangeAccount 軟刪除交易所帳號
+	// (DELETE /exchange-accounts/{id})
+	DeleteExchangeAccount(w http.ResponseWriter, r *http.Request, id ExchangeAccountId)
+	// GetExchangeAccount 讀取一個交易所帳號
+	// (GET /exchange-accounts/{id})
+	GetExchangeAccount(w http.ResponseWriter, r *http.Request, id ExchangeAccountId)
+	// UpdateExchangeAccount 修改帳號的 label
+	// (PATCH /exchange-accounts/{id})
+	UpdateExchangeAccount(w http.ResponseWriter, r *http.Request, id ExchangeAccountId)
+	// EnableExchangeAccountKind 啟用一個 kind
+	// (POST /exchange-accounts/{id}/kinds)
+	EnableExchangeAccountKind(w http.ResponseWriter, r *http.Request, id ExchangeAccountId)
+	// DisableExchangeAccountKind 停用一個 kind
+	// (POST /exchange-accounts/{id}/kinds/{kind}/disable)
+	DisableExchangeAccountKind(w http.ResponseWriter, r *http.Request, id ExchangeAccountId, kind string)
 	// GetHealthz 行程是否在跑
 	// (GET /healthz)
 	GetHealthz(w http.ResponseWriter, r *http.Request)
@@ -139,6 +160,173 @@ func (siw *ServerInterfaceWrapper) Logout(w http.ResponseWriter, r *http.Request
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.Logout(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListExchangeAccounts operation middleware
+func (siw *ServerInterfaceWrapper) ListExchangeAccounts(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListExchangeAccounts(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateExchangeAccount operation middleware
+func (siw *ServerInterfaceWrapper) CreateExchangeAccount(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateExchangeAccount(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteExchangeAccount operation middleware
+func (siw *ServerInterfaceWrapper) DeleteExchangeAccount(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ExchangeAccountId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteExchangeAccount(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetExchangeAccount operation middleware
+func (siw *ServerInterfaceWrapper) GetExchangeAccount(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ExchangeAccountId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetExchangeAccount(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateExchangeAccount operation middleware
+func (siw *ServerInterfaceWrapper) UpdateExchangeAccount(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ExchangeAccountId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateExchangeAccount(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// EnableExchangeAccountKind operation middleware
+func (siw *ServerInterfaceWrapper) EnableExchangeAccountKind(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ExchangeAccountId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.EnableExchangeAccountKind(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DisableExchangeAccountKind operation middleware
+func (siw *ServerInterfaceWrapper) DisableExchangeAccountKind(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ExchangeAccountId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "kind" -------------
+	var kind string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "kind", r.PathValue("kind"), &kind, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "kind", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DisableExchangeAccountKind(w, r, id, kind)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -727,6 +915,13 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/jobs", wrapper.ListJobs)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/job-runs", wrapper.ListJobRuns)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/mirror/status", wrapper.GetMirrorStatus)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/exchange-accounts", wrapper.ListExchangeAccounts)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/exchange-accounts", wrapper.CreateExchangeAccount)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/exchange-accounts/{id}", wrapper.DeleteExchangeAccount)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/exchange-accounts/{id}", wrapper.GetExchangeAccount)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/exchange-accounts/{id}", wrapper.UpdateExchangeAccount)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/exchange-accounts/{id}/kinds", wrapper.EnableExchangeAccountKind)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/exchange-accounts/{id}/kinds/{kind}/disable", wrapper.DisableExchangeAccountKind)
 
 	return m
 }
@@ -905,6 +1100,631 @@ type LogoutdefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response LogoutdefaultApplicationProblemPlusJSONResponse) VisitLogoutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListExchangeAccountsRequestObject struct {
+}
+
+type ListExchangeAccountsResponseObject interface {
+	VisitListExchangeAccountsResponse(w http.ResponseWriter) error
+}
+
+type ListExchangeAccounts200JSONResponse []ExchangeAccount
+
+func (response ListExchangeAccounts200JSONResponse) VisitListExchangeAccountsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListExchangeAccounts401ApplicationProblemPlusJSONResponse struct {
+	UnauthenticatedApplicationProblemPlusJSONResponse
+}
+
+func (response ListExchangeAccounts401ApplicationProblemPlusJSONResponse) VisitListExchangeAccountsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListExchangeAccountsdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ListExchangeAccountsdefaultApplicationProblemPlusJSONResponse) VisitListExchangeAccountsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateExchangeAccountRequestObject struct {
+	Body *CreateExchangeAccountJSONRequestBody
+}
+
+type CreateExchangeAccountResponseObject interface {
+	VisitCreateExchangeAccountResponse(w http.ResponseWriter) error
+}
+
+type CreateExchangeAccount201JSONResponse ExchangeAccount
+
+func (response CreateExchangeAccount201JSONResponse) VisitCreateExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateExchangeAccount400ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateExchangeAccount400ApplicationProblemPlusJSONResponse) VisitCreateExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateExchangeAccount401ApplicationProblemPlusJSONResponse struct {
+	UnauthenticatedApplicationProblemPlusJSONResponse
+}
+
+func (response CreateExchangeAccount401ApplicationProblemPlusJSONResponse) VisitCreateExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateExchangeAccount403ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateExchangeAccount403ApplicationProblemPlusJSONResponse) VisitCreateExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateExchangeAccount409ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateExchangeAccount409ApplicationProblemPlusJSONResponse) VisitCreateExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateExchangeAccountdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response CreateExchangeAccountdefaultApplicationProblemPlusJSONResponse) VisitCreateExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteExchangeAccountRequestObject struct {
+	Id ExchangeAccountId `json:"id"`
+}
+
+type DeleteExchangeAccountResponseObject interface {
+	VisitDeleteExchangeAccountResponse(w http.ResponseWriter) error
+}
+
+type DeleteExchangeAccount200JSONResponse ExchangeAccount
+
+func (response DeleteExchangeAccount200JSONResponse) VisitDeleteExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteExchangeAccount401ApplicationProblemPlusJSONResponse struct {
+	UnauthenticatedApplicationProblemPlusJSONResponse
+}
+
+func (response DeleteExchangeAccount401ApplicationProblemPlusJSONResponse) VisitDeleteExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteExchangeAccount403ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteExchangeAccount403ApplicationProblemPlusJSONResponse) VisitDeleteExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteExchangeAccount404ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteExchangeAccount404ApplicationProblemPlusJSONResponse) VisitDeleteExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteExchangeAccountdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response DeleteExchangeAccountdefaultApplicationProblemPlusJSONResponse) VisitDeleteExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetExchangeAccountRequestObject struct {
+	Id ExchangeAccountId `json:"id"`
+}
+
+type GetExchangeAccountResponseObject interface {
+	VisitGetExchangeAccountResponse(w http.ResponseWriter) error
+}
+
+type GetExchangeAccount200JSONResponse ExchangeAccount
+
+func (response GetExchangeAccount200JSONResponse) VisitGetExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetExchangeAccount401ApplicationProblemPlusJSONResponse struct {
+	UnauthenticatedApplicationProblemPlusJSONResponse
+}
+
+func (response GetExchangeAccount401ApplicationProblemPlusJSONResponse) VisitGetExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetExchangeAccount404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetExchangeAccount404ApplicationProblemPlusJSONResponse) VisitGetExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetExchangeAccountdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetExchangeAccountdefaultApplicationProblemPlusJSONResponse) VisitGetExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateExchangeAccountRequestObject struct {
+	Id   ExchangeAccountId `json:"id"`
+	Body *UpdateExchangeAccountJSONRequestBody
+}
+
+type UpdateExchangeAccountResponseObject interface {
+	VisitUpdateExchangeAccountResponse(w http.ResponseWriter) error
+}
+
+type UpdateExchangeAccount200JSONResponse ExchangeAccount
+
+func (response UpdateExchangeAccount200JSONResponse) VisitUpdateExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateExchangeAccount400ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateExchangeAccount400ApplicationProblemPlusJSONResponse) VisitUpdateExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateExchangeAccount401ApplicationProblemPlusJSONResponse struct {
+	UnauthenticatedApplicationProblemPlusJSONResponse
+}
+
+func (response UpdateExchangeAccount401ApplicationProblemPlusJSONResponse) VisitUpdateExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateExchangeAccount403ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateExchangeAccount403ApplicationProblemPlusJSONResponse) VisitUpdateExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateExchangeAccount404ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateExchangeAccount404ApplicationProblemPlusJSONResponse) VisitUpdateExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateExchangeAccount409ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateExchangeAccount409ApplicationProblemPlusJSONResponse) VisitUpdateExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateExchangeAccountdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response UpdateExchangeAccountdefaultApplicationProblemPlusJSONResponse) VisitUpdateExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type EnableExchangeAccountKindRequestObject struct {
+	Id   ExchangeAccountId `json:"id"`
+	Body *EnableExchangeAccountKindJSONRequestBody
+}
+
+type EnableExchangeAccountKindResponseObject interface {
+	VisitEnableExchangeAccountKindResponse(w http.ResponseWriter) error
+}
+
+type EnableExchangeAccountKind200JSONResponse ExchangeAccount
+
+func (response EnableExchangeAccountKind200JSONResponse) VisitEnableExchangeAccountKindResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type EnableExchangeAccountKind400ApplicationProblemPlusJSONResponse Problem
+
+func (response EnableExchangeAccountKind400ApplicationProblemPlusJSONResponse) VisitEnableExchangeAccountKindResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type EnableExchangeAccountKind401ApplicationProblemPlusJSONResponse struct {
+	UnauthenticatedApplicationProblemPlusJSONResponse
+}
+
+func (response EnableExchangeAccountKind401ApplicationProblemPlusJSONResponse) VisitEnableExchangeAccountKindResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type EnableExchangeAccountKind403ApplicationProblemPlusJSONResponse Problem
+
+func (response EnableExchangeAccountKind403ApplicationProblemPlusJSONResponse) VisitEnableExchangeAccountKindResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type EnableExchangeAccountKind404ApplicationProblemPlusJSONResponse Problem
+
+func (response EnableExchangeAccountKind404ApplicationProblemPlusJSONResponse) VisitEnableExchangeAccountKindResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type EnableExchangeAccountKind409ApplicationProblemPlusJSONResponse Problem
+
+func (response EnableExchangeAccountKind409ApplicationProblemPlusJSONResponse) VisitEnableExchangeAccountKindResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type EnableExchangeAccountKinddefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response EnableExchangeAccountKinddefaultApplicationProblemPlusJSONResponse) VisitEnableExchangeAccountKindResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DisableExchangeAccountKindRequestObject struct {
+	Id   ExchangeAccountId `json:"id"`
+	Kind string            `json:"kind"`
+}
+
+type DisableExchangeAccountKindResponseObject interface {
+	VisitDisableExchangeAccountKindResponse(w http.ResponseWriter) error
+}
+
+type DisableExchangeAccountKind200JSONResponse ExchangeAccount
+
+func (response DisableExchangeAccountKind200JSONResponse) VisitDisableExchangeAccountKindResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DisableExchangeAccountKind401ApplicationProblemPlusJSONResponse struct {
+	UnauthenticatedApplicationProblemPlusJSONResponse
+}
+
+func (response DisableExchangeAccountKind401ApplicationProblemPlusJSONResponse) VisitDisableExchangeAccountKindResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DisableExchangeAccountKind403ApplicationProblemPlusJSONResponse Problem
+
+func (response DisableExchangeAccountKind403ApplicationProblemPlusJSONResponse) VisitDisableExchangeAccountKindResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DisableExchangeAccountKind404ApplicationProblemPlusJSONResponse Problem
+
+func (response DisableExchangeAccountKind404ApplicationProblemPlusJSONResponse) VisitDisableExchangeAccountKindResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DisableExchangeAccountKind409ApplicationProblemPlusJSONResponse Problem
+
+func (response DisableExchangeAccountKind409ApplicationProblemPlusJSONResponse) VisitDisableExchangeAccountKindResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DisableExchangeAccountKinddefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response DisableExchangeAccountKinddefaultApplicationProblemPlusJSONResponse) VisitDisableExchangeAccountKindResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -1636,6 +2456,27 @@ type StrictServerInterface interface {
 	// Logout 登出
 	// (POST /auth/logout)
 	Logout(ctx context.Context, request LogoutRequestObject) (LogoutResponseObject, error)
+	// ListExchangeAccounts 列出未刪除的交易所帳號
+	// (GET /exchange-accounts)
+	ListExchangeAccounts(ctx context.Context, request ListExchangeAccountsRequestObject) (ListExchangeAccountsResponseObject, error)
+	// CreateExchangeAccount 建立交易所帳號
+	// (POST /exchange-accounts)
+	CreateExchangeAccount(ctx context.Context, request CreateExchangeAccountRequestObject) (CreateExchangeAccountResponseObject, error)
+	// DeleteExchangeAccount 軟刪除交易所帳號
+	// (DELETE /exchange-accounts/{id})
+	DeleteExchangeAccount(ctx context.Context, request DeleteExchangeAccountRequestObject) (DeleteExchangeAccountResponseObject, error)
+	// GetExchangeAccount 讀取一個交易所帳號
+	// (GET /exchange-accounts/{id})
+	GetExchangeAccount(ctx context.Context, request GetExchangeAccountRequestObject) (GetExchangeAccountResponseObject, error)
+	// UpdateExchangeAccount 修改帳號的 label
+	// (PATCH /exchange-accounts/{id})
+	UpdateExchangeAccount(ctx context.Context, request UpdateExchangeAccountRequestObject) (UpdateExchangeAccountResponseObject, error)
+	// EnableExchangeAccountKind 啟用一個 kind
+	// (POST /exchange-accounts/{id}/kinds)
+	EnableExchangeAccountKind(ctx context.Context, request EnableExchangeAccountKindRequestObject) (EnableExchangeAccountKindResponseObject, error)
+	// DisableExchangeAccountKind 停用一個 kind
+	// (POST /exchange-accounts/{id}/kinds/{kind}/disable)
+	DisableExchangeAccountKind(ctx context.Context, request DisableExchangeAccountKindRequestObject) (DisableExchangeAccountKindResponseObject, error)
 	// GetHealthz 行程是否在跑
 	// (GET /healthz)
 	GetHealthz(ctx context.Context, request GetHealthzRequestObject) (GetHealthzResponseObject, error)
@@ -1780,6 +2621,206 @@ func (sh *strictHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(LogoutResponseObject); ok {
 		if err := validResponse.VisitLogoutResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListExchangeAccounts operation middleware
+func (sh *strictHandler) ListExchangeAccounts(w http.ResponseWriter, r *http.Request) {
+	var request ListExchangeAccountsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListExchangeAccounts(ctx, request.(ListExchangeAccountsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListExchangeAccounts")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListExchangeAccountsResponseObject); ok {
+		if err := validResponse.VisitListExchangeAccountsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateExchangeAccount operation middleware
+func (sh *strictHandler) CreateExchangeAccount(w http.ResponseWriter, r *http.Request) {
+	var request CreateExchangeAccountRequestObject
+
+	var body CreateExchangeAccountJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateExchangeAccount(ctx, request.(CreateExchangeAccountRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateExchangeAccount")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateExchangeAccountResponseObject); ok {
+		if err := validResponse.VisitCreateExchangeAccountResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteExchangeAccount operation middleware
+func (sh *strictHandler) DeleteExchangeAccount(w http.ResponseWriter, r *http.Request, id ExchangeAccountId) {
+	var request DeleteExchangeAccountRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteExchangeAccount(ctx, request.(DeleteExchangeAccountRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteExchangeAccount")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteExchangeAccountResponseObject); ok {
+		if err := validResponse.VisitDeleteExchangeAccountResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetExchangeAccount operation middleware
+func (sh *strictHandler) GetExchangeAccount(w http.ResponseWriter, r *http.Request, id ExchangeAccountId) {
+	var request GetExchangeAccountRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetExchangeAccount(ctx, request.(GetExchangeAccountRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetExchangeAccount")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetExchangeAccountResponseObject); ok {
+		if err := validResponse.VisitGetExchangeAccountResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateExchangeAccount operation middleware
+func (sh *strictHandler) UpdateExchangeAccount(w http.ResponseWriter, r *http.Request, id ExchangeAccountId) {
+	var request UpdateExchangeAccountRequestObject
+
+	request.Id = id
+
+	var body UpdateExchangeAccountJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateExchangeAccount(ctx, request.(UpdateExchangeAccountRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateExchangeAccount")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateExchangeAccountResponseObject); ok {
+		if err := validResponse.VisitUpdateExchangeAccountResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// EnableExchangeAccountKind operation middleware
+func (sh *strictHandler) EnableExchangeAccountKind(w http.ResponseWriter, r *http.Request, id ExchangeAccountId) {
+	var request EnableExchangeAccountKindRequestObject
+
+	request.Id = id
+
+	var body EnableExchangeAccountKindJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.EnableExchangeAccountKind(ctx, request.(EnableExchangeAccountKindRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "EnableExchangeAccountKind")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(EnableExchangeAccountKindResponseObject); ok {
+		if err := validResponse.VisitEnableExchangeAccountKindResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DisableExchangeAccountKind operation middleware
+func (sh *strictHandler) DisableExchangeAccountKind(w http.ResponseWriter, r *http.Request, id ExchangeAccountId, kind string) {
+	var request DisableExchangeAccountKindRequestObject
+
+	request.Id = id
+	request.Kind = kind
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DisableExchangeAccountKind(ctx, request.(DisableExchangeAccountKindRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DisableExchangeAccountKind")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DisableExchangeAccountKindResponseObject); ok {
+		if err := validResponse.VisitDisableExchangeAccountKindResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
