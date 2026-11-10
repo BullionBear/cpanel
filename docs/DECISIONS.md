@@ -13,7 +13,8 @@
 - **D7** 管線為 ReconcileLoop → job 表 → Worker。ReconcileLoop 只讀寫資料庫，對外呼叫（mftiko、SYM、交易所）都是 job。
 - **D8** OrderHistory 只落已結束、而且成交量大於 0 的單；不追蹤 open order；由成交驅動。
 - **D9** 支援不在 mftiko 裡的帳號。兩邊的帳號系統分開，只以 `(exchange, exch_account_uid)` join。未來的走向是帳號先注入 cpanel，mftiko 再向 cpanel 拿（ARCHITECTURE §4.9）。
-- **D10（待定）** 未來 mftiko 向 cpanel 拿的帳號是否包含交易 key 的 secret。建議只給身分。
+- **D10（已由 D11 排除）** 未來 mftiko 向 cpanel 拿的帳號是否包含交易 key 的 secret。建議只給身分。
+- **D11**（2026-11-10，修訂 D10）排除 D10。交易所的 key 不離開 cpanel，不與 mftiko 共享，也不供 mftiko 使用。C5 的 vault 不提供把 key 交給 mftiko 的 API。
 
 ## C1 封存 v2（#32）
 
