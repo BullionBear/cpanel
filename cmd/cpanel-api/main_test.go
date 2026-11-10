@@ -6,6 +6,8 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -65,11 +67,19 @@ func TestBinary(t *testing.T) {
 	}
 
 	t.Run("healthz and graceful shutdown", func(t *testing.T) {
-		p := cmdtest.Start(t, bin, []string{"CPANEL_API_LISTEN=127.0.0.1:0", "CPANEL_DATABASE_URL=" + srv.DSN(), "CPANEL_DISCORD_CLIENT_SECRET=supersecret", "CPANEL_DISCORD_BOT_TOKEN=botsecret"}, "-shutdown-timeout=5s")
+		key, keyEnv := publicKeyFile(t)
+		p := cmdtest.Start(t, bin, []string{"CPANEL_API_LISTEN=127.0.0.1:0", "CPANEL_DATABASE_URL=" + srv.DSN(), "CPANEL_DISCORD_CLIENT_SECRET=supersecret", "CPANEL_DISCORD_BOT_TOKEN=botsecret", keyEnv}, "-shutdown-timeout=5s")
 		start := p.Log(t, "starting")
 		cfg, _ := start["config"].(map[string]any)
-		if start["component"] != name || cfg["listen"] != "127.0.0.1:0" || cfg["database"] != "***" || cfg["discord-client-secret"] != "***" || cfg["discord-bot-token"] != "***" || cfg["log-level"] != "info" || cfg["shutdown-timeout"] != "5s" || cfg["request-timeout"] != "30s" {
+		if start["component"] != name || cfg["listen"] != "127.0.0.1:0" || cfg["database"] != "***" || cfg["discord-client-secret"] != "***" || cfg["discord-bot-token"] != "***" || cfg["sealbox-public-key"] != "***" || cfg["log-level"] != "info" || cfg["shutdown-timeout"] != "5s" || cfg["request-timeout"] != "30s" {
 			t.Errorf("startup line %v", start)
+		}
+		raw, err := json.Marshal(start)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key == "" || strings.Contains(string(raw), key) || start["sealbox_fingerprint"] == "" {
+			t.Fatalf("starting log leaked the public key or has no fingerprint: %s", raw)
 		}
 		addr, _ := p.Log(t, "listening")["addr"].(string)
 
@@ -125,7 +135,7 @@ func TestBinary(t *testing.T) {
 
 	t.Run("help exits 0", func(t *testing.T) {
 		code, stderr := cmdtest.Run(t, bin, nil, "-h")
-		if code != 0 || !strings.Contains(stderr, "$CPANEL_API_LISTEN") || !strings.Contains(stderr, "$CPANEL_DATABASE_URL") || !strings.Contains(stderr, "$CPANEL_REQUEST_TIMEOUT") || !strings.Contains(stderr, "$CPANEL_DISCORD_CLIENT_SECRET") {
+		if code != 0 || !strings.Contains(stderr, "$CPANEL_API_LISTEN") || !strings.Contains(stderr, "$CPANEL_DATABASE_URL") || !strings.Contains(stderr, "$CPANEL_REQUEST_TIMEOUT") || !strings.Contains(stderr, "$CPANEL_DISCORD_CLIENT_SECRET") || !strings.Contains(stderr, "$CPANEL_SEALBOX_PUBLIC_KEY") {
 			t.Errorf("exit %d, stderr %q", code, stderr)
 		}
 	})
@@ -138,7 +148,8 @@ func TestBinary(t *testing.T) {
 	})
 
 	t.Run("database down", func(t *testing.T) {
-		p := cmdtest.Start(t, bin, []string{"CPANEL_API_LISTEN=127.0.0.1:0", "CPANEL_DATABASE_URL=" + srv.DSN()})
+		_, keyEnv := publicKeyFile(t)
+		p := cmdtest.Start(t, bin, []string{"CPANEL_API_LISTEN=127.0.0.1:0", "CPANEL_DATABASE_URL=" + srv.DSN(), keyEnv})
 		addr, _ := p.Log(t, "listening")["addr"].(string)
 		srv.Stop()
 
@@ -168,9 +179,24 @@ func TestBinary(t *testing.T) {
 		}
 	})
 
+	t.Run("missing public key exits 2", func(t *testing.T) {
+		code, stderr := cmdtest.Run(t, bin, []string{"CPANEL_DATABASE_URL=" + srv.DSN()})
+		if code != 2 || !strings.Contains(stderr, "CPANEL_SEALBOX_PUBLIC_KEY") {
+			t.Errorf("exit %d, stderr %q", code, stderr)
+		}
+	})
+
+	t.Run("bad public key is not echoed", func(t *testing.T) {
+		code, stderr := cmdtest.Run(t, bin, []string{"CPANEL_DATABASE_URL=" + srv.DSN(), "CPANEL_SEALBOX_PUBLIC_KEY=not-a-key"})
+		if code != 2 || strings.Contains(stderr, "not-a-key") {
+			t.Errorf("exit %d, stderr %q", code, stderr)
+		}
+	})
+
 	t.Run("behind database is refused", func(t *testing.T) {
 		fresh := pgtest.Start(t)
-		code, stderr := cmdtest.Run(t, bin, []string{"CPANEL_DATABASE_URL=" + fresh.DSN()})
+		_, keyEnv := publicKeyFile(t)
+		code, stderr := cmdtest.Run(t, bin, []string{"CPANEL_DATABASE_URL=" + fresh.DSN(), keyEnv})
 		if code != 1 || !strings.Contains(stderr, "behind") || !strings.Contains(stderr, "0001_schema") || !strings.Contains(stderr, "cpanel-migrate up") {
 			t.Errorf("exit %d, stderr %q", code, stderr)
 		}
@@ -226,6 +252,19 @@ func getRaw(t *testing.T, addr, path string) rawResponse {
 type jsonResponse[T any] struct {
 	code int
 	body T
+}
+
+func publicKeyFile(t *testing.T) (string, string) {
+	t.Helper()
+	body, err := os.ReadFile("../../internal/platform/sealbox/testdata/recipient.pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "sealbox.pub")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(body)), "CPANEL_SEALBOX_PUBLIC_KEY_FILE=" + path
 }
 
 func getJSON[T any](t *testing.T, addr, path string) jsonResponse[T] {

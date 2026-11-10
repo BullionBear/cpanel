@@ -32,6 +32,8 @@
     discord_bot_token
     mftiko_token
     sym_token
+    sealbox_public_key     # worker 公鑰，標準 base64；只有 cpanel-api 掛上
+    sealbox_private_key    # worker 私鑰，標準 base64，0600；只有 cpanel-worker 掛上
   state/
     current            # 正在跑的 digest
     previous           # 上一個 digest
@@ -142,8 +144,30 @@ CPANEL_IMAGE=ghcr.io/bullionbear/cpanel@$(cat state/current) docker compose -p c
 | `discord_bot_token` | Developer Portal → Bot → Reset Token | cpanel-api |
 | `mftiko_token` | `users[]` 加一個新名字（例如 `cpanel-2`）的 hash、重啟 mftiko-api、換檔、驗證 doctor、刪舊的再重啟 | cpanel-worker |
 | `sym_token` | `/etc/mftiko/sym/grpc-tokens` 加一行新的（例如 `cpanel-2`）、重啟 SYM、換檔、驗證 doctor、刪舊行再重啟 SYM（mftiko operations「輪換 gRPC 的 token」） | cpanel-worker |
+| `sealbox_public_key` | 跟私鑰成對，見下方。不要單獨換 | cpanel-api |
+| `sealbox_private_key` | **C5-05 之前不要輪換。** 換掉之後，已經封好的交易所 key 解不開，只能重新登記 | cpanel-worker |
 
 換完跑一次 `doctor`；Discord 的換完從瀏覽器登入一次。
+
+### sealbox 金鑰（C5-02）
+
+這組金鑰在主機上產生一次，不進 git，也不進 `config.env`。私鑰只給 `cpanel-worker`，公鑰只給 `cpanel-api`。弄丟私鑰就解不開已封的 key，只能重新登記；C5-05 才是換鑰（新舊私鑰並存、背景重新封裝）。在那之前不要用上面的輪換步驟換這兩個檔。
+
+下一次部署之前，在主機上用即將上線的 image 產生（把 digest 換成 `state/current` 或要部署的那個）：
+
+```sh
+cd /root/cpanel/deployment
+install -d -m 700 secrets
+docker run --rm --user 65532:65532 \
+  -v "$PWD/secrets:/secrets" \
+  ghcr.io/bullionbear/cpanel@sha256:<digest> \
+  /usr/local/bin/cpanel-worker keygen /secrets/sealbox_private_key \
+  > secrets/sealbox_public_key
+chown 65532:65532 secrets/sealbox_private_key secrets/sealbox_public_key
+chmod 600 secrets/sealbox_private_key secrets/sealbox_public_key
+```
+
+`keygen` 只把公鑰印到 stdout，私鑰留在檔案裡，並且拒絕覆蓋已存在的檔。兩個檔都還沒有時，帶著這張變更的 image 會在啟動時退出：api 缺公鑰、worker 缺私鑰或檔案不是 `0600`。`doctor` 不需要這把鑰匙。
 
 ## 告警（C3-D005）
 

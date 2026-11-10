@@ -34,7 +34,8 @@ services:
       <<: *env
       CPANEL_DISCORD_CLIENT_SECRET_FILE: /run/secrets/discord_client_secret
       CPANEL_DISCORD_BOT_TOKEN_FILE: /run/secrets/discord_bot_token
-    secrets: [database_url, discord_client_secret, discord_bot_token]
+      CPANEL_SEALBOX_PUBLIC_KEY_FILE: /run/secrets/sealbox_public_key
+    secrets: [database_url, discord_client_secret, discord_bot_token, sealbox_public_key]
     networks: [web_proxy]
     mem_limit: 256m
     labels:
@@ -66,7 +67,8 @@ services:
       CPANEL_EGRESS: "172.237.19.123"
       CPANEL_MFTIKO_TOKEN_FILE: /run/secrets/mftiko_token
       CPANEL_SYM_TOKEN_FILE: /run/secrets/sym_token
-    secrets: [database_url, mftiko_token, sym_token]
+      CPANEL_SEALBOX_PRIVATE_KEY_FILE: /run/secrets/sealbox_private_key
+    secrets: [database_url, mftiko_token, sym_token, sealbox_private_key]
     networks: [default]
     mem_limit: 256m
     # Room for -shutdown-timeout (10s) to finish the job pages in progress, then hand the jobs back and release the
@@ -79,6 +81,8 @@ secrets:
   discord_bot_token: { file: ./secrets/discord_bot_token }
   mftiko_token: { file: ./secrets/mftiko_token }
   sym_token: { file: ./secrets/sym_token }
+  sealbox_public_key: { file: ./secrets/sealbox_public_key }
+  sealbox_private_key: { file: ./secrets/sealbox_private_key }
 
 networks:
   default: {}
