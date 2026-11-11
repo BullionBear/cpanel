@@ -16,7 +16,7 @@ import (
 
 // Exchange accounts (C5-01). A row is one (exchange, exch_account_uid), including after
 // soft delete. Kinds are membership rows: disable sets disabled_at and leaves the row.
-// This handler has no credentials and does not join mirror.account.
+// Credential registration is in credential.go. This file does not join mirror.account.
 
 const (
 	accountCreate     = "exchange_account.create"
@@ -559,11 +559,20 @@ func listAccounts(ctx context.Context, q accountDB) ([]cpanelv1.ExchangeAccount,
 	if err != nil {
 		return nil, err
 	}
+	creds, err := loadCredentials(ctx, q, ids)
+	if err != nil {
+		return nil, err
+	}
 	for i := range out {
 		out[i].Kinds = kinds[out[i].Id]
 		if out[i].Kinds == nil {
 			out[i].Kinds = []cpanelv1.ExchangeAccountKind{}
 		}
+		c := creds[out[i].Id]
+		if c == nil {
+			c = []cpanelv1.Credential{}
+		}
+		out[i].Credentials = &c
 	}
 	return out, nil
 }
@@ -605,6 +614,15 @@ func loadAccount(ctx context.Context, q accountDB, id int64) (cpanelv1.ExchangeA
 	if acc.Kinds == nil {
 		acc.Kinds = []cpanelv1.ExchangeAccountKind{}
 	}
+	creds, err := loadCredentials(ctx, q, []int64{id})
+	if err != nil {
+		return cpanelv1.ExchangeAccount{}, err
+	}
+	c := creds[id]
+	if c == nil {
+		c = []cpanelv1.Credential{}
+	}
+	acc.Credentials = &c
 	return acc, nil
 }
 
@@ -637,6 +655,33 @@ func loadKinds(ctx context.Context, q accountDB, ids []int64) (map[int64][]cpane
 			return nil, err
 		}
 		out[id] = append(out[id], kind)
+	}
+	return out, rows.Err()
+}
+
+func loadCredentials(ctx context.Context, q accountDB, ids []int64) (map[int64][]cpanelv1.Credential, error) {
+	out := map[int64][]cpanelv1.Credential{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := q.Query(ctx, `
+		SELECT id, exchange_account_id, status, api_key_last4, failure_reason, verified_at
+		FROM pms.credential
+		WHERE exchange_account_id = ANY($1)
+		ORDER BY id`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var accountID int64
+		var cred cpanelv1.Credential
+		var status string
+		if err := rows.Scan(&cred.Id, &accountID, &status, &cred.ApiKeyLast4, &cred.FailureReason, &cred.VerifiedAt); err != nil {
+			return nil, err
+		}
+		cred.Status = cpanelv1.CredentialStatus(status)
+		out[accountID] = append(out[accountID], cred)
 	}
 	return out, rows.Err()
 }

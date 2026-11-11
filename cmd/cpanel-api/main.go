@@ -145,6 +145,7 @@ func main() {
 	h := api.Handler(api.Config{
 		Log: log, Pool: pool, Database: opt.database, Timeout: opt.requestTimeout,
 		SessionTTL: opt.sessionTTL, RoleRecheck: opt.roleRecheck,
+		Sealbox: pub, HasSealbox: ok,
 		Auth: auth.Settings{
 			PublicOrigin: opt.publicOrigin, ClientID: opt.discordClientID, ClientSecret: opt.discordClientSecret,
 			BotToken: opt.discordBotToken, GuildID: opt.discordGuildID, RoleID: opt.discordRoleID,

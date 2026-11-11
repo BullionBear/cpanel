@@ -52,30 +52,49 @@ func TestEachMigrationUpDownUp(t *testing.T) {
 			t.Fatalf("version %d recorded %d times", f.version, n)
 		}
 
-		if err := ExecSQL(ctx, conn, downs[f.version]); err != nil {
-			t.Fatalf("down %s: %v", f.stem(), err)
-		}
-		// 0001 drops meta, and with it the version table. A later down leaves the table; drop the row
-		// so the following up applies the file again.
-		if _, err := conn.Exec(ctx, `DELETE FROM meta.schema_migrations WHERE version = $1`, f.version); err != nil {
-			var pgErr *pgconn.PgError
-			if !errors.As(err, &pgErr) || pgErr.Code != "42P01" { // undefined_table: 0001 down drops meta
-				t.Fatal(err)
+		// A later migration may reference this one, so its down runs first. 0001 drops every
+		// schema, including the version table, and is the exception.
+		pending := []file{f}
+		if f.version != ups[0].version {
+			pending = pending[:0]
+			for _, later := range ups {
+				if later.version >= f.version {
+					pending = append(pending, later)
+				}
 			}
 		}
-		assertDown(t, ctx, conn, f.version)
+		for i := len(pending) - 1; i >= 0; i-- {
+			later := pending[i]
+			if err := ExecSQL(ctx, conn, downs[later.version]); err != nil {
+				t.Fatalf("down %s: %v", later.stem(), err)
+			}
+			// 0001 drops meta, and with it the version table. A later down leaves the table; drop the row
+			// so the following up applies the file again.
+			if _, err := conn.Exec(ctx, `DELETE FROM meta.schema_migrations WHERE version = $1`, later.version); err != nil {
+				var pgErr *pgconn.PgError
+				if !errors.As(err, &pgErr) || pgErr.Code != "42P01" { // undefined_table: 0001 down drops meta
+					t.Fatal(err)
+				}
+			}
+			assertDown(t, ctx, conn, later.version)
+		}
 
 		res, err := Up(ctx, srv.DSN())
 		if err != nil {
 			t.Fatalf("up again %s: %v", f.stem(), err)
 		}
-		// 0001 down drops every schema, so the next up applies every file. A later down
-		// removes only that version's row, so only that file is pending.
+		// 0001 down drops every schema, so the next up applies every file. Any other down
+		// removes that version and every newer one, so those files are pending.
 		want := []string{f.stem()}
 		if f.version == ups[0].version {
 			want = want[:0]
 			for _, u := range ups {
 				want = append(want, u.stem())
+			}
+		} else {
+			want = want[:0]
+			for _, later := range pending {
+				want = append(want, later.stem())
 			}
 		}
 		var got []string
@@ -240,6 +259,7 @@ var ownedTables = map[int][]string{
 	6: {"mirror.scope"},
 	7: {"mirror.uid_lookup"},
 	8: {"pms.account_kind", "pms.exchange_account", "pms.exchange_account_kind"},
+	9: {"pms.credential"},
 }
 
 func relationExists(t *testing.T, ctx context.Context, conn *pgx.Conn, name string) bool {
@@ -269,12 +289,15 @@ func assertDown(t *testing.T, ctx context.Context, conn *pgx.Conn, version int) 
 		t.Fatalf("schemas = %d after down %d, want 6", n, version)
 	}
 	for v, tables := range ownedTables {
+		if v > version {
+			continue
+		}
 		for _, table := range tables {
 			exists := relationExists(t, ctx, conn, table)
 			if v == version && exists {
 				t.Fatalf("%s still present after down %d", table, version)
 			}
-			if v != version && !exists {
+			if v < version && !exists {
 				t.Fatalf("%s missing after down %d, which does not own it", table, version)
 			}
 		}

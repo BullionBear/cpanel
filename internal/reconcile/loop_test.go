@@ -30,7 +30,7 @@ func TestRoundRunsTheRulesInOrder(t *testing.T) {
 	for _, r := range res.Rules {
 		got = append(got, fmt.Sprintf("%s=%d", r.Name, r.Inserted))
 	}
-	if want := []string{"maint.partitions=1", "mftiko.sync=1", "sym.sync=1", "streams=0", "periodics=3"}; !slices.Equal(got, want) {
+	if want := []string{"maint.partitions=1", "mftiko.sync=1", "sym.sync=1", "credentials=0", "streams=0", "periodics=3"}; !slices.Equal(got, want) {
 		t.Errorf("rules %v, want %v", got, want)
 	}
 	if !res.At.Equal(t0) || len(observed) != 1 {

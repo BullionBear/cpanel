@@ -191,6 +191,13 @@ func check(pkgs []pkg) []string {
 				}
 			}
 		}
+		if from == "cmd/cpanel-api" || under(from, "internal/reconcile") {
+			for _, d := range p.Deps {
+				if r, own := rel(d); own && under(r, "internal/venue") {
+					bad(d, "venue clients run only in the worker (C5-03)")
+				}
+			}
+		}
 	}
 	return out
 }
@@ -244,7 +251,7 @@ func TestDependencyRules(t *testing.T) {
 		}
 	}
 	// The rules key on paths; if a package moved, they would pass by matching nothing.
-	for _, want := range []string{"cmd/cpanel-api", "internal/reconcile", "internal/mftiko", "internal/sym", "internal/mirror", sealboxOpen} {
+	for _, want := range []string{"cmd/cpanel-api", "internal/reconcile", "internal/mftiko", "internal/sym", "internal/mirror", sealboxOpen, "internal/venue"} {
 		if !slices.Contains(own, want) {
 			t.Fatalf("package %s not found: update the rules in this package to the new layout", want)
 		}
@@ -270,7 +277,8 @@ func TestCheckReportsViolations(t *testing.T) {
 
 		// I5
 		{ImportPath: m("internal/reconcile"), Imports: []string{"github.com/jackc/pgx/v5", "github.com/rs/zerolog", "log/slog"},
-			Deps: []string{"github.com/jackc/pgx/v5", "github.com/jackc/pgx/v5/pgconn", "github.com/rs/zerolog", "crypto/tls", "net", "log/slog"}}, // net through pgx and zerolog: allowed
+			Deps: []string{"github.com/jackc/pgx/v5", "github.com/jackc/pgx/v5/pgconn", "github.com/rs/zerolog", "crypto/tls", "net", "log/slog",
+				m("internal/venue/okx")}}, // net through pgx and zerolog: allowed
 		{ImportPath: "github.com/jackc/pgx/v5", Imports: []string{"github.com/jackc/pgx/v5/pgconn"}},
 		{ImportPath: "github.com/jackc/pgx/v5/pgconn", Imports: []string{"crypto/tls", "net"}},
 		{ImportPath: "github.com/rs/zerolog", Imports: []string{"net"}},
@@ -289,6 +297,7 @@ func TestCheckReportsViolations(t *testing.T) {
 
 		// I6
 		{ImportPath: m("cmd/cpanel-api"), Deps: []string{m("internal/platform/sealbox"), m("internal/platform/sealbox/open"),
+			m("internal/venue/binance"),
 			m("internal/mftiko"), m("internal/mirror"), mf("contract/gen/api/v1"), mf("contract/gen/mftiko/sym/v1/symv1connect")}},
 		{ImportPath: m("cmd/cpanel-worker"), Deps: []string{m("internal/platform/sealbox"), m("internal/platform/sealbox/open"),
 			m("internal/mftiko"), m("internal/mirror"), mf("contract/gen/api/v1")}}, // the worker calls mftiko and opens secrets
@@ -321,6 +330,8 @@ func TestCheckReportsViolations(t *testing.T) {
 		"internal/reconcile/rpc links net/rpc",
 		"internal/reconcile/rpc links net/smtp",
 		"cmd/cpanel-api links " + sealboxOpen,
+		"cmd/cpanel-api links internal/venue/binance",
+		"internal/reconcile links internal/venue/okx",
 		"cmd/cpanel-api links internal/mftiko",
 		"cmd/cpanel-api links internal/mirror",
 		"cmd/cpanel-api links " + mf("contract/gen/api/v1"),

@@ -302,8 +302,8 @@ export interface paths {
         };
         /**
          * 列出未刪除的交易所帳號
-         * @description 軟刪除的帳號不在這份清單裡。每一筆帶上 kind 列，含已停用的。
-         *     `verified_at` 與 `last_error` 這張票留空。不 join `api_id`，也沒有 unmatched。
+         * @description 軟刪除的帳號不在這份清單裡。每一筆帶上 kind 列，含已停用的，以及 credential 摘要。
+         *     摘要沒有 secret。不 join `api_id`，也沒有 unmatched。
          */
         get: operations["listExchangeAccounts"];
         put?: never;
@@ -353,6 +353,32 @@ export interface paths {
          *     cookie 登入的請求要帶對的 `Origin`。
          */
         patch: operations["updateExchangeAccount"];
+        trace?: never;
+    };
+    "/exchange-accounts/{id}/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description pms.exchange_account.id。 */
+                id: components["parameters"]["ExchangeAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 登記一把唯讀 key
+         * @description body 是 api key 與 secret。OKX 還要 passphrase；Binance、Bybit 帶了 passphrase 回 400。
+         *     cpanel-api 立刻用 worker 的公鑰封裝，寫入 `pms.credential`，狀態 `unverified`，並排 `credential.verify`。
+         *     回應沒有 secret。已有一列 `unverified` 回 409。已軟刪除的帳號回 404。
+         *     建立成功讓帳號 `revision` 加 1。cookie 登入的請求要帶對的 `Origin`。
+         */
+        post: operations["createExchangeAccountCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/exchange-accounts/{id}/kinds": {
@@ -600,10 +626,10 @@ export interface components {
             disabled_at: string | null;
             /**
              * Format: date-time
-             * @description C5-03 才寫。這張票留空，再啟用時清掉。
+             * @description credential.verify 通過這個 kind 的讀取時寫入。再啟用時清掉。
              */
             verified_at: string | null;
-            /** @description C5-03 才寫。這張票留空，再啟用時清掉。 */
+            /** @description 這個 kind 的讀取失敗時寫入，credential 仍可為 active。再啟用時清掉。 */
             last_error: string | null;
         };
         ExchangeAccount: {
@@ -617,6 +643,8 @@ export interface components {
             /** Format: date-time */
             deleted_at: string | null;
             kinds: components["schemas"]["ExchangeAccountKind"][];
+            /** @description 這個帳號的 credential 摘要，依 id 排序。沒有 secret，也沒有密文。 */
+            credentials?: components["schemas"]["Credential"][];
         };
         ExchangeAccountCreate: {
             exchange: components["schemas"]["Exchange"];
@@ -632,6 +660,24 @@ export interface components {
         };
         ExchangeAccountKindEnable: {
             kind: string;
+        };
+        Credential: {
+            /** Format: int64 */
+            id: number;
+            /** @enum {string} */
+            status: "unverified" | "active" | "rejected" | "auth_failed" | "disabled";
+            /** @description api key 的末四碼。不是 secret。 */
+            api_key_last4: string;
+            /** @description rejected 時看得到原因。不含 secret。 */
+            failure_reason: string | null;
+            /** Format: date-time */
+            verified_at: string | null;
+        };
+        CredentialCreate: {
+            api_key: string;
+            api_secret: string;
+            /** @description OKX 必填。Binance、Bybit 不可帶。 */
+            passphrase?: string;
         };
     };
     responses: {
@@ -1355,6 +1401,71 @@ export interface operations {
                 };
             };
             /** @description 帳號已軟刪除。`code` 是 `conflict`。 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    createExchangeAccountCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description pms.exchange_account.id。 */
+                id: components["parameters"]["ExchangeAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialCreate"];
+            };
+        };
+        responses: {
+            /** @description 已封裝並排驗證。狀態是 `unverified`。 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Credential"];
+                };
+            };
+            /** @description 缺 api key 或 secret，OKX 缺 passphrase，或 Binance、Bybit 帶了 passphrase。`code` 是 `bad_request`。 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Origin 不符。`code` 是 `forbidden`。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description 沒有這個帳號，或帳號已軟刪除。`code` 是 `not_found`。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description 這個帳號已經有一列 `unverified`。`code` 是 `conflict`。 */
             409: {
                 headers: {
                     [name: string]: unknown;
