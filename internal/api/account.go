@@ -563,6 +563,10 @@ func listAccounts(ctx context.Context, q accountDB) ([]cpanelv1.ExchangeAccount,
 	if err != nil {
 		return nil, err
 	}
+	mirrored, err := loadMirroredAccounts(ctx, q, ids)
+	if err != nil {
+		return nil, err
+	}
 	for i := range out {
 		out[i].Kinds = kinds[out[i].Id]
 		if out[i].Kinds == nil {
@@ -573,6 +577,11 @@ func listAccounts(ctx context.Context, q accountDB) ([]cpanelv1.ExchangeAccount,
 			c = []cpanelv1.Credential{}
 		}
 		out[i].Credentials = &c
+		m := mirrored[out[i].Id]
+		if m == nil {
+			m = []cpanelv1.MirroredAccount{}
+		}
+		out[i].ApiIds = &m
 	}
 	return out, nil
 }
@@ -623,6 +632,15 @@ func loadAccount(ctx context.Context, q accountDB, id int64) (cpanelv1.ExchangeA
 		c = []cpanelv1.Credential{}
 	}
 	acc.Credentials = &c
+	mirrored, err := loadMirroredAccounts(ctx, q, []int64{id})
+	if err != nil {
+		return cpanelv1.ExchangeAccount{}, err
+	}
+	m := mirrored[id]
+	if m == nil {
+		m = []cpanelv1.MirroredAccount{}
+	}
+	acc.ApiIds = &m
 	return acc, nil
 }
 

@@ -166,6 +166,30 @@ func (e StreamStatus) Valid() bool {
 	}
 }
 
+// Defines values for UnmatchedReason.
+const (
+	KindNotEnabled    UnmatchedReason = "kind_not_enabled"
+	KindOutOfScope    UnmatchedReason = "kind_out_of_scope"
+	MissingIdentity   UnmatchedReason = "missing_identity"
+	NoExchangeAccount UnmatchedReason = "no_exchange_account"
+)
+
+// Valid indicates whether the value is a known member of the UnmatchedReason enum.
+func (e UnmatchedReason) Valid() bool {
+	switch e {
+	case KindNotEnabled:
+		return true
+	case KindOutOfScope:
+		return true
+	case MissingIdentity:
+		return true
+	case NoExchangeAccount:
+		return true
+	default:
+		return false
+	}
+}
+
 // Credential defines model for Credential.
 type Credential struct {
 	// ApiKeyLast4 api key 的末四碼。不是 secret。
@@ -198,6 +222,9 @@ type Exchange string
 
 // ExchangeAccount defines model for ExchangeAccount.
 type ExchangeAccount struct {
+	// ApiIds 對到這個未刪除帳號的 mftiko 列，依 api_id 排序。含已軟刪除的 mftiko 列。
+	ApiIds *[]MirroredAccount `json:"api_ids,omitempty"`
+
 	// Credentials 這個帳號的 credential 摘要，依 id 排序。沒有 secret，也沒有密文。
 	Credentials    *[]Credential         `json:"credentials,omitempty"`
 	DeletedAt      *time.Time            `json:"deleted_at"`
@@ -349,6 +376,14 @@ type MirrorStatus struct {
 	UnresolvedUids *[]UnresolvedUid `json:"unresolved_uids,omitempty"`
 }
 
+// MirroredAccount defines model for MirroredAccount.
+type MirroredAccount struct {
+	ApiId     int64      `json:"api_id"`
+	DeletedAt *time.Time `json:"deleted_at"`
+	Kind      string     `json:"kind"`
+	Name      string     `json:"name"`
+}
+
 // Problem RFC 9457。`code` 是給程式判斷的穩定值。
 type Problem struct {
 	// Code 穩定的錯誤碼。這一版使用 `unavailable`、`timeout`、`internal`、`method_not_allowed`、`bad_request`、`unauthenticated`、`forbidden`、`not_found`。
@@ -412,6 +447,30 @@ type TokenCreated struct {
 	Token string `json:"token"`
 }
 
+// UnmatchedAccount defines model for UnmatchedAccount.
+type UnmatchedAccount struct {
+	ApiIds         []MirroredAccount `json:"api_ids"`
+	ExchAccountUid *string           `json:"exch_account_uid"`
+
+	// Exchange 缺身分時是 null。
+	Exchange    *string   `json:"exchange"`
+	FirstSeenAt time.Time `json:"first_seen_at"`
+
+	// MissingKinds 只有 `kind_not_enabled` 有值。
+	MissingKinds []string        `json:"missing_kinds"`
+	Reason       UnmatchedReason `json:"reason"`
+	ScopeCount   int64           `json:"scope_count"`
+
+	// Since 這列最早的 scope。沒有 scope 時是 null。
+	Since *time.Time `json:"since"`
+
+	// Traded 這列有沒有 scope。`kind_not_enabled` 只看缺的 kind。
+	Traded bool `json:"traded"`
+}
+
+// UnmatchedReason defines model for UnmatchedReason.
+type UnmatchedReason string
+
 // UnresolvedUid defines model for UnresolvedUid.
 type UnresolvedUid struct {
 	Attempts     int64      `json:"attempts"`
@@ -442,6 +501,12 @@ type Unauthenticated = Problem
 type CallbackDiscordParams struct {
 	Code  string `form:"code" json:"code"`
 	State string `form:"state" json:"state"`
+}
+
+// ListUnmatchedAccountsParams defines parameters for ListUnmatchedAccounts.
+type ListUnmatchedAccountsParams struct {
+	// Reason 不帶則含全部 reason，包括 `kind_out_of_scope`。
+	Reason *UnmatchedReason `form:"reason,omitempty" json:"reason,omitempty"`
 }
 
 // ListJobRunsParams defines parameters for ListJobRuns.

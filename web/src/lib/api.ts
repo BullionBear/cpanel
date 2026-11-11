@@ -18,6 +18,8 @@ export type JobStatus = components['schemas']['JobStatus'];
 export type JobRunStatus = components['schemas']['JobRunStatus'];
 export type MirrorSource = components['schemas']['MirrorSource'];
 export type UnresolvedUid = components['schemas']['UnresolvedUid'];
+export type UnmatchedAccount = components['schemas']['UnmatchedAccount'];
+export type UnmatchedReason = components['schemas']['UnmatchedReason'];
 
 // Same-origin cookies. Dev reaches the API through the Vite proxy.
 export const api = createClient<paths>({

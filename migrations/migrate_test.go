@@ -254,12 +254,13 @@ var ownedTables = map[int][]string{
 	2: {"meta.session", "meta.api_token"},
 	3: {"ingest.stream", "ingest.periodic", "ingest.job", "ingest.job_run", "ingest.job_run_default",
 		"ingest.job_failure", "ingest.lease", "ingest.pause"},
-	4: {"mirror.account", "mirror.sync_state"},
-	5: {"mirror.symbol"},
-	6: {"mirror.scope"},
-	7: {"mirror.uid_lookup"},
-	8: {"pms.account_kind", "pms.exchange_account", "pms.exchange_account_kind"},
-	9: {"pms.credential"},
+	4:  {"mirror.account", "mirror.sync_state"},
+	5:  {"mirror.symbol"},
+	6:  {"mirror.scope"},
+	7:  {"mirror.uid_lookup"},
+	8:  {"pms.account_kind", "pms.exchange_account", "pms.exchange_account_kind"},
+	9:  {"pms.credential"},
+	10: {"pms.coverage", "pms.unmatched"},
 }
 
 func relationExists(t *testing.T, ctx context.Context, conn *pgx.Conn, name string) bool {

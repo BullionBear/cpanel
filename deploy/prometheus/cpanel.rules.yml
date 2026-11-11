@@ -80,3 +80,17 @@ groups:
           severity: warning
         annotations:
           summary: a scope UID is not in the symbol mirror
+      - alert: CpanelMftikoAccountUncovered
+        expr: cpanel_mftiko_accounts_unmatched{traded="true"} > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: an mftiko account with trades is not covered
+      - alert: CpanelMftikoKindOutOfScope
+        expr: cpanel_mftiko_kinds_out_of_scope{traded="true"} > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: an out-of-scope kind has trades

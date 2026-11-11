@@ -29,6 +29,8 @@ type opsCollector struct {
 	behind     *prometheus.Desc
 	partial    *prometheus.Desc
 	unresolved *prometheus.Desc
+	unmatched  *prometheus.Desc
+	outOfScope *prometheus.Desc
 }
 
 func newOpsCollector(db *pgxpool.Pool, log zerolog.Logger) *opsCollector {
@@ -87,6 +89,14 @@ func newOpsCollector(db *pgxpool.Pool, log zerolog.Logger) *opsCollector {
 			"cpanel_mirror_scope_uids_unresolved",
 			"Scope UIDs that are not in the symbol mirror.",
 			nil, nil),
+		unmatched: prometheus.NewDesc(
+			"cpanel_mftiko_accounts_unmatched",
+			"Mirrored exchange identities the vault does not cover. Out-of-scope kinds are not included.",
+			[]string{"traded", "reason"}, nil),
+		outOfScope: prometheus.NewDesc(
+			"cpanel_mftiko_kinds_out_of_scope",
+			"Mirrored kinds cpanel does not trade yet, counted per exchange identity and kind.",
+			[]string{"kind", "traded"}, nil),
 	}
 }
 
@@ -104,6 +114,8 @@ func (c *opsCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.behind
 	ch <- c.partial
 	ch <- c.unresolved
+	ch <- c.unmatched
+	ch <- c.outOfScope
 }
 
 func (c *opsCollector) Collect(ch chan<- prometheus.Metric) {
@@ -269,5 +281,63 @@ func (c *opsCollector) collect(ctx context.Context, ch chan<- prometheus.Metric)
 		return err
 	}
 	ch <- prometheus.MustNewConstMetric(c.behind, prometheus.GaugeValue, float64(behind))
-	return nil
+
+	unmatched := map[[2]string]float64{}
+	for _, reason := range []string{"no_exchange_account", "missing_identity", "kind_not_enabled"} {
+		for _, traded := range []string{"false", "true"} {
+			unmatched[[2]string{traded, reason}] = 0
+		}
+	}
+	unmatchedRows, err := c.db.Query(ctx, `
+		SELECT reason, traded, count(*)
+		FROM pms.unmatched
+		WHERE reason <> 'kind_out_of_scope'
+		GROUP BY 1, 2`)
+	if err != nil {
+		return err
+	}
+	defer unmatchedRows.Close()
+	for unmatchedRows.Next() {
+		var reason string
+		var traded bool
+		var n int
+		if err := unmatchedRows.Scan(&reason, &traded, &n); err != nil {
+			return err
+		}
+		label := "false"
+		if traded {
+			label = "true"
+		}
+		unmatched[[2]string{label, reason}] = float64(n)
+	}
+	if err := unmatchedRows.Err(); err != nil {
+		return err
+	}
+	for key, n := range unmatched {
+		ch <- prometheus.MustNewConstMetric(c.unmatched, prometheus.GaugeValue, n, key[0], key[1])
+	}
+
+	kindRows, err := c.db.Query(ctx, `
+		SELECT kind, traded, count(*)
+		FROM pms.unmatched
+		WHERE reason = 'kind_out_of_scope'
+		GROUP BY 1, 2`)
+	if err != nil {
+		return err
+	}
+	defer kindRows.Close()
+	for kindRows.Next() {
+		var kind string
+		var traded bool
+		var n int
+		if err := kindRows.Scan(&kind, &traded, &n); err != nil {
+			return err
+		}
+		label := "false"
+		if traded {
+			label = "true"
+		}
+		ch <- prometheus.MustNewConstMetric(c.outOfScope, prometheus.GaugeValue, float64(n), kind, label)
+	}
+	return kindRows.Err()
 }

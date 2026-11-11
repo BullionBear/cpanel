@@ -1,5 +1,6 @@
 # cpanel-api 的對外契約（ARCHITECTURE §4.7）。SPA 不在這份契約裡。
-# 0.7.0 加上交易所帳號與 kind（C5-01）。沒有 key，也不 join api_id。
+# 0.8.0 加上帳號 join 與 unmatched（C4-03）。
+# 0.7.0 加上交易所帳號與 kind（C5-01）。
 # 0.6.0 的 mirror 狀態列出查不到的 scope UID（C4-05）。
 # 0.5.0 的 mirror 狀態加上 SYM 表的 revision（C4-02）。
 # 0.4.0 加上 mirror 的同步狀態（C4-01）。
@@ -8,7 +9,7 @@
 openapi: 3.0.3
 info:
   title: cpanel API
-  version: 0.7.0
+  version: 0.8.0
   description: |
     cpanel-api 的對外契約。
 
@@ -494,7 +495,7 @@ paths:
       summary: 列出未刪除的交易所帳號
       description: |
         軟刪除的帳號不在這份清單裡。每一筆帶上 kind 列，含已停用的，以及 credential 摘要。
-        摘要沒有 secret。不 join `api_id`，也沒有 unmatched。
+        摘要沒有 secret。`api_ids` 是對到這個帳號的 mftiko 列。unmatched 在另一支。
       responses:
         '200':
           description: 未刪除的帳號，依 id 排序。
@@ -553,6 +554,44 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /exchange-accounts/unmatched:
+    get:
+      tags: [accounts]
+      operationId: listUnmatchedAccounts
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: mftiko 有、vault 沒涵蓋的帳號
+      description: |
+        一列是一個 `(exchange, exch_account_uid)`，不是一個 `api_id`。缺身分的 `api_id` 自己一列。
+        `kind_out_of_scope` 是一期不做的 kind，不算 unmatched 的數量，預設仍列出。
+        不建立 vault 帳號，也不啟用 kind。
+      parameters:
+        - name: reason
+          in: query
+          required: false
+          description: 不帶則含全部 reason，包括 `kind_out_of_scope`。
+          schema:
+            $ref: '#/components/schemas/UnmatchedReason'
+      responses:
+        '200':
+          description: 依 reason、交易所、uid 排序。
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UnmatchedAccount'
+        '400':
+          description: reason 不是已知的值。`code` 是 `bad_request`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
         default:
           $ref: '#/components/responses/Problem'
   /exchange-accounts/{id}:
@@ -1275,6 +1314,11 @@ components:
           description: 這個帳號的 credential 摘要，依 id 排序。沒有 secret，也沒有密文。
           items:
             $ref: '#/components/schemas/Credential'
+        api_ids:
+          type: array
+          description: 對到這個未刪除帳號的 mftiko 列，依 api_id 排序。含已軟刪除的 mftiko 列。
+          items:
+            $ref: '#/components/schemas/MirroredAccount'
     ExchangeAccountCreate:
       type: object
       additionalProperties: false
@@ -1307,6 +1351,63 @@ components:
       properties:
         kind:
           type: string
+    MirroredAccount:
+      type: object
+      additionalProperties: false
+      required: [api_id, name, kind, deleted_at]
+      properties:
+        api_id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        kind:
+          type: string
+        deleted_at:
+          type: string
+          format: date-time
+          nullable: true
+    UnmatchedReason:
+      type: string
+      enum: [no_exchange_account, missing_identity, kind_not_enabled, kind_out_of_scope]
+    UnmatchedAccount:
+      type: object
+      additionalProperties: false
+      required: [exchange, exch_account_uid, api_ids, missing_kinds, traded, scope_count, since, reason, first_seen_at]
+      properties:
+        exchange:
+          type: string
+          nullable: true
+          description: 缺身分時是 null。
+        exch_account_uid:
+          type: string
+          nullable: true
+        api_ids:
+          type: array
+          items:
+            $ref: '#/components/schemas/MirroredAccount'
+        missing_kinds:
+          type: array
+          items:
+            type: string
+          description: 只有 `kind_not_enabled` 有值。
+        traded:
+          type: boolean
+          description: 這列有沒有 scope。`kind_not_enabled` 只看缺的 kind。
+        scope_count:
+          type: integer
+          format: int64
+          minimum: 0
+        since:
+          type: string
+          format: date-time
+          nullable: true
+          description: 這列最早的 scope。沒有 scope 時是 null。
+        reason:
+          $ref: '#/components/schemas/UnmatchedReason'
+        first_seen_at:
+          type: string
+          format: date-time
     Credential:
       type: object
       additionalProperties: false
