@@ -240,3 +240,40 @@ func TestSingletonRegistersOnce(t *testing.T) {
 		t.Errorf("row %q, want %q", got, want)
 	}
 }
+
+func TestCredentialsDispatchesUnverified(t *testing.T) {
+	ctx, _, conn := testDB(t)
+	var live, deleted int64
+	if err := conn.QueryRow(ctx, `
+		INSERT INTO pms.exchange_account (exchange, exch_account_uid, label)
+		VALUES ('binance', 'live', 'live') RETURNING id`).Scan(&live); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(ctx, `
+		INSERT INTO pms.exchange_account (exchange, exch_account_uid, label, deleted_at)
+		VALUES ('binance', 'gone', 'gone', now()) RETURNING id`).Scan(&deleted); err != nil {
+		t.Fatal(err)
+	}
+	insert := func(account int64, status string) {
+		t.Helper()
+		exec(t, ctx, conn, `
+			INSERT INTO pms.credential (exchange_account_id, purpose, status, ciphertext, api_key_last4)
+			VALUES ($1, 'read', $2, '\x01', 'key9')`, account, status)
+	}
+	insert(live, "unverified")
+	insert(live, "active")
+	insert(deleted, "unverified")
+	if n := run(t, ctx, conn, Credentials, t0); n != 1 {
+		t.Fatalf("inserted %d, want 1", n)
+	}
+	var kind, dedup, lease string
+	if err := conn.QueryRow(ctx, `SELECT kind, dedup_key, lease_key FROM ingest.job`).Scan(&kind, &dedup, &lease); err != nil {
+		t.Fatal(err)
+	}
+	if kind != CredentialVerifyKind || lease != AccountLease(live) || dedup == "" {
+		t.Fatalf("job %s %s %s", kind, dedup, lease)
+	}
+	if n := run(t, ctx, conn, Credentials, t0); n != 0 {
+		t.Fatalf("second run inserted %d, want 0", n)
+	}
+}

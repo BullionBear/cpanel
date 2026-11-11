@@ -7,6 +7,33 @@ import (
 	"time"
 )
 
+// Defines values for CredentialStatus.
+const (
+	Active     CredentialStatus = "active"
+	AuthFailed CredentialStatus = "auth_failed"
+	Disabled   CredentialStatus = "disabled"
+	Rejected   CredentialStatus = "rejected"
+	Unverified CredentialStatus = "unverified"
+)
+
+// Valid indicates whether the value is a known member of the CredentialStatus enum.
+func (e CredentialStatus) Valid() bool {
+	switch e {
+	case Active:
+		return true
+	case AuthFailed:
+		return true
+	case Disabled:
+		return true
+	case Rejected:
+		return true
+	case Unverified:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ErrorClass.
 const (
 	Auth        ErrorClass = "auth"
@@ -139,6 +166,30 @@ func (e StreamStatus) Valid() bool {
 	}
 }
 
+// Credential defines model for Credential.
+type Credential struct {
+	// ApiKeyLast4 api key 的末四碼。不是 secret。
+	ApiKeyLast4 string `json:"api_key_last4"`
+
+	// FailureReason rejected 時看得到原因。不含 secret。
+	FailureReason *string          `json:"failure_reason"`
+	Id            int64            `json:"id"`
+	Status        CredentialStatus `json:"status"`
+	VerifiedAt    *time.Time       `json:"verified_at"`
+}
+
+// CredentialStatus defines model for Credential.Status.
+type CredentialStatus string
+
+// CredentialCreate defines model for CredentialCreate.
+type CredentialCreate struct {
+	ApiKey    string `json:"api_key"`
+	ApiSecret string `json:"api_secret"`
+
+	// Passphrase OKX 必填。Binance、Bybit 不可帶。
+	Passphrase *string `json:"passphrase,omitempty"`
+}
+
 // ErrorClass 錯誤類別（C3-04）。
 type ErrorClass string
 
@@ -147,6 +198,8 @@ type Exchange string
 
 // ExchangeAccount defines model for ExchangeAccount.
 type ExchangeAccount struct {
+	// Credentials 這個帳號的 credential 摘要，依 id 排序。沒有 secret，也沒有密文。
+	Credentials    *[]Credential         `json:"credentials,omitempty"`
 	DeletedAt      *time.Time            `json:"deleted_at"`
 	ExchAccountUid string                `json:"exch_account_uid"`
 	Exchange       Exchange              `json:"exchange"`
@@ -172,10 +225,10 @@ type ExchangeAccountKind struct {
 	DisabledAt *time.Time `json:"disabled_at"`
 	Kind       string     `json:"kind"`
 
-	// LastError C5-03 才寫。這張票留空，再啟用時清掉。
+	// LastError 這個 kind 的讀取失敗時寫入，credential 仍可為 active。再啟用時清掉。
 	LastError *string `json:"last_error"`
 
-	// VerifiedAt C5-03 才寫。這張票留空，再啟用時清掉。
+	// VerifiedAt credential.verify 通過這個 kind 的讀取時寫入。再啟用時清掉。
 	VerifiedAt *time.Time `json:"verified_at"`
 }
 
@@ -459,6 +512,9 @@ type CreateExchangeAccountJSONRequestBody = ExchangeAccountCreate
 
 // UpdateExchangeAccountJSONRequestBody defines body for UpdateExchangeAccount for application/json ContentType.
 type UpdateExchangeAccountJSONRequestBody = ExchangeAccountUpdate
+
+// CreateExchangeAccountCredentialJSONRequestBody defines body for CreateExchangeAccountCredential for application/json ContentType.
+type CreateExchangeAccountCredentialJSONRequestBody = CredentialCreate
 
 // EnableExchangeAccountKindJSONRequestBody defines body for EnableExchangeAccountKind for application/json ContentType.
 type EnableExchangeAccountKindJSONRequestBody = ExchangeAccountKindEnable

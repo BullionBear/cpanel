@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -13,8 +14,18 @@ import (
 // Replicas run the same statements at the same time. Each rule takes its keys in one fixed order, so a replica
 // that hits another's uncommitted key waits for it instead of deadlocking.
 func Rules() []Rule {
-	return []Rule{MaintPartitions, MftikoSync, SymSync, Streams, Periodics}
+	return []Rule{MaintPartitions, MftikoSync, SymSync, Credentials, Streams, Periodics}
 }
+
+// CredentialVerifyKind is the job that opens one unverified credential and checks it
+// against the exchange. The worker runs it. This package only inserts the row.
+const CredentialVerifyKind = "credential.verify"
+
+// CredentialDedup is the unfinished-job key for one credential.
+func CredentialDedup(id int64) string { return fmt.Sprintf("credential:%d", id) }
+
+// AccountLease is the lease shared by every job of one exchange account.
+func AccountLease(accountID int64) string { return fmt.Sprintf("account:%d", accountID) }
 
 // MaintPartitions registers maint.partitions, which makes and expires the ingest.job_run partitions every hour
 // (C3-03 runs it).
@@ -39,6 +50,27 @@ func Singleton(name, leaseKey string, period time.Duration) Rule {
 		return int(tag.RowsAffected()), err
 	}}
 }
+
+// Credentials inserts credential.verify for every unverified read credential whose account
+// is still there. A job already waiting is left alone. An egress pause does not stop the
+// insert; the worker does not claim this kind while the egress is paused, because it is
+// not a local job.
+var Credentials = Rule{Name: "credentials", Run: func(ctx context.Context, tx pgx.Tx, _ time.Time) (int, error) {
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO ingest.job (kind, dedup_key, lease_key, params)
+		SELECT $1, 'credential:' || c.id, 'account:' || c.exchange_account_id,
+		       jsonb_build_object('credential_id', c.id)
+		FROM pms.credential c
+		JOIN pms.exchange_account a ON a.id = c.exchange_account_id
+		WHERE c.status = 'unverified' AND c.purpose = 'read' AND a.deleted_at IS NULL
+		  AND NOT EXISTS (SELECT FROM ingest.job j WHERE j.dedup_key = 'credential:' || c.id)
+		ORDER BY c.id
+		ON CONFLICT (dedup_key) DO NOTHING`, CredentialVerifyKind)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}}
 
 // Streams inserts one job for every stream that is due, not paused, and has no unfinished job. The worker moves
 // the stream's next_due_at when the job ends (C3-03). NOT EXISTS skips streams whose job is already there without

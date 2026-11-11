@@ -493,8 +493,8 @@ paths:
         - bearerAuth: []
       summary: 列出未刪除的交易所帳號
       description: |
-        軟刪除的帳號不在這份清單裡。每一筆帶上 kind 列，含已停用的。
-        `verified_at` 與 `last_error` 這張票留空。不 join `api_id`，也沒有 unmatched。
+        軟刪除的帳號不在這份清單裡。每一筆帶上 kind 列，含已停用的，以及 credential 摘要。
+        摘要沒有 secret。不 join `api_id`，也沒有 unmatched。
       responses:
         '200':
           description: 未刪除的帳號，依 id 排序。
@@ -662,6 +662,62 @@ paths:
                 $ref: '#/components/schemas/Problem'
         '404':
           description: 沒有這個帳號。`code` 是 `not_found`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /exchange-accounts/{id}/credentials:
+    parameters:
+      - $ref: '#/components/parameters/ExchangeAccountId'
+    post:
+      tags: [accounts]
+      operationId: createExchangeAccountCredential
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: 登記一把唯讀 key
+      description: |
+        body 是 api key 與 secret。OKX 還要 passphrase；Binance、Bybit 帶了 passphrase 回 400。
+        cpanel-api 立刻用 worker 的公鑰封裝，寫入 `pms.credential`，狀態 `unverified`，並排 `credential.verify`。
+        回應沒有 secret。已有一列 `unverified` 回 409。已軟刪除的帳號回 404。
+        建立成功讓帳號 `revision` 加 1。cookie 登入的請求要帶對的 `Origin`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialCreate'
+      responses:
+        '202':
+          description: 已封裝並排驗證。狀態是 `unverified`。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Credential'
+        '400':
+          description: 缺 api key 或 secret，OKX 缺 passphrase，或 Binance、Bybit 帶了 passphrase。`code` 是 `bad_request`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          description: Origin 不符。`code` 是 `forbidden`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: 沒有這個帳號，或帳號已軟刪除。`code` 是 `not_found`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: 這個帳號已經有一列 `unverified`。`code` 是 `conflict`。
           content:
             application/problem+json:
               schema:
@@ -1183,11 +1239,11 @@ components:
           type: string
           format: date-time
           nullable: true
-          description: C5-03 才寫。這張票留空，再啟用時清掉。
+          description: credential.verify 通過這個 kind 的讀取時寫入。再啟用時清掉。
         last_error:
           type: string
           nullable: true
-          description: C5-03 才寫。這張票留空，再啟用時清掉。
+          description: 這個 kind 的讀取失敗時寫入，credential 仍可為 active。再啟用時清掉。
     ExchangeAccount:
       type: object
       additionalProperties: false
@@ -1214,6 +1270,11 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ExchangeAccountKind'
+        credentials:
+          type: array
+          description: 這個帳號的 credential 摘要，依 id 排序。沒有 secret，也沒有密文。
+          items:
+            $ref: '#/components/schemas/Credential'
     ExchangeAccountCreate:
       type: object
       additionalProperties: false
@@ -1246,3 +1307,37 @@ components:
       properties:
         kind:
           type: string
+    Credential:
+      type: object
+      additionalProperties: false
+      required: [id, status, api_key_last4, failure_reason, verified_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum: [unverified, active, rejected, auth_failed, disabled]
+        api_key_last4:
+          type: string
+          description: api key 的末四碼。不是 secret。
+        failure_reason:
+          type: string
+          nullable: true
+          description: rejected 時看得到原因。不含 secret。
+        verified_at:
+          type: string
+          format: date-time
+          nullable: true
+    CredentialCreate:
+      type: object
+      additionalProperties: false
+      required: [api_key, api_secret]
+      properties:
+        api_key:
+          type: string
+        api_secret:
+          type: string
+        passphrase:
+          type: string
+          description: OKX 必填。Binance、Bybit 不可帶。

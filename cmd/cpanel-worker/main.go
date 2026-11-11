@@ -56,13 +56,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/BullionBear/cpanel/internal/credential"
 	"github.com/BullionBear/cpanel/internal/doctor"
 	"github.com/BullionBear/cpanel/internal/mftiko"
 	"github.com/BullionBear/cpanel/internal/mirror"
 	"github.com/BullionBear/cpanel/internal/platform/config"
 	"github.com/BullionBear/cpanel/internal/platform/httpserver"
 	"github.com/BullionBear/cpanel/internal/platform/logger"
-	"github.com/BullionBear/cpanel/internal/platform/sealbox"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox/open"
 	"github.com/BullionBear/cpanel/internal/reconcile"
 	"github.com/BullionBear/cpanel/internal/sym"
@@ -158,14 +158,14 @@ func main() {
 		}
 		return
 	}
-	pub, ok, err := loadSealboxPrivate(opt)
+	key, ok, err := loadSealboxPrivate(opt)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
 		os.Exit(2)
 	}
 	ev := log.Info().Dict("config", set.Dict())
 	if ok {
-		fp := pub.Fingerprint()
+		fp := key.Public().Fingerprint()
 		ev = ev.Str("sealbox_fingerprint", hex.EncodeToString(fp[:]))
 	}
 	ev.Msg("starting")
@@ -215,14 +215,18 @@ func main() {
 	} else {
 		symbols = client
 	}
+	handlers := worker.Handlers{
+		reconcile.MaintPartitions.Name: worker.MaintPartitions,
+		reconcile.MftikoSync.Name:      mirror.MftikoSync(accounts),
+		reconcile.SymSync.Name:         mirror.SymSync(symbols),
+	}
+	if key != nil {
+		handlers[reconcile.CredentialVerifyKind] = credential.Verify{DB: pool, Key: key}.Handle
+	}
 	jobs := &worker.Worker{
 		DB: pool, Slots: opt.jobSlots, Grace: opt.shutdownTimeout, Egress: opt.egress, Log: log,
-		Local: []string{reconcile.MftikoSync.Name, reconcile.SymSync.Name},
-		Handlers: worker.Handlers{
-			reconcile.MaintPartitions.Name: worker.MaintPartitions,
-			reconcile.MftikoSync.Name:      mirror.MftikoSync(accounts),
-			reconcile.SymSync.Name:         mirror.SymSync(symbols),
-		},
+		Local:    []string{reconcile.MftikoSync.Name, reconcile.SymSync.Name},
+		Handlers: handlers,
 	}
 	working := make(chan struct{})
 	go func() {
@@ -258,23 +262,23 @@ func keygen(path string) error {
 
 // loadSealboxPrivate parses the worker private key when a database URL is set. doctor and keygen do
 // not call it. A file named by $CPANEL_SEALBOX_PRIVATE_KEY_FILE must be mode 0600.
-func loadSealboxPrivate(opt options) (sealbox.PublicKey, bool, error) {
+func loadSealboxPrivate(opt options) (*open.PrivateKey, bool, error) {
 	if opt.database == "" {
-		return sealbox.PublicKey{}, false, nil
+		return nil, false, nil
 	}
 	if strings.TrimSpace(opt.sealboxPrivate) == "" {
-		return sealbox.PublicKey{}, false, errors.New("sealbox private key is required ($CPANEL_SEALBOX_PRIVATE_KEY or $CPANEL_SEALBOX_PRIVATE_KEY_FILE)")
+		return nil, false, errors.New("sealbox private key is required ($CPANEL_SEALBOX_PRIVATE_KEY or $CPANEL_SEALBOX_PRIVATE_KEY_FILE)")
 	}
 	if path := os.Getenv("CPANEL_SEALBOX_PRIVATE_KEY_FILE"); path != "" {
 		if err := open.CheckKeyFile(path); err != nil {
-			return sealbox.PublicKey{}, false, err
+			return nil, false, err
 		}
 	}
 	k, err := open.ParsePrivateKey(opt.sealboxPrivate)
 	if err != nil {
-		return sealbox.PublicKey{}, false, err
+		return nil, false, err
 	}
-	return k.Public(), true, nil
+	return k, true, nil
 }
 
 // requireSchema checks the database version. It does not migrate. An empty URL is a configuration

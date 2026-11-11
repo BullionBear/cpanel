@@ -16,6 +16,7 @@ import (
 	cpanelv1 "github.com/BullionBear/cpanel/contract/gen/cpanel/v1"
 	"github.com/BullionBear/cpanel/internal/auth"
 	"github.com/BullionBear/cpanel/internal/platform/buildinfo"
+	"github.com/BullionBear/cpanel/internal/platform/sealbox"
 	"github.com/BullionBear/cpanel/migrations"
 	"github.com/BullionBear/cpanel/web"
 )
@@ -30,6 +31,8 @@ type Config struct {
 	Discord     auth.Directory // overrides Auth when set; tests use it
 	SessionTTL  time.Duration  // zero means auth.DefaultSessionTTL
 	RoleRecheck time.Duration  // zero means auth.DefaultRoleRecheck
+	Sealbox     sealbox.PublicKey
+	HasSealbox  bool // false until the process loaded the worker public key
 }
 
 // Handler is /healthz, /readyz, /metrics, the auth routes, the ops routes, the account routes, and the SPA for every other path.
@@ -58,6 +61,8 @@ func Handler(cfg Config) http.Handler {
 		settings:    cfg.Auth,
 		sessionTTL:  ttl,
 		roleRecheck: recheck,
+		sealbox:     cfg.Sealbox,
+		hasSealbox:  cfg.HasSealbox,
 	}
 	strict := cpanelv1.NewStrictHandlerWithOptions(s, []cpanelv1.StrictMiddlewareFunc{s.withRequest}, cpanelv1.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
@@ -87,6 +92,7 @@ func Handler(cfg Config) http.Handler {
 	mux.Handle("/mirror/status", getOnly(apiHandler))
 	mux.Handle("/exchange-accounts", methods(apiHandler, http.MethodGet, http.MethodPost))
 	mux.Handle("/exchange-accounts/{id}", methods(apiHandler, http.MethodGet, http.MethodPatch, http.MethodDelete))
+	mux.Handle("/exchange-accounts/{id}/credentials", methods(apiHandler, http.MethodPost))
 	mux.Handle("/exchange-accounts/{id}/kinds", methods(apiHandler, http.MethodPost))
 	mux.Handle("/exchange-accounts/{id}/kinds/{kind}/disable", methods(apiHandler, http.MethodPost))
 	mux.Handle("/", spa(siteFiles()))
@@ -111,6 +117,8 @@ type server struct {
 	settings    auth.Settings
 	sessionTTL  time.Duration
 	roleRecheck time.Duration
+	sealbox     sealbox.PublicKey
+	hasSealbox  bool
 }
 
 var _ cpanelv1.StrictServerInterface = (*server)(nil)
