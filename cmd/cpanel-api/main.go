@@ -18,8 +18,10 @@
 //	-discord-redirect-uri $CPANEL_DISCORD_REDIRECT_URI  defaults to {public-origin}/auth/discord/callback
 //	-session-ttl       $CPANEL_SESSION_TTL        session lifetime, default 12h
 //	-role-recheck      $CPANEL_ROLE_RECHECK       how often to recheck the Discord role, default 1h
+//	-sealbox-public-key $CPANEL_SEALBOX_PUBLIC_KEY  worker public key, standard base64; required when -database is set
 //
 // Every secret may instead come from a file named by $NAME_FILE, which is how compose mounts them (C2-D008).
+// The sealbox public key is only the sealing key. This process does not link the code that opens a box (I6).
 //
 // The effective settings are logged at startup, as JSON on stderr. Startup does not migrate: the database
 // must already be at the embedded version (cpanel-migrate up), or the process refuses to start and says why.
@@ -31,11 +33,13 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -46,6 +50,7 @@ import (
 	"github.com/BullionBear/cpanel/internal/platform/config"
 	"github.com/BullionBear/cpanel/internal/platform/httpserver"
 	"github.com/BullionBear/cpanel/internal/platform/logger"
+	"github.com/BullionBear/cpanel/internal/platform/sealbox"
 	"github.com/BullionBear/cpanel/migrations"
 )
 
@@ -66,6 +71,7 @@ type options struct {
 	discordRedirectURI  string
 	sessionTTL          time.Duration
 	roleRecheck         time.Duration
+	sealboxPublic       string
 }
 
 func parseArgs(args []string, getenv func(string) string) (options, *config.Set, error) {
@@ -87,6 +93,7 @@ func parseArgs(args []string, getenv func(string) string) (options, *config.Set,
 	set.String(&opt.discordRedirectURI, "discord-redirect-uri", "CPANEL_DISCORD_REDIRECT_URI", "", "OAuth redirect URI; default is {public-origin}/auth/discord/callback")
 	set.Duration(&opt.sessionTTL, "session-ttl", "CPANEL_SESSION_TTL", auth.DefaultSessionTTL, "session lifetime")
 	set.Duration(&opt.roleRecheck, "role-recheck", "CPANEL_ROLE_RECHECK", auth.DefaultRoleRecheck, "how often to recheck the Discord role")
+	set.Secret(&opt.sealboxPublic, "sealbox-public-key", "CPANEL_SEALBOX_PUBLIC_KEY", "worker public key, standard base64")
 	if err := set.Parse(args); err != nil {
 		return options{}, nil, err
 	}
@@ -103,7 +110,17 @@ func main() {
 		os.Exit(2)
 	}
 	log := logger.New(os.Stderr, name, opt.logLevel)
-	log.Info().Dict("config", set.Dict()).Msg("starting")
+	pub, ok, err := loadSealboxPublic(opt)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+		os.Exit(2)
+	}
+	ev := log.Info().Dict("config", set.Dict())
+	if ok {
+		fp := pub.Fingerprint()
+		ev = ev.Str("sealbox_fingerprint", hex.EncodeToString(fp[:]))
+	}
+	ev.Msg("starting")
 	if err := requireSchema(opt.database); err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
 		if !errors.Is(err, migrations.ErrDatabaseURLEmpty) {
@@ -139,6 +156,22 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info().Msg("stopped")
+}
+
+// loadSealboxPublic parses the worker public key when a database URL is set. Without a database the
+// process is already going to refuse to start, and the existing error names that setting.
+func loadSealboxPublic(opt options) (sealbox.PublicKey, bool, error) {
+	if opt.database == "" {
+		return sealbox.PublicKey{}, false, nil
+	}
+	if strings.TrimSpace(opt.sealboxPublic) == "" {
+		return sealbox.PublicKey{}, false, errors.New("sealbox public key is required ($CPANEL_SEALBOX_PUBLIC_KEY or $CPANEL_SEALBOX_PUBLIC_KEY_FILE)")
+	}
+	pub, err := sealbox.ParsePublicKey(opt.sealboxPublic)
+	if err != nil {
+		return sealbox.PublicKey{}, false, err
+	}
+	return pub, true, nil
 }
 
 // requireSchema checks the database version. It does not migrate. An empty URL is a configuration

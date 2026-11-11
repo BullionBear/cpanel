@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -15,6 +18,8 @@ import (
 	"github.com/BullionBear/cpanel/internal/cmdtest"
 	"github.com/BullionBear/cpanel/internal/platform/logger"
 	"github.com/BullionBear/cpanel/internal/platform/pgtest"
+	"github.com/BullionBear/cpanel/internal/platform/sealbox"
+	"github.com/BullionBear/cpanel/internal/platform/sealbox/open"
 	"github.com/BullionBear/cpanel/migrations"
 )
 
@@ -80,13 +85,21 @@ func TestBinary(t *testing.T) {
 	}
 
 	t.Run("healthz, reconcile, jobs, metrics and graceful shutdown", func(t *testing.T) {
-		p := cmdtest.Start(t, bin, []string{"CPANEL_WORKER_LISTEN=127.0.0.1:0", "CPANEL_DATABASE_URL=" + srv.DSN(), "CPANEL_EGRESS=edge"},
+		priv, keyEnv := privateKeyFile(t)
+		p := cmdtest.Start(t, bin, []string{"CPANEL_WORKER_LISTEN=127.0.0.1:0", "CPANEL_DATABASE_URL=" + srv.DSN(), "CPANEL_EGRESS=edge", keyEnv},
 			"-shutdown-timeout=5s", "-reconcile-interval=50ms")
 		start := p.Log(t, "starting")
 		cfg, _ := start["config"].(map[string]any)
-		if start["component"] != name || cfg["listen"] != "127.0.0.1:0" || cfg["database"] != "***" || cfg["log-level"] != "info" ||
+		if start["component"] != name || cfg["listen"] != "127.0.0.1:0" || cfg["database"] != "***" || cfg["sealbox-private-key"] != "***" || cfg["log-level"] != "info" ||
 			cfg["shutdown-timeout"] != "5s" || cfg["reconcile-interval"] != "50ms" || cfg["job-slots"] != "4" || cfg["egress"] != "edge" {
 			t.Errorf("startup line %v", start)
+		}
+		raw, err := json.Marshal(start)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if priv == "" || strings.Contains(string(raw), priv) || start["sealbox_fingerprint"] == "" {
+			t.Fatalf("starting log leaked the private key or has no fingerprint: %s", raw)
 		}
 		addr, _ := p.Log(t, "listening")["addr"].(string)
 
@@ -170,9 +183,92 @@ func TestBinary(t *testing.T) {
 
 	t.Run("behind database is refused", func(t *testing.T) {
 		fresh := pgtest.Start(t)
-		code, stderr := cmdtest.Run(t, bin, []string{"CPANEL_DATABASE_URL=" + fresh.DSN()})
+		_, keyEnv := privateKeyFile(t)
+		code, stderr := cmdtest.Run(t, bin, []string{"CPANEL_DATABASE_URL=" + fresh.DSN(), keyEnv})
 		if code != 1 || !strings.Contains(stderr, "behind") || !strings.Contains(stderr, "0001_schema") {
 			t.Errorf("exit %d, stderr %q", code, stderr)
 		}
 	})
+
+	t.Run("missing private key exits 2", func(t *testing.T) {
+		code, stderr := cmdtest.Run(t, bin, []string{"CPANEL_DATABASE_URL=" + srv.DSN()})
+		if code != 2 || !strings.Contains(stderr, "CPANEL_SEALBOX_PRIVATE_KEY") {
+			t.Errorf("exit %d, stderr %q", code, stderr)
+		}
+	})
+
+	t.Run("group-readable key file exits 2", func(t *testing.T) {
+		k, err := open.GenerateKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), "key")
+		if err := open.WriteKeyFile(path, k); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		code, stderr := cmdtest.Run(t, bin, []string{"CPANEL_DATABASE_URL=" + srv.DSN(), "CPANEL_SEALBOX_PRIVATE_KEY_FILE=" + path})
+		if code != 2 || !strings.Contains(stderr, "0600") || strings.Contains(stderr, strings.TrimSpace(string(body))) {
+			t.Errorf("exit %d, stderr %q", code, stderr)
+		}
+	})
+}
+
+func TestKeygen(t *testing.T) {
+	bin := cmdtest.Build(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sealbox.key")
+	code, stdout, stderr := cmdtest.RunOutput(t, bin, nil, "keygen", path)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	if _, err := sealbox.ParsePublicKey(stdout); err != nil {
+		t.Fatalf("stdout %q: %v", stdout, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %o, want 0600", info.Mode().Perm())
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := strings.TrimSpace(string(body))
+	if secret == "" || strings.Contains(stdout, secret) || strings.Contains(stderr, secret) {
+		t.Fatal("keygen printed the private key")
+	}
+	code, _, stderr = cmdtest.RunOutput(t, bin, nil, "keygen", path)
+	if code == 0 || !strings.Contains(stderr, "exists") {
+		t.Fatalf("overwrite exit %d, stderr %q", code, stderr)
+	}
+	code, _, stderr = cmdtest.RunOutput(t, bin, nil, "keygen")
+	if code != 2 || !strings.Contains(stderr, "path") {
+		t.Fatalf("missing path exit %d, stderr %q", code, stderr)
+	}
+}
+
+func privateKeyFile(t *testing.T) (string, string) {
+	t.Helper()
+	k, err := open.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "sealbox.key")
+	if err := open.WriteKeyFile(path, k); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(body)), "CPANEL_SEALBOX_PRIVATE_KEY_FILE=" + path
 }

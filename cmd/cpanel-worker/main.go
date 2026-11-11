@@ -16,13 +16,20 @@
 //	-mftiko-token      $CPANEL_MFTIKO_TOKEN       mftiko-api bearer token; logged as ***
 //	-sym-url           $CPANEL_SYM_URL            SYM gRPC listener, e.g. http://100.65.26.119:7450
 //	-sym-token         $CPANEL_SYM_TOKEN          SYM gRPC bearer token; logged as ***
+//	-sealbox-private-key $CPANEL_SEALBOX_PRIVATE_KEY  X25519 private key, standard base64; required when -database is set
 //
 // Every secret may instead come from a file named by $NAME_FILE, which is how compose mounts them (C2-D008).
+// A private key file must be mode 0600. The key is not logged.
 //
 //	cpanel-worker [flags] doctor
+//	cpanel-worker keygen <path>
 //
 // doctor calls mftiko GET /accounts, SYM's grpc.health.v1 Check and SYM Revisions, prints one line per check and
-// exits 0 when all pass, 1 otherwise. It needs no database and starts no server.
+// exits 0 when all pass, 1 otherwise. It needs no database and starts no server. It does not open secrets, so it
+// does not require the sealbox private key.
+//
+// keygen writes a new private key to path, mode 0600, and prints only the public key. It refuses a path that
+// already exists. The private key is not printed.
 //
 // The effective settings are logged at startup, as JSON on stderr. Startup does not migrate: the database
 // must already be at the embedded version (cpanel-migrate up), or the process refuses to start and says why.
@@ -34,11 +41,13 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -53,6 +62,8 @@ import (
 	"github.com/BullionBear/cpanel/internal/platform/config"
 	"github.com/BullionBear/cpanel/internal/platform/httpserver"
 	"github.com/BullionBear/cpanel/internal/platform/logger"
+	"github.com/BullionBear/cpanel/internal/platform/sealbox"
+	"github.com/BullionBear/cpanel/internal/platform/sealbox/open"
 	"github.com/BullionBear/cpanel/internal/reconcile"
 	"github.com/BullionBear/cpanel/internal/sym"
 	"github.com/BullionBear/cpanel/internal/worker"
@@ -73,7 +84,9 @@ type options struct {
 	mftikoToken       string
 	symURL            string
 	symToken          string
+	sealboxPrivate    string
 	doctor            bool
+	keygenPath        string
 }
 
 func parseArgs(args []string, getenv func(string) string) (options, *config.Set, error) {
@@ -92,6 +105,7 @@ func parseArgs(args []string, getenv func(string) string) (options, *config.Set,
 	set.Secret(&opt.mftikoToken, "mftiko-token", "CPANEL_MFTIKO_TOKEN", "mftiko-api bearer token")
 	set.String(&opt.symURL, "sym-url", "CPANEL_SYM_URL", "", "SYM gRPC listener URL")
 	set.Secret(&opt.symToken, "sym-token", "CPANEL_SYM_TOKEN", "SYM gRPC bearer token")
+	set.Secret(&opt.sealboxPrivate, "sealbox-private-key", "CPANEL_SEALBOX_PRIVATE_KEY", "X25519 private key, standard base64")
 	rest, err := set.ParseRemaining(args)
 	if err != nil {
 		return options{}, nil, err
@@ -106,8 +120,12 @@ func parseArgs(args []string, getenv func(string) string) (options, *config.Set,
 	case len(rest) == 0:
 	case len(rest) == 1 && rest[0] == "doctor":
 		opt.doctor = true
+	case len(rest) == 2 && rest[0] == "keygen":
+		opt.keygenPath = rest[1]
+	case len(rest) == 1 && rest[0] == "keygen":
+		return options{}, nil, errors.New("keygen needs the path of a new private key file")
 	default:
-		return options{}, nil, fmt.Errorf("unexpected argument %q; the only command is doctor", rest[0])
+		return options{}, nil, fmt.Errorf("unexpected argument %q; commands are doctor and keygen", rest[0])
 	}
 	return opt, set, nil
 }
@@ -122,6 +140,13 @@ func main() {
 		os.Exit(2)
 	}
 	log := logger.New(os.Stderr, name, opt.logLevel)
+	if opt.keygenPath != "" {
+		if err := keygen(opt.keygenPath); err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if opt.doctor {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -133,7 +158,17 @@ func main() {
 		}
 		return
 	}
-	log.Info().Dict("config", set.Dict()).Msg("starting")
+	pub, ok, err := loadSealboxPrivate(opt)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+		os.Exit(2)
+	}
+	ev := log.Info().Dict("config", set.Dict())
+	if ok {
+		fp := pub.Fingerprint()
+		ev = ev.Str("sealbox_fingerprint", hex.EncodeToString(fp[:]))
+	}
+	ev.Msg("starting")
 	if err := requireSchema(opt.database); err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
 		if !errors.Is(err, migrations.ErrDatabaseURLEmpty) {
@@ -206,6 +241,40 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info().Msg("stopped")
+}
+
+// keygen writes a new private key and prints the public key. The private key stays in the file.
+func keygen(path string) error {
+	k, err := open.GenerateKey()
+	if err != nil {
+		return err
+	}
+	if err := open.WriteKeyFile(path, k); err != nil {
+		return err
+	}
+	fmt.Println(k.Public().String())
+	return nil
+}
+
+// loadSealboxPrivate parses the worker private key when a database URL is set. doctor and keygen do
+// not call it. A file named by $CPANEL_SEALBOX_PRIVATE_KEY_FILE must be mode 0600.
+func loadSealboxPrivate(opt options) (sealbox.PublicKey, bool, error) {
+	if opt.database == "" {
+		return sealbox.PublicKey{}, false, nil
+	}
+	if strings.TrimSpace(opt.sealboxPrivate) == "" {
+		return sealbox.PublicKey{}, false, errors.New("sealbox private key is required ($CPANEL_SEALBOX_PRIVATE_KEY or $CPANEL_SEALBOX_PRIVATE_KEY_FILE)")
+	}
+	if path := os.Getenv("CPANEL_SEALBOX_PRIVATE_KEY_FILE"); path != "" {
+		if err := open.CheckKeyFile(path); err != nil {
+			return sealbox.PublicKey{}, false, err
+		}
+	}
+	k, err := open.ParsePrivateKey(opt.sealboxPrivate)
+	if err != nil {
+		return sealbox.PublicKey{}, false, err
+	}
+	return k.Public(), true, nil
 }
 
 // requireSchema checks the database version. It does not migrate. An empty URL is a configuration

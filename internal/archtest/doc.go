@@ -13,6 +13,6 @@
 //     sealed secrets.
 //
 // The rules are about what the binaries contain, so they check production code and not test files. They match on
-// paths, so the packages they name must exist: internal/reconcile and internal/platform/sealbox/open are reserved
-// until C3 and C5 fill them.
+// paths, so the packages they name must exist. internal/platform/sealbox/open opens sealed secrets (C5-02);
+// cmd/cpanel-api links the sealing package and not this one.
 package archtest

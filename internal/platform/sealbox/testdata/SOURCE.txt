@@ -1,0 +1,16 @@
+Produced by github.com/BullionBear/mftiko v0.8.0 (commit c769041),
+internal/platform/sealbox/sealbox.go Seal and SealCredentials.
+cpanel does not import that package. These files are test vectors, not deployment keys.
+
+recipient.priv / recipient.pub
+    X25519 key pair. The private key is standard base64. It is not a host secret.
+
+mftiko_plain.bin
+    Plaintext passed to Seal. mftiko_seal.bin is the sealed box.
+
+mftiko_credentials.plain
+    proto.Marshal of mftiko state.v1.AccountCredentials:
+    api_id 42, kind BinanceUM, key_type hmac,
+    key vector-api-key, secret vector-api-secret, passphrase vector-passphrase.
+    mftiko_credentials.bin is that message sealed with SealCredentials.
+    The strings are fixtures, not an exchange key.
