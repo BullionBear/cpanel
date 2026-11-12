@@ -40,6 +40,14 @@ tests:
         values: '1+0x20'
       - series: 'cpanel_mirror_account_identity_conflicts'
         values: '1+0x20'
+      - series: 'cpanel_mftiko_accounts_unmatched{traded="true",reason="no_exchange_account"}'
+        values: '1+0x40'
+      - series: 'cpanel_mftiko_accounts_unmatched{traded="false",reason="no_exchange_account"}'
+        values: '1+0x40'
+      - series: 'cpanel_mftiko_kinds_out_of_scope{kind="BinancePM",traded="true"}'
+        values: '1+0x40'
+      - series: 'cpanel_mftiko_kinds_out_of_scope{kind="BinanceEO",traded="false"}'
+        values: '1+0x40'
     alert_rule_test:
       - eval_time: 6m
         alertname: CpanelStreamConsecutiveFailures
@@ -145,3 +153,27 @@ tests:
               severity: warning
             exp_annotations:
               summary: a scope UID is not in the symbol mirror
+      - eval_time: 29m
+        alertname: CpanelMftikoAccountUncovered
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: CpanelMftikoAccountUncovered
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              traded: "true"
+              reason: no_exchange_account
+            exp_annotations:
+              summary: an mftiko account with trades is not covered
+      - eval_time: 29m
+        alertname: CpanelMftikoKindOutOfScope
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: CpanelMftikoKindOutOfScope
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              kind: BinancePM
+              traded: "true"
+            exp_annotations:
+              summary: an out-of-scope kind has trades

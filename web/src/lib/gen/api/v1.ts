@@ -303,7 +303,7 @@ export interface paths {
         /**
          * 列出未刪除的交易所帳號
          * @description 軟刪除的帳號不在這份清單裡。每一筆帶上 kind 列，含已停用的，以及 credential 摘要。
-         *     摘要沒有 secret。不 join `api_id`，也沒有 unmatched。
+         *     摘要沒有 secret。`api_ids` 是對到這個帳號的 mftiko 列。unmatched 在另一支。
          */
         get: operations["listExchangeAccounts"];
         put?: never;
@@ -315,6 +315,28 @@ export interface paths {
          *     cookie 登入的請求要帶對的 `Origin`。
          */
         post: operations["createExchangeAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/exchange-accounts/unmatched": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * mftiko 有、vault 沒涵蓋的帳號
+         * @description 一列是一個 `(exchange, exch_account_uid)`，不是一個 `api_id`。缺身分的 `api_id` 自己一列。
+         *     `kind_out_of_scope` 是一期不做的 kind，不算 unmatched 的數量，預設仍列出。
+         *     不建立 vault 帳號，也不啟用 kind。
+         */
+        get: operations["listUnmatchedAccounts"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -645,6 +667,8 @@ export interface components {
             kinds: components["schemas"]["ExchangeAccountKind"][];
             /** @description 這個帳號的 credential 摘要，依 id 排序。沒有 secret，也沒有密文。 */
             credentials?: components["schemas"]["Credential"][];
+            /** @description 對到這個未刪除帳號的 mftiko 列，依 api_id 排序。含已軟刪除的 mftiko 列。 */
+            api_ids?: components["schemas"]["MirroredAccount"][];
         };
         ExchangeAccountCreate: {
             exchange: components["schemas"]["Exchange"];
@@ -660,6 +684,36 @@ export interface components {
         };
         ExchangeAccountKindEnable: {
             kind: string;
+        };
+        MirroredAccount: {
+            /** Format: int64 */
+            api_id: number;
+            name: string;
+            kind: string;
+            /** Format: date-time */
+            deleted_at: string | null;
+        };
+        /** @enum {string} */
+        UnmatchedReason: "no_exchange_account" | "missing_identity" | "kind_not_enabled" | "kind_out_of_scope";
+        UnmatchedAccount: {
+            /** @description 缺身分時是 null。 */
+            exchange: string | null;
+            exch_account_uid: string | null;
+            api_ids: components["schemas"]["MirroredAccount"][];
+            /** @description 只有 `kind_not_enabled` 有值。 */
+            missing_kinds: string[];
+            /** @description 這列有沒有 scope。`kind_not_enabled` 只看缺的 kind。 */
+            traded: boolean;
+            /** Format: int64 */
+            scope_count: number;
+            /**
+             * Format: date-time
+             * @description 這列最早的 scope。沒有 scope 時是 null。
+             */
+            since: string | null;
+            reason: components["schemas"]["UnmatchedReason"];
+            /** Format: date-time */
+            first_seen_at: string;
         };
         Credential: {
             /** Format: int64 */
@@ -1267,6 +1321,40 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listUnmatchedAccounts: {
+        parameters: {
+            query?: {
+                /** @description 不帶則含全部 reason，包括 `kind_out_of_scope`。 */
+                reason?: components["schemas"]["UnmatchedReason"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 依 reason、交易所、uid 排序。 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnmatchedAccount"][];
+                };
+            };
+            /** @description reason 不是已知的值。`code` 是 `bad_request`。 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
             default: components["responses"]["Problem"];
         };
     };

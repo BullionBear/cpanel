@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -178,6 +179,47 @@ func TestOpsMetrics(t *testing.T) {
 	}
 	if got := gauge(t, fams, "cpanel_mirror_scope_uids_unresolved", nil); got != 0 {
 		t.Fatalf("unresolved after fill %v", got)
+	}
+}
+
+func TestUnmatchedGauges(t *testing.T) {
+	srv := pgtest.Start(t)
+	ctx := context.Background()
+	if _, err := migrations.Up(ctx, srv.DSN()); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, srv.DSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	seen := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO mirror.account (api_id, name, kind, exchange, exch_account_uid, account_revision, first_seen_at, last_seen_at)
+		VALUES (1, 'spot', 'Binance', 'binance', 'uid', 1, $1, $1),
+		       (2, 'um', 'BinanceUM', 'binance', 'uid', 1, $1, $1),
+		       (3, 'pm', 'BinancePM', 'binance', 'uid-pm', 1, $1, $1)`, seen); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO mirror.scope (api_id, uid, since, first_seen_at, last_seen_at)
+		VALUES (3, 9, $1, $1, $1)`, seen); err != nil {
+		t.Fatal(err)
+	}
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(newOpsCollector(pool, zerolog.Nop()))
+	fams, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gauge(t, fams, "cpanel_mftiko_accounts_unmatched", map[string]string{"traded": "false", "reason": "no_exchange_account"}); got != 1 {
+		t.Fatalf("unmatched %v", got)
+	}
+	if got := gauge(t, fams, "cpanel_mftiko_accounts_unmatched", map[string]string{"traded": "true", "reason": "no_exchange_account"}); got != 0 {
+		t.Fatalf("traded unmatched %v", got)
+	}
+	if got := gauge(t, fams, "cpanel_mftiko_kinds_out_of_scope", map[string]string{"kind": "BinancePM", "traded": "true"}); got != 1 {
+		t.Fatalf("pm %v", got)
 	}
 }
 

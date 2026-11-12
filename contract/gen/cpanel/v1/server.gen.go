@@ -33,6 +33,9 @@ type ServerInterface interface {
 	// CreateExchangeAccount 建立交易所帳號
 	// (POST /exchange-accounts)
 	CreateExchangeAccount(w http.ResponseWriter, r *http.Request)
+	// ListUnmatchedAccounts mftiko 有、vault 沒涵蓋的帳號
+	// (GET /exchange-accounts/unmatched)
+	ListUnmatchedAccounts(w http.ResponseWriter, r *http.Request, params ListUnmatchedAccountsParams)
 	// DeleteExchangeAccount 軟刪除交易所帳號
 	// (DELETE /exchange-accounts/{id})
 	DeleteExchangeAccount(w http.ResponseWriter, r *http.Request, id ExchangeAccountId)
@@ -191,6 +194,39 @@ func (siw *ServerInterfaceWrapper) CreateExchangeAccount(w http.ResponseWriter, 
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CreateExchangeAccount(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListUnmatchedAccounts operation middleware
+func (siw *ServerInterfaceWrapper) ListUnmatchedAccounts(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListUnmatchedAccountsParams
+
+	// ------------- Optional query parameter "reason" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "reason", r.URL.Query(), &params.Reason, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "reason"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "reason", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListUnmatchedAccounts(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -946,6 +982,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/mirror/status", wrapper.GetMirrorStatus)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/exchange-accounts", wrapper.ListExchangeAccounts)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/exchange-accounts", wrapper.CreateExchangeAccount)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/exchange-accounts/unmatched", wrapper.ListUnmatchedAccounts)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/exchange-accounts/{id}", wrapper.DeleteExchangeAccount)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/exchange-accounts/{id}", wrapper.GetExchangeAccount)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/exchange-accounts/{id}", wrapper.UpdateExchangeAccount)
@@ -1281,6 +1318,75 @@ type CreateExchangeAccountdefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response CreateExchangeAccountdefaultApplicationProblemPlusJSONResponse) VisitCreateExchangeAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListUnmatchedAccountsRequestObject struct {
+	Params ListUnmatchedAccountsParams
+}
+
+type ListUnmatchedAccountsResponseObject interface {
+	VisitListUnmatchedAccountsResponse(w http.ResponseWriter) error
+}
+
+type ListUnmatchedAccounts200JSONResponse []UnmatchedAccount
+
+func (response ListUnmatchedAccounts200JSONResponse) VisitListUnmatchedAccountsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListUnmatchedAccounts400ApplicationProblemPlusJSONResponse Problem
+
+func (response ListUnmatchedAccounts400ApplicationProblemPlusJSONResponse) VisitListUnmatchedAccountsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListUnmatchedAccounts401ApplicationProblemPlusJSONResponse struct {
+	UnauthenticatedApplicationProblemPlusJSONResponse
+}
+
+func (response ListUnmatchedAccounts401ApplicationProblemPlusJSONResponse) VisitListUnmatchedAccountsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListUnmatchedAccountsdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ListUnmatchedAccountsdefaultApplicationProblemPlusJSONResponse) VisitListUnmatchedAccountsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -2604,6 +2710,9 @@ type StrictServerInterface interface {
 	// CreateExchangeAccount 建立交易所帳號
 	// (POST /exchange-accounts)
 	CreateExchangeAccount(ctx context.Context, request CreateExchangeAccountRequestObject) (CreateExchangeAccountResponseObject, error)
+	// ListUnmatchedAccounts mftiko 有、vault 沒涵蓋的帳號
+	// (GET /exchange-accounts/unmatched)
+	ListUnmatchedAccounts(ctx context.Context, request ListUnmatchedAccountsRequestObject) (ListUnmatchedAccountsResponseObject, error)
 	// DeleteExchangeAccount 軟刪除交易所帳號
 	// (DELETE /exchange-accounts/{id})
 	DeleteExchangeAccount(ctx context.Context, request DeleteExchangeAccountRequestObject) (DeleteExchangeAccountResponseObject, error)
@@ -2821,6 +2930,32 @@ func (sh *strictHandler) CreateExchangeAccount(w http.ResponseWriter, r *http.Re
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CreateExchangeAccountResponseObject); ok {
 		if err := validResponse.VisitCreateExchangeAccountResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListUnmatchedAccounts operation middleware
+func (sh *strictHandler) ListUnmatchedAccounts(w http.ResponseWriter, r *http.Request, params ListUnmatchedAccountsParams) {
+	var request ListUnmatchedAccountsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListUnmatchedAccounts(ctx, request.(ListUnmatchedAccountsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListUnmatchedAccounts")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListUnmatchedAccountsResponseObject); ok {
+		if err := validResponse.VisitListUnmatchedAccountsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

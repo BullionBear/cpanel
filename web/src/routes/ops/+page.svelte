@@ -10,6 +10,8 @@
 		type JobStatus,
 		type MirrorSource,
 		type Stream,
+		type UnmatchedAccount,
+		type UnmatchedReason,
 		type UnresolvedUid,
 		type StreamStatus
 	} from '#lib/api.ts';
@@ -51,6 +53,21 @@
 	let runs = $state<JobRun[]>([]);
 	let mirrors = $state<MirrorSource[]>([]);
 	let unresolved = $state<UnresolvedUid[]>([]);
+	let unmatchedRows = $state<UnmatchedAccount[]>([]);
+	let unmatchedReason = $state<'' | UnmatchedReason>('');
+
+	const reasonLabels: Record<UnmatchedReason, string> = {
+		no_exchange_account: '沒有 vault 帳號',
+		missing_identity: '缺身分',
+		kind_not_enabled: 'kind 未啟用',
+		kind_out_of_scope: '一期不做'
+	};
+	const unmatchedShown = $derived(
+		unmatchedReason === '' ? unmatchedRows : unmatchedRows.filter((row) => row.reason === unmatchedReason)
+	);
+	const unmatchedIdentities = $derived(
+		unmatchedRows.filter((row) => row.reason !== 'kind_out_of_scope').length
+	);
 	let nextCursor = $state<string | null>(null);
 	let error = $state<string | null>(null);
 	let busy = $state(false);
@@ -89,7 +106,7 @@
 		nextCursor = null;
 		try {
 			const common = shared();
-			const [streamResult, jobResult, runResult, mirrorResult] = await Promise.all([
+			const [streamResult, jobResult, runResult, mirrorResult, unmatchedResult] = await Promise.all([
 				api.GET('/streams', {
 					params: { query: { ...common, status: streamStatus === '' ? undefined : streamStatus } }
 				}),
@@ -106,14 +123,23 @@
 						}
 					}
 				}),
-				api.GET('/mirror/status')
+				api.GET('/mirror/status'),
+				api.GET('/exchange-accounts/unmatched')
 			]);
 			const message =
 				failureMessage(streamResult.error, streamResult.response) ??
 				failureMessage(jobResult.error, jobResult.response) ??
 				failureMessage(runResult.error, runResult.response) ??
-				failureMessage(mirrorResult.error, mirrorResult.response);
-			if (message || !streamResult.data || !jobResult.data || !runResult.data || !mirrorResult.data) {
+				failureMessage(mirrorResult.error, mirrorResult.response) ??
+				failureMessage(unmatchedResult.error, unmatchedResult.response);
+			if (
+				message ||
+				!streamResult.data ||
+				!jobResult.data ||
+				!runResult.data ||
+				!mirrorResult.data ||
+				!unmatchedResult.data
+			) {
 				error = message ?? '沒有內容';
 				return;
 			}
@@ -122,6 +148,7 @@
 			runs = runResult.data.runs;
 			mirrors = mirrorResult.data.sources;
 			unresolved = mirrorResult.data.unresolved_uids ?? [];
+			unmatchedRows = unmatchedResult.data;
 			nextCursor = runResult.data.next_cursor ?? null;
 		} catch {
 			error = '連不到 API';
@@ -306,6 +333,59 @@
 						<td>{row.uid}</td>
 						<td>{row.attempts}</td>
 						<td>{row.last_result}</td>
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+	</div>
+	{/if}
+
+<h3>未涵蓋的帳號</h3>
+<p class="muted">unmatched 身分 {unmatchedIdentities}。一期不做的 kind 另外列出，不算進這個數量。</p>
+<label>
+	reason
+	<select name="unmatched_reason" bind:value={unmatchedReason}>
+		<option value="">全部</option>
+		<option value="no_exchange_account">沒有 vault 帳號</option>
+		<option value="missing_identity">缺身分</option>
+		<option value="kind_not_enabled">kind 未啟用</option>
+		<option value="kind_out_of_scope">一期不做</option>
+	</select>
+</label>
+{#if unmatchedShown.length === 0}
+	<p class="muted">沒有。</p>
+{:else}
+	<div class="scroll">
+		<table>
+			<thead>
+				<tr>
+					<th>交易所</th>
+					<th>uid</th>
+					<th>reason</th>
+					<th>缺的 kind</th>
+					<th>有交易</th>
+					<th>scope</th>
+					<th>最早 since</th>
+					<th>api id</th>
+					<th>第一次看到</th>
+				</tr>
+			</thead>
+			<tbody>
+				{#each unmatchedShown as row (`${row.reason}:${row.exchange ?? ''}:${row.exch_account_uid ?? ''}:${row.api_ids.map((item) => item.api_id).join(',')}`)}
+					<tr>
+						<td>{row.exchange ?? ''}</td>
+						<td>{row.exch_account_uid ?? ''}</td>
+						<td>{reasonLabels[row.reason]}</td>
+						<td>{row.missing_kinds.join(', ')}</td>
+						<td>{row.traded ? '有' : '沒有'}</td>
+						<td>{row.scope_count}</td>
+						<td>{when(row.since)}</td>
+						<td class="wrap">
+							{row.api_ids
+								.map((item) => `${item.api_id} ${item.name} ${item.kind}${item.deleted_at ? ' 已刪' : ''}`)
+								.join(', ')}
+						</td>
+						<td>{when(row.first_seen_at)}</td>
 					</tr>
 				{/each}
 			</tbody>

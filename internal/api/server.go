@@ -91,6 +91,7 @@ func Handler(cfg Config) http.Handler {
 	mux.Handle("/job-runs", getOnly(apiHandler))
 	mux.Handle("/mirror/status", getOnly(apiHandler))
 	mux.Handle("/exchange-accounts", methods(apiHandler, http.MethodGet, http.MethodPost))
+	mux.Handle("/exchange-accounts/unmatched", getOnly(apiHandler))
 	mux.Handle("/exchange-accounts/{id}", methods(apiHandler, http.MethodGet, http.MethodPatch, http.MethodDelete))
 	mux.Handle("/exchange-accounts/{id}/credentials", methods(apiHandler, http.MethodPost))
 	mux.Handle("/exchange-accounts/{id}/kinds", methods(apiHandler, http.MethodPost))
