@@ -144,6 +144,158 @@ func TestRegisterCredential(t *testing.T) {
 	}
 }
 
+func TestCredentialLifecycle(t *testing.T) {
+	db := pgtest.Start(t)
+	ctx := context.Background()
+	if _, err := migrations.Up(ctx, db.DSN()); err != nil {
+		t.Fatal(err)
+	}
+	pool := poolFor(t, db.DSN())
+	key, err := open.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := Handler(Config{Log: zerolog.Nop(), Pool: pool, Auth: testAuthSettings(), Sealbox: key.Public(), HasSealbox: true})
+	raw := "cpanel_credential_lifecycle"
+	if _, err := (&auth.Store{Pool: pool}).CreateToken(ctx, "89", "ada", "lifecycle", raw); err != nil {
+		t.Fatal(err)
+	}
+	authz := bearerHeader(raw)
+	account := decodeAccount(t, call(h, http.MethodPost, "/exchange-accounts", `{"exchange":"binance","exch_account_uid":"uid-89","label":"desk","kinds":["Binance"]}`, authz))
+	rec := call(h, http.MethodPost, "/exchange-accounts/"+strconv.FormatInt(account.ID, 10)+"/credentials", `{"api_key":"key-1234","api_secret":"secret"}`, authz)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("register %d %s", rec.Code, rec.Body.String())
+	}
+	var cred struct {
+		ID    int64  `json:"id"`
+		Last4 string `json:"api_key_last4"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &cred); err != nil {
+		t.Fatal(err)
+	}
+	base := "/exchange-accounts/" + strconv.FormatInt(account.ID, 10) + "/credentials/" + strconv.FormatInt(cred.ID, 10)
+
+	problemOf(t, call(h, http.MethodPost, base+"/disable", "", nil), http.StatusUnauthorized, "unauthenticated")
+	disabled := call(h, http.MethodPost, base+"/disable", "", authz)
+	if disabled.Code != http.StatusOK || !strings.Contains(disabled.Body.String(), `"status":"disabled"`) {
+		t.Fatalf("disable %d %s", disabled.Code, disabled.Body.String())
+	}
+	if jobs(t, ctx, pool, cred.ID) != 0 || revisionOf(t, ctx, pool, account.ID) != 3 || ciphertextLen(t, ctx, pool, cred.ID) == 0 {
+		t.Fatalf("jobs %d revision %d length %d", jobs(t, ctx, pool, cred.ID), revisionOf(t, ctx, pool, account.ID), ciphertextLen(t, ctx, pool, cred.ID))
+	}
+	again := call(h, http.MethodPost, base+"/disable", "", authz)
+	if again.Code != http.StatusOK || revisionOf(t, ctx, pool, account.ID) != 3 {
+		t.Fatalf("second disable %d revision %d", again.Code, revisionOf(t, ctx, pool, account.ID))
+	}
+	problemOf(t, call(h, http.MethodPost, base+"/verify", "", authz), http.StatusConflict, "conflict")
+
+	if _, err := pool.Exec(ctx, `UPDATE pms.credential SET status = 'rejected', failure_reason = 'not read-only' WHERE id = $1`, cred.ID); err != nil {
+		t.Fatal(err)
+	}
+	verified := call(h, http.MethodPost, base+"/verify", "", authz)
+	if verified.Code != http.StatusAccepted || !strings.Contains(verified.Body.String(), `"status":"unverified"`) {
+		t.Fatalf("verify %d %s", verified.Code, verified.Body.String())
+	}
+	if jobs(t, ctx, pool, cred.ID) != 1 || revisionOf(t, ctx, pool, account.ID) != 4 {
+		t.Fatalf("after verify jobs %d revision %d", jobs(t, ctx, pool, cred.ID), revisionOf(t, ctx, pool, account.ID))
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM ingest.job WHERE dedup_key = ANY($1)`, []string{reconcile.CredentialDedup(cred.ID), reconcile.CredentialProbeDedup(cred.ID)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE pms.credential SET status = 'auth_failed', next_probe_at = now()
+		WHERE id = $1`, cred.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO ingest.job (kind, dedup_key, lease_key, params)
+		VALUES ($1, $2, $3, jsonb_build_object('credential_id', $4::bigint))`,
+		reconcile.CredentialProbeKind, reconcile.CredentialProbeDedup(cred.ID), reconcile.AccountLease(account.ID), cred.ID); err != nil {
+		t.Fatal(err)
+	}
+	againVerified := call(h, http.MethodPost, base+"/verify", "", authz)
+	if againVerified.Code != http.StatusAccepted {
+		t.Fatalf("verify from auth_failed %d %s", againVerified.Code, againVerified.Body.String())
+	}
+	var kind string
+	if err := pool.QueryRow(ctx, `SELECT kind FROM ingest.job WHERE dedup_key = $1`, reconcile.CredentialDedup(cred.ID)).Scan(&kind); err != nil {
+		t.Fatal(err)
+	}
+	if kind != reconcile.CredentialVerifyKind || jobs(t, ctx, pool, cred.ID) != 1 || revisionOf(t, ctx, pool, account.ID) != 5 {
+		t.Fatalf("kind %s jobs %d revision %d", kind, jobs(t, ctx, pool, cred.ID), revisionOf(t, ctx, pool, account.ID))
+	}
+
+	deleted := call(h, http.MethodDelete, base, "", authz)
+	if deleted.Code != http.StatusOK || !strings.Contains(deleted.Body.String(), `"api_key_last4":"1234"`) || strings.Contains(deleted.Body.String(), "secret") {
+		t.Fatalf("delete %d %s", deleted.Code, deleted.Body.String())
+	}
+	if ciphertextLen(t, ctx, pool, cred.ID) != 0 || revisionOf(t, ctx, pool, account.ID) != 6 {
+		t.Fatalf("length %d revision %d", ciphertextLen(t, ctx, pool, cred.ID), revisionOf(t, ctx, pool, account.ID))
+	}
+	var sealed []byte
+	if err := pool.QueryRow(ctx, `SELECT ciphertext FROM pms.credential WHERE id = $1`, cred.ID).Scan(&sealed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := open.OpenCredentials(key, sealed, account.ID, cred.ID); err == nil {
+		t.Fatal("deleted ciphertext opened")
+	}
+	if call(h, http.MethodDelete, base, "", authz).Code != http.StatusOK || revisionOf(t, ctx, pool, account.ID) != 6 {
+		t.Fatal("second delete changed the revision")
+	}
+	problemOf(t, call(h, http.MethodPost, "/exchange-accounts/"+strconv.FormatInt(account.ID, 10)+"/credentials/999/disable", "", authz), http.StatusNotFound, "not_found")
+
+	other := decodeAccount(t, call(h, http.MethodPost, "/exchange-accounts", `{"exchange":"bybit","exch_account_uid":"uid-bybit-89","label":"bb"}`, authz))
+	otherRec := call(h, http.MethodPost, "/exchange-accounts/"+strconv.FormatInt(other.ID, 10)+"/credentials", `{"api_key":"bybit-key","api_secret":"secret"}`, authz)
+	if otherRec.Code != http.StatusAccepted {
+		t.Fatalf("bybit register %d", otherRec.Code)
+	}
+	var otherCred struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(otherRec.Body.Bytes(), &otherCred); err != nil {
+		t.Fatal(err)
+	}
+	before := revisionOf(t, ctx, pool, other.ID)
+	if call(h, http.MethodDelete, "/exchange-accounts/"+strconv.FormatInt(other.ID, 10), "", authz).Code != http.StatusOK {
+		t.Fatal("delete account")
+	}
+	if revisionOf(t, ctx, pool, other.ID) != before || ciphertextLen(t, ctx, pool, otherCred.ID) != 0 {
+		t.Fatalf("account delete revision %d length %d", revisionOf(t, ctx, pool, other.ID), ciphertextLen(t, ctx, pool, otherCred.ID))
+	}
+	if n := kindRows(t, ctx, pool, other.ID, "Bybit"); n != 1 {
+		t.Fatalf("kind rows %d", n)
+	}
+}
+
+func jobs(t *testing.T, ctx context.Context, pool *pgxpool.Pool, credentialID int64) int {
+	t.Helper()
+	var n int
+	err := pool.QueryRow(ctx, `SELECT count(*) FROM ingest.job WHERE dedup_key = ANY($1)`,
+		[]string{reconcile.CredentialDedup(credentialID), reconcile.CredentialProbeDedup(credentialID)}).Scan(&n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func revisionOf(t *testing.T, ctx context.Context, pool *pgxpool.Pool, accountID int64) int64 {
+	t.Helper()
+	var n int64
+	if err := pool.QueryRow(ctx, `SELECT revision FROM pms.exchange_account WHERE id = $1`, accountID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func ciphertextLen(t *testing.T, ctx context.Context, pool *pgxpool.Pool, credentialID int64) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT octet_length(ciphertext) FROM pms.credential WHERE id = $1`, credentialID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 func credentialCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, accountID int64) int {
 	t.Helper()
 	var n int

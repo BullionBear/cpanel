@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	cpanelv1 "github.com/BullionBear/cpanel/contract/gen/cpanel/v1"
+	"github.com/BullionBear/cpanel/internal/reconcile"
 )
 
 // Exchange accounts (C5-01). A row is one (exchange, exch_account_uid), including after
@@ -327,6 +329,9 @@ func (s *server) deleteExchangeAccount(ctx context.Context, actor string, id int
 		if err := insertAudit(ctx, tx, actor, accountDelete, accountTarget(id), nil, map[string]any{"status": http.StatusOK}); err != nil {
 			return cpanelv1.ExchangeAccount{}, err
 		}
+		if err := retireAccountCredentials(ctx, tx, actor, id); err != nil {
+			return cpanelv1.ExchangeAccount{}, err
+		}
 		acc, err = loadAccount(ctx, tx, id)
 		if err != nil {
 			return cpanelv1.ExchangeAccount{}, err
@@ -336,6 +341,53 @@ func (s *server) deleteExchangeAccount(ctx context.Context, actor string, id int
 		return cpanelv1.ExchangeAccount{}, err
 	}
 	return acc, nil
+}
+
+// retireAccountCredentials disables every credential of a deleted account and clears
+// its ciphertext, the same way DELETE of one credential does. Kind rows stay.
+// The account's revision is left alone: deleting the account does not bump it.
+func retireAccountCredentials(ctx context.Context, tx pgx.Tx, actor string, accountID int64) error {
+	rows, err := tx.Query(ctx, `
+		SELECT id FROM pms.credential
+		WHERE exchange_account_id = $1 AND (status <> 'disabled' OR octet_length(ciphertext) > 0)
+		ORDER BY id
+		FOR UPDATE`, accountID)
+	if err != nil {
+		return err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE pms.credential
+		SET status = 'disabled', ciphertext = ''::bytea, next_probe_at = NULL
+		WHERE id = ANY($1)`, ids); err != nil {
+		return err
+	}
+	dedups := make([]string, 0, len(ids)*2)
+	for _, id := range ids {
+		dedups = append(dedups, reconcile.CredentialDedup(id), reconcile.CredentialProbeDedup(id))
+		if err := insertAudit(ctx, tx, actor, "credential.delete", "credential:"+strconv.FormatInt(id, 10), map[string]any{
+			"exchange_account_id": accountID, "credential_id": id, "status": "disabled",
+		}, map[string]any{"status": http.StatusOK}); err != nil {
+			return err
+		}
+	}
+	_, err = tx.Exec(ctx, `DELETE FROM ingest.job WHERE dedup_key = ANY($1)`, dedups)
+	return err
 }
 
 func (s *server) enableAccountKind(ctx context.Context, actor string, id int64, kind string) (cpanelv1.ExchangeAccount, error) {

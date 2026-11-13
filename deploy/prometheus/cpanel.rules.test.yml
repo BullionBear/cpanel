@@ -46,6 +46,12 @@ tests:
         values: '1+0x40'
       - series: 'cpanel_mftiko_kinds_out_of_scope{kind="BinancePM",traded="true"}'
         values: '1+0x40'
+      - series: 'cpanel_credentials{status="auth_failed"}'
+        values: '1+0x40'
+      - series: 'cpanel_credentials{status="rejected"}'
+        values: '1+0x40'
+      - series: 'cpanel_account_kind_verify_errors'
+        values: '1+0x40'
       - series: 'cpanel_mftiko_kinds_out_of_scope{kind="BinanceEO",traded="false"}'
         values: '1+0x40'
     alert_rule_test:
@@ -177,3 +183,29 @@ tests:
               traded: "true"
             exp_annotations:
               summary: an out-of-scope kind has trades
+      - eval_time: 1m
+        alertname: CpanelCredentialAuthFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              status: auth_failed
+            exp_annotations:
+              summary: a credential failed authentication
+      - eval_time: 1m
+        alertname: CpanelCredentialRejected
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              status: rejected
+            exp_annotations:
+              summary: a credential was rejected
+      - eval_time: 29m
+        alertname: CpanelAccountKindVerifyError
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: CpanelAccountKindVerifyError
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: a kind has failed verification for 30 minutes
