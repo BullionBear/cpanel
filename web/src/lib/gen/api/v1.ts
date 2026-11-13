@@ -363,6 +363,7 @@ export interface paths {
         /**
          * 軟刪除交易所帳號
          * @description 寫入 `deleted_at`。列還在，`(exchange, exch_account_uid)` 仍被佔住。`revision` 不加。
+         *     同一筆交易把這個帳號的 credential 改成 `disabled` 並清掉密文，kind 列留下。
          *     已經刪除的再刪一次回同一筆，不再寫 audit。cookie 登入的請求要帶對的 `Origin`。
          */
         delete: operations["deleteExchangeAccount"];
@@ -397,6 +398,88 @@ export interface paths {
          *     建立成功讓帳號 `revision` 加 1。cookie 登入的請求要帶對的 `Origin`。
          */
         post: operations["createExchangeAccountCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/exchange-accounts/{id}/credentials/{cid}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description pms.exchange_account.id。 */
+                id: components["parameters"]["ExchangeAccountId"];
+                /** @description pms.credential.id。 */
+                cid: components["parameters"]["CredentialId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 停用一把 key
+         * @description 狀態改成 `disabled`，密文留下，並刪掉尚未完成的 `credential.verify` 與 `credential.probe`。
+         *     已經是 `disabled` 則原樣回傳，不加 revision、不重寫 audit。已軟刪除的帳號回 404。
+         *     停用成功讓帳號 `revision` 加 1。cookie 登入的請求要帶對的 `Origin`。
+         */
+        post: operations["disableExchangeAccountCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/exchange-accounts/{id}/credentials/{cid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description pms.exchange_account.id。 */
+                id: components["parameters"]["ExchangeAccountId"];
+                /** @description pms.credential.id。 */
+                cid: components["parameters"]["CredentialId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * 刪除一把 key
+         * @description 列與末四碼留下，狀態改成 `disabled`，密文清掉。解封這列會失敗。
+         *     尚未完成的 `credential.verify` 與 `credential.probe` 一併刪掉。
+         *     已經清掉密文則原樣回傳，不加 revision、不重寫 audit。已軟刪除的帳號回 404。
+         *     刪除成功讓帳號 `revision` 加 1。cookie 登入的請求要帶對的 `Origin`。
+         */
+        delete: operations["deleteExchangeAccountCredential"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/exchange-accounts/{id}/credentials/{cid}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description pms.exchange_account.id。 */
+                id: components["parameters"]["ExchangeAccountId"];
+                /** @description pms.credential.id。 */
+                cid: components["parameters"]["CredentialId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 再驗證一把 key
+         * @description 只接受 `rejected` 與 `auth_failed`。狀態改回 `unverified`，連續失敗歸零，並排 `credential.verify`。
+         *     `disabled`、`active`、`unverified`，密文已空，或這個帳號已經有另一列 `unverified`，回 409。
+         *     已軟刪除的帳號回 404。成功讓帳號 `revision` 加 1。cookie 登入的請求要帶對的 `Origin`。
+         */
+        post: operations["verifyExchangeAccountCredential"];
         delete?: never;
         options?: never;
         head?: never;
@@ -765,6 +848,8 @@ export interface components {
         ListLimit: number;
         /** @description pms.exchange_account.id。 */
         ExchangeAccountId: number;
+        /** @description pms.credential.id。 */
+        CredentialId: number;
     };
     requestBodies: never;
     headers: never;
@@ -1554,6 +1639,150 @@ export interface operations {
                 };
             };
             /** @description 這個帳號已經有一列 `unverified`。`code` 是 `conflict`。 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    disableExchangeAccountCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description pms.exchange_account.id。 */
+                id: components["parameters"]["ExchangeAccountId"];
+                /** @description pms.credential.id。 */
+                cid: components["parameters"]["CredentialId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 停用後的 credential。沒有 secret。 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Credential"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Origin 不符。`code` 是 `forbidden`。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description 沒有這個帳號或這把 key，或帳號已軟刪除。`code` 是 `not_found`。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    deleteExchangeAccountCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description pms.exchange_account.id。 */
+                id: components["parameters"]["ExchangeAccountId"];
+                /** @description pms.credential.id。 */
+                cid: components["parameters"]["CredentialId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 刪除後的 credential。沒有 secret。 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Credential"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Origin 不符。`code` 是 `forbidden`。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description 沒有這個帳號或這把 key，或帳號已軟刪除。`code` 是 `not_found`。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    verifyExchangeAccountCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description pms.exchange_account.id。 */
+                id: components["parameters"]["ExchangeAccountId"];
+                /** @description pms.credential.id。 */
+                cid: components["parameters"]["CredentialId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已改回 `unverified` 並排驗證。沒有 secret。 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Credential"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Origin 不符。`code` 是 `forbidden`。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description 沒有這個帳號或這把 key，或帳號已軟刪除。`code` 是 `not_found`。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description 不能從目前的狀態再驗證，密文已空，或已經有一列 `unverified`。`code` 是 `conflict`。 */
             409: {
                 headers: {
                     [name: string]: unknown;

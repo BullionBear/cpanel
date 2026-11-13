@@ -222,11 +222,13 @@ func main() {
 	}
 	if key != nil {
 		handlers[reconcile.CredentialVerifyKind] = credential.Verify{DB: pool, Key: key}.Handle
+		handlers[reconcile.CredentialProbeKind] = credential.Probe{DB: pool, Key: key}.Handle
 	}
 	jobs := &worker.Worker{
 		DB: pool, Slots: opt.jobSlots, Grace: opt.shutdownTimeout, Egress: opt.egress, Log: log,
-		Local:    []string{reconcile.MftikoSync.Name, reconcile.SymSync.Name},
-		Handlers: handlers,
+		Local:          []string{reconcile.MftikoSync.Name, reconcile.SymSync.Name},
+		Handlers:       handlers,
+		CredentialHook: credential.ApplyAuth,
 	}
 	working := make(chan struct{})
 	go func() {

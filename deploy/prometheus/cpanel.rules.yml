@@ -94,3 +94,22 @@ groups:
           severity: warning
         annotations:
           summary: an out-of-scope kind has trades
+      - alert: CpanelCredentialAuthFailed
+        expr: cpanel_credentials{status="auth_failed"} > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: a credential failed authentication
+      - alert: CpanelCredentialRejected
+        expr: cpanel_credentials{status="rejected"} > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: a credential was rejected
+      - alert: CpanelAccountKindVerifyError
+        expr: cpanel_account_kind_verify_errors > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: a kind has failed verification for 30 minutes

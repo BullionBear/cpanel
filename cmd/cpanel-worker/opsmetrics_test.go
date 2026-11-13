@@ -79,6 +79,12 @@ func TestOpsMetrics(t *testing.T) {
 	if got := gauge(t, fams, "cpanel_egress_pauses", nil); got != 1 {
 		t.Fatalf("egress %v", got)
 	}
+	if got := gauge(t, fams, "cpanel_credentials", map[string]string{"status": "auth_failed"}); got != 0 {
+		t.Fatalf("auth_failed %v", got)
+	}
+	if got := gauge(t, fams, "cpanel_account_kind_verify_errors", nil); got != 0 {
+		t.Fatalf("kind errors %v", got)
+	}
 	if got := gauge(t, fams, "cpanel_jobs_unfinished", map[string]string{"status": "pending"}); got != 1 {
 		t.Fatalf("pending %v", got)
 	}

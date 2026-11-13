@@ -1,6 +1,6 @@
-// Package credential runs credential.verify (C5-03). It opens a sealed key and asks the
-// exchange whether that key is read-only and belongs to the account. cpanel-api does not
-// import this package: it cannot unseal and it does not call an exchange.
+// Package credential runs credential.verify and credential.probe. It opens a sealed key
+// and asks the exchange whether that key is read-only and belongs to the account.
+// cpanel-api does not import this package: it cannot unseal and it does not call an exchange.
 package credential
 
 import (
@@ -171,18 +171,22 @@ func (v Verify) load(ctx context.Context, id int64) (credRow, error) {
 }
 
 func (v Verify) checker(exchange string, cred sealbox.Credentials) (Checker, error) {
-	if v.Open != nil {
-		return v.Open(exchange, cred)
+	return openChecker(v.Endpoints, v.Open, exchange, cred)
+}
+
+func openChecker(endpoints Endpoints, override func(string, sealbox.Credentials) (Checker, error), exchange string, cred sealbox.Credentials) (Checker, error) {
+	if override != nil {
+		return override(exchange, cred)
 	}
 	switch exchange {
 	case "binance":
-		return &binance.Client{Spot: v.Endpoints.BinanceSpot, Futures: v.Endpoints.BinanceFutures, Key: cred.APIKey, Secret: cred.APISecret}, nil
+		return &binance.Client{Spot: endpoints.BinanceSpot, Futures: endpoints.BinanceFutures, Key: cred.APIKey, Secret: cred.APISecret}, nil
 	case "bybit":
-		return &bybit.Client{Host: v.Endpoints.Bybit, Key: cred.APIKey, Secret: cred.APISecret}, nil
+		return &bybit.Client{Host: endpoints.Bybit, Key: cred.APIKey, Secret: cred.APISecret}, nil
 	case "okx":
-		return &okx.Client{Host: v.Endpoints.OKX, Key: cred.APIKey, Secret: cred.APISecret, Passphrase: cred.Passphrase}, nil
+		return &okx.Client{Host: endpoints.OKX, Key: cred.APIKey, Secret: cred.APISecret, Passphrase: cred.Passphrase}, nil
 	default:
-		return nil, fmt.Errorf("credential.verify: unknown exchange %s", exchange)
+		return nil, fmt.Errorf("credential: unknown exchange %s", exchange)
 	}
 }
 
@@ -226,6 +230,7 @@ func (v Verify) activate(ctx context.Context, job *worker.Job, row credRow, chec
 		tag, err := tx.Exec(ctx, `
 			UPDATE pms.credential
 			SET status = 'active', verified_at = now(), failure_reason = NULL,
+			    consecutive_auth_failures = 0, next_probe_at = NULL,
 			    reported_uid = $2, permission_summary = NULLIF($3, '')
 			WHERE id = $1 AND status = 'unverified'`,
 			row.id, check.UID, check.Summary)

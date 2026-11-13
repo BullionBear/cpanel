@@ -277,3 +277,41 @@ func TestCredentialsDispatchesUnverified(t *testing.T) {
 		t.Fatalf("second run inserted %d, want 0", n)
 	}
 }
+
+func TestProbeOnlyForAuthFailed(t *testing.T) {
+	ctx, _, conn := testDB(t)
+	var account int64
+	if err := conn.QueryRow(ctx, `
+		INSERT INTO pms.exchange_account (exchange, exch_account_uid, label)
+		VALUES ('binance', 'probe', 'probe') RETURNING id`).Scan(&account); err != nil {
+		t.Fatal(err)
+	}
+	insert := func(status string, when any) int64 {
+		t.Helper()
+		var id int64
+		err := conn.QueryRow(ctx, `
+			INSERT INTO pms.credential (exchange_account_id, purpose, status, ciphertext, api_key_last4, next_probe_at)
+			VALUES ($1, 'read', $2, '\x01', 'key9', $3) RETURNING id`, account, status, when).Scan(&id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	due := insert("auth_failed", t0.Add(-time.Minute))
+	insert("auth_failed", t0.Add(time.Hour))
+	insert("rejected", nil)
+	insert("disabled", nil)
+	if n := run(t, ctx, conn, Credentials, t0); n != 1 {
+		t.Fatalf("inserted %d, want 1", n)
+	}
+	var kind, dedup string
+	if err := conn.QueryRow(ctx, `SELECT kind, dedup_key FROM ingest.job`).Scan(&kind, &dedup); err != nil {
+		t.Fatal(err)
+	}
+	if kind != CredentialProbeKind || dedup != CredentialProbeDedup(due) {
+		t.Fatalf("job %s %s", kind, dedup)
+	}
+	if n := run(t, ctx, conn, Credentials, t0); n != 0 {
+		t.Fatalf("second run inserted %d, want 0", n)
+	}
+}
