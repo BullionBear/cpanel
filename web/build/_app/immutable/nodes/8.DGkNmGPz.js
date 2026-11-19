@@ -1,0 +1,1 @@
+import"../chunks/CkA9jmvq.js";import{t as e}from"../chunks/B9J9fmy8.js";function t(t){e(t,{title:`Snapshots`,note:`快照頁還沒有內容。`})}export{t as component};

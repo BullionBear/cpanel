@@ -1,1 +1,0 @@
-import"../chunks/Duj6H_S2.js";import{t as e}from"../chunks/DO7bsAwI.js";function t(t){e(t,{title:`History`,note:`歷史頁還沒有內容。`})}export{t as component};
