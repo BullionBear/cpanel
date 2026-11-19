@@ -48,6 +48,15 @@ type ServerInterface interface {
 	// CreateExchangeAccountCredential 登記一把唯讀 key
 	// (POST /exchange-accounts/{id}/credentials)
 	CreateExchangeAccountCredential(w http.ResponseWriter, r *http.Request, id ExchangeAccountId)
+	// DeleteExchangeAccountCredential 刪除一把 key
+	// (DELETE /exchange-accounts/{id}/credentials/{cid})
+	DeleteExchangeAccountCredential(w http.ResponseWriter, r *http.Request, id ExchangeAccountId, cid CredentialId)
+	// DisableExchangeAccountCredential 停用一把 key
+	// (POST /exchange-accounts/{id}/credentials/{cid}/disable)
+	DisableExchangeAccountCredential(w http.ResponseWriter, r *http.Request, id ExchangeAccountId, cid CredentialId)
+	// VerifyExchangeAccountCredential 再驗證一把 key
+	// (POST /exchange-accounts/{id}/credentials/{cid}/verify)
+	VerifyExchangeAccountCredential(w http.ResponseWriter, r *http.Request, id ExchangeAccountId, cid CredentialId)
 	// EnableExchangeAccountKind 啟用一個 kind
 	// (POST /exchange-accounts/{id}/kinds)
 	EnableExchangeAccountKind(w http.ResponseWriter, r *http.Request, id ExchangeAccountId)
@@ -331,6 +340,111 @@ func (siw *ServerInterfaceWrapper) CreateExchangeAccountCredential(w http.Respon
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CreateExchangeAccountCredential(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteExchangeAccountCredential operation middleware
+func (siw *ServerInterfaceWrapper) DeleteExchangeAccountCredential(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ExchangeAccountId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "cid" -------------
+	var cid CredentialId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cid", r.PathValue("cid"), &cid, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cid", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteExchangeAccountCredential(w, r, id, cid)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DisableExchangeAccountCredential operation middleware
+func (siw *ServerInterfaceWrapper) DisableExchangeAccountCredential(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ExchangeAccountId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "cid" -------------
+	var cid CredentialId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cid", r.PathValue("cid"), &cid, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cid", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DisableExchangeAccountCredential(w, r, id, cid)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// VerifyExchangeAccountCredential operation middleware
+func (siw *ServerInterfaceWrapper) VerifyExchangeAccountCredential(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ExchangeAccountId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "cid" -------------
+	var cid CredentialId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cid", r.PathValue("cid"), &cid, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cid", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.VerifyExchangeAccountCredential(w, r, id, cid)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -987,6 +1101,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/exchange-accounts/{id}", wrapper.GetExchangeAccount)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/exchange-accounts/{id}", wrapper.UpdateExchangeAccount)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/exchange-accounts/{id}/credentials", wrapper.CreateExchangeAccountCredential)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/exchange-accounts/{id}/credentials/{cid}/disable", wrapper.DisableExchangeAccountCredential)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/exchange-accounts/{id}/credentials/{cid}", wrapper.DeleteExchangeAccountCredential)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/exchange-accounts/{id}/credentials/{cid}/verify", wrapper.VerifyExchangeAccountCredential)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/exchange-accounts/{id}/kinds", wrapper.EnableExchangeAccountKind)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/exchange-accounts/{id}/kinds/{kind}/disable", wrapper.DisableExchangeAccountKind)
 
@@ -1763,6 +1880,272 @@ type CreateExchangeAccountCredentialdefaultApplicationProblemPlusJSONResponse st
 }
 
 func (response CreateExchangeAccountCredentialdefaultApplicationProblemPlusJSONResponse) VisitCreateExchangeAccountCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteExchangeAccountCredentialRequestObject struct {
+	Id  ExchangeAccountId `json:"id"`
+	Cid CredentialId      `json:"cid"`
+}
+
+type DeleteExchangeAccountCredentialResponseObject interface {
+	VisitDeleteExchangeAccountCredentialResponse(w http.ResponseWriter) error
+}
+
+type DeleteExchangeAccountCredential200JSONResponse Credential
+
+func (response DeleteExchangeAccountCredential200JSONResponse) VisitDeleteExchangeAccountCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteExchangeAccountCredential401ApplicationProblemPlusJSONResponse struct {
+	UnauthenticatedApplicationProblemPlusJSONResponse
+}
+
+func (response DeleteExchangeAccountCredential401ApplicationProblemPlusJSONResponse) VisitDeleteExchangeAccountCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteExchangeAccountCredential403ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteExchangeAccountCredential403ApplicationProblemPlusJSONResponse) VisitDeleteExchangeAccountCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteExchangeAccountCredential404ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteExchangeAccountCredential404ApplicationProblemPlusJSONResponse) VisitDeleteExchangeAccountCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteExchangeAccountCredentialdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response DeleteExchangeAccountCredentialdefaultApplicationProblemPlusJSONResponse) VisitDeleteExchangeAccountCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DisableExchangeAccountCredentialRequestObject struct {
+	Id  ExchangeAccountId `json:"id"`
+	Cid CredentialId      `json:"cid"`
+}
+
+type DisableExchangeAccountCredentialResponseObject interface {
+	VisitDisableExchangeAccountCredentialResponse(w http.ResponseWriter) error
+}
+
+type DisableExchangeAccountCredential200JSONResponse Credential
+
+func (response DisableExchangeAccountCredential200JSONResponse) VisitDisableExchangeAccountCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DisableExchangeAccountCredential401ApplicationProblemPlusJSONResponse struct {
+	UnauthenticatedApplicationProblemPlusJSONResponse
+}
+
+func (response DisableExchangeAccountCredential401ApplicationProblemPlusJSONResponse) VisitDisableExchangeAccountCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DisableExchangeAccountCredential403ApplicationProblemPlusJSONResponse Problem
+
+func (response DisableExchangeAccountCredential403ApplicationProblemPlusJSONResponse) VisitDisableExchangeAccountCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DisableExchangeAccountCredential404ApplicationProblemPlusJSONResponse Problem
+
+func (response DisableExchangeAccountCredential404ApplicationProblemPlusJSONResponse) VisitDisableExchangeAccountCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DisableExchangeAccountCredentialdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response DisableExchangeAccountCredentialdefaultApplicationProblemPlusJSONResponse) VisitDisableExchangeAccountCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyExchangeAccountCredentialRequestObject struct {
+	Id  ExchangeAccountId `json:"id"`
+	Cid CredentialId      `json:"cid"`
+}
+
+type VerifyExchangeAccountCredentialResponseObject interface {
+	VisitVerifyExchangeAccountCredentialResponse(w http.ResponseWriter) error
+}
+
+type VerifyExchangeAccountCredential202JSONResponse Credential
+
+func (response VerifyExchangeAccountCredential202JSONResponse) VisitVerifyExchangeAccountCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyExchangeAccountCredential401ApplicationProblemPlusJSONResponse struct {
+	UnauthenticatedApplicationProblemPlusJSONResponse
+}
+
+func (response VerifyExchangeAccountCredential401ApplicationProblemPlusJSONResponse) VisitVerifyExchangeAccountCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyExchangeAccountCredential403ApplicationProblemPlusJSONResponse Problem
+
+func (response VerifyExchangeAccountCredential403ApplicationProblemPlusJSONResponse) VisitVerifyExchangeAccountCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyExchangeAccountCredential404ApplicationProblemPlusJSONResponse Problem
+
+func (response VerifyExchangeAccountCredential404ApplicationProblemPlusJSONResponse) VisitVerifyExchangeAccountCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyExchangeAccountCredential409ApplicationProblemPlusJSONResponse Problem
+
+func (response VerifyExchangeAccountCredential409ApplicationProblemPlusJSONResponse) VisitVerifyExchangeAccountCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyExchangeAccountCredentialdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response VerifyExchangeAccountCredentialdefaultApplicationProblemPlusJSONResponse) VisitVerifyExchangeAccountCredentialResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -2725,6 +3108,15 @@ type StrictServerInterface interface {
 	// CreateExchangeAccountCredential 登記一把唯讀 key
 	// (POST /exchange-accounts/{id}/credentials)
 	CreateExchangeAccountCredential(ctx context.Context, request CreateExchangeAccountCredentialRequestObject) (CreateExchangeAccountCredentialResponseObject, error)
+	// DeleteExchangeAccountCredential 刪除一把 key
+	// (DELETE /exchange-accounts/{id}/credentials/{cid})
+	DeleteExchangeAccountCredential(ctx context.Context, request DeleteExchangeAccountCredentialRequestObject) (DeleteExchangeAccountCredentialResponseObject, error)
+	// DisableExchangeAccountCredential 停用一把 key
+	// (POST /exchange-accounts/{id}/credentials/{cid}/disable)
+	DisableExchangeAccountCredential(ctx context.Context, request DisableExchangeAccountCredentialRequestObject) (DisableExchangeAccountCredentialResponseObject, error)
+	// VerifyExchangeAccountCredential 再驗證一把 key
+	// (POST /exchange-accounts/{id}/credentials/{cid}/verify)
+	VerifyExchangeAccountCredential(ctx context.Context, request VerifyExchangeAccountCredentialRequestObject) (VerifyExchangeAccountCredentialResponseObject, error)
 	// EnableExchangeAccountKind 啟用一個 kind
 	// (POST /exchange-accounts/{id}/kinds)
 	EnableExchangeAccountKind(ctx context.Context, request EnableExchangeAccountKindRequestObject) (EnableExchangeAccountKindResponseObject, error)
@@ -3074,6 +3466,87 @@ func (sh *strictHandler) CreateExchangeAccountCredential(w http.ResponseWriter, 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CreateExchangeAccountCredentialResponseObject); ok {
 		if err := validResponse.VisitCreateExchangeAccountCredentialResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteExchangeAccountCredential operation middleware
+func (sh *strictHandler) DeleteExchangeAccountCredential(w http.ResponseWriter, r *http.Request, id ExchangeAccountId, cid CredentialId) {
+	var request DeleteExchangeAccountCredentialRequestObject
+
+	request.Id = id
+	request.Cid = cid
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteExchangeAccountCredential(ctx, request.(DeleteExchangeAccountCredentialRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteExchangeAccountCredential")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteExchangeAccountCredentialResponseObject); ok {
+		if err := validResponse.VisitDeleteExchangeAccountCredentialResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DisableExchangeAccountCredential operation middleware
+func (sh *strictHandler) DisableExchangeAccountCredential(w http.ResponseWriter, r *http.Request, id ExchangeAccountId, cid CredentialId) {
+	var request DisableExchangeAccountCredentialRequestObject
+
+	request.Id = id
+	request.Cid = cid
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DisableExchangeAccountCredential(ctx, request.(DisableExchangeAccountCredentialRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DisableExchangeAccountCredential")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DisableExchangeAccountCredentialResponseObject); ok {
+		if err := validResponse.VisitDisableExchangeAccountCredentialResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// VerifyExchangeAccountCredential operation middleware
+func (sh *strictHandler) VerifyExchangeAccountCredential(w http.ResponseWriter, r *http.Request, id ExchangeAccountId, cid CredentialId) {
+	var request VerifyExchangeAccountCredentialRequestObject
+
+	request.Id = id
+	request.Cid = cid
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.VerifyExchangeAccountCredential(ctx, request.(VerifyExchangeAccountCredentialRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "VerifyExchangeAccountCredential")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(VerifyExchangeAccountCredentialResponseObject); ok {
+		if err := validResponse.VisitVerifyExchangeAccountCredentialResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

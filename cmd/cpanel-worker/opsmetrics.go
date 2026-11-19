@@ -16,21 +16,23 @@ type opsCollector struct {
 	db  *pgxpool.Pool
 	log zerolog.Logger
 
-	lag        *prometheus.Desc
-	failures   *prometheus.Desc
-	paused     *prometheus.Desc
-	egress     *prometheus.Desc
-	jobs       *prometheus.Desc
-	oldest     *prometheus.Desc
-	runs       *prometheus.Desc
-	okAge      *prometheus.Desc
-	rows       *prometheus.Desc
-	conflicts  *prometheus.Desc
-	behind     *prometheus.Desc
-	partial    *prometheus.Desc
-	unresolved *prometheus.Desc
-	unmatched  *prometheus.Desc
-	outOfScope *prometheus.Desc
+	lag         *prometheus.Desc
+	failures    *prometheus.Desc
+	paused      *prometheus.Desc
+	egress      *prometheus.Desc
+	jobs        *prometheus.Desc
+	oldest      *prometheus.Desc
+	runs        *prometheus.Desc
+	okAge       *prometheus.Desc
+	rows        *prometheus.Desc
+	conflicts   *prometheus.Desc
+	behind      *prometheus.Desc
+	partial     *prometheus.Desc
+	unresolved  *prometheus.Desc
+	unmatched   *prometheus.Desc
+	outOfScope  *prometheus.Desc
+	credentials *prometheus.Desc
+	kindErrors  *prometheus.Desc
 }
 
 func newOpsCollector(db *pgxpool.Pool, log zerolog.Logger) *opsCollector {
@@ -97,6 +99,14 @@ func newOpsCollector(db *pgxpool.Pool, log zerolog.Logger) *opsCollector {
 			"cpanel_mftiko_kinds_out_of_scope",
 			"Mirrored kinds cpanel does not trade yet, counted per exchange identity and kind.",
 			[]string{"kind", "traded"}, nil),
+		credentials: prometheus.NewDesc(
+			"cpanel_credentials",
+			"Credentials by status. A status with no rows is 0.",
+			[]string{"status"}, nil),
+		kindErrors: prometheus.NewDesc(
+			"cpanel_account_kind_verify_errors",
+			"Enabled kinds on a live account whose last_error is set.",
+			nil, nil),
 	}
 }
 
@@ -116,6 +126,8 @@ func (c *opsCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.unresolved
 	ch <- c.unmatched
 	ch <- c.outOfScope
+	ch <- c.credentials
+	ch <- c.kindErrors
 }
 
 func (c *opsCollector) Collect(ch chan<- prometheus.Metric) {
@@ -339,5 +351,43 @@ func (c *opsCollector) collect(ctx context.Context, ch chan<- prometheus.Metric)
 		}
 		ch <- prometheus.MustNewConstMetric(c.outOfScope, prometheus.GaugeValue, float64(n), kind, label)
 	}
-	return kindRows.Err()
+	if err := kindRows.Err(); err != nil {
+		return err
+	}
+
+	byStatus := map[string]float64{
+		"unverified": 0, "active": 0, "rejected": 0, "auth_failed": 0, "disabled": 0,
+	}
+	statusRows, err := c.db.Query(ctx, `SELECT status, count(*) FROM pms.credential GROUP BY status`)
+	if err != nil {
+		return err
+	}
+	defer statusRows.Close()
+	for statusRows.Next() {
+		var status string
+		var n int
+		if err := statusRows.Scan(&status, &n); err != nil {
+			return err
+		}
+		if _, ok := byStatus[status]; ok {
+			byStatus[status] = float64(n)
+		}
+	}
+	if err := statusRows.Err(); err != nil {
+		return err
+	}
+	for _, status := range []string{"unverified", "active", "rejected", "auth_failed", "disabled"} {
+		ch <- prometheus.MustNewConstMetric(c.credentials, prometheus.GaugeValue, byStatus[status], status)
+	}
+
+	var kindErrors int
+	if err := c.db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM pms.exchange_account_kind k
+		JOIN pms.exchange_account a ON a.id = k.exchange_account_id
+		WHERE a.deleted_at IS NULL AND k.disabled_at IS NULL AND k.last_error IS NOT NULL`).Scan(&kindErrors); err != nil {
+		return err
+	}
+	ch <- prometheus.MustNewConstMetric(c.kindErrors, prometheus.GaugeValue, float64(kindErrors))
+	return nil
 }

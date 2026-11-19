@@ -21,8 +21,15 @@ func Rules() []Rule {
 // against the exchange. The worker runs it. This package only inserts the row.
 const CredentialVerifyKind = "credential.verify"
 
-// CredentialDedup is the unfinished-job key for one credential.
+// CredentialProbeKind is the job that asks the exchange whether an auth_failed
+// credential can be used again. The worker runs it. This package only inserts the row.
+const CredentialProbeKind = "credential.probe"
+
+// CredentialDedup is the unfinished-job key for one credential's verification.
 func CredentialDedup(id int64) string { return fmt.Sprintf("credential:%d", id) }
+
+// CredentialProbeDedup is the unfinished-job key for one credential's probe.
+func CredentialProbeDedup(id int64) string { return fmt.Sprintf("probe:%d", id) }
 
 // AccountLease is the lease shared by every job of one exchange account.
 func AccountLease(accountID int64) string { return fmt.Sprintf("account:%d", accountID) }
@@ -51,11 +58,12 @@ func Singleton(name, leaseKey string, period time.Duration) Rule {
 	}}
 }
 
-// Credentials inserts credential.verify for every unverified read credential whose account
-// is still there. A job already waiting is left alone. An egress pause does not stop the
-// insert; the worker does not claim this kind while the egress is paused, because it is
-// not a local job.
-var Credentials = Rule{Name: "credentials", Run: func(ctx context.Context, tx pgx.Tx, _ time.Time) (int, error) {
+// Credentials inserts credential.verify for every unverified read credential, and
+// credential.probe for every auth_failed one whose next_probe_at is due. rejected
+// and disabled credentials get neither. A job already waiting is left alone. An
+// egress pause does not stop the insert; the worker does not claim these kinds
+// while the egress is paused, because they are not local jobs.
+var Credentials = Rule{Name: "credentials", Run: func(ctx context.Context, tx pgx.Tx, now time.Time) (int, error) {
 	tag, err := tx.Exec(ctx, `
 		INSERT INTO ingest.job (kind, dedup_key, lease_key, params)
 		SELECT $1, 'credential:' || c.id, 'account:' || c.exchange_account_id,
@@ -69,7 +77,23 @@ var Credentials = Rule{Name: "credentials", Run: func(ctx context.Context, tx pg
 	if err != nil {
 		return 0, err
 	}
-	return int(tag.RowsAffected()), nil
+	n := int(tag.RowsAffected())
+	tag, err = tx.Exec(ctx, `
+		INSERT INTO ingest.job (kind, dedup_key, lease_key, params)
+		SELECT $1, 'probe:' || c.id, 'account:' || c.exchange_account_id,
+		       jsonb_build_object('credential_id', c.id)
+		FROM pms.credential c
+		JOIN pms.exchange_account a ON a.id = c.exchange_account_id
+		WHERE c.status = 'auth_failed' AND c.purpose = 'read' AND a.deleted_at IS NULL
+		  AND octet_length(c.ciphertext) > 0
+		  AND (c.next_probe_at IS NULL OR c.next_probe_at <= $2::timestamptz)
+		  AND NOT EXISTS (SELECT FROM ingest.job j WHERE j.dedup_key = 'probe:' || c.id)
+		ORDER BY c.id
+		ON CONFLICT (dedup_key) DO NOTHING`, CredentialProbeKind, now)
+	if err != nil {
+		return 0, err
+	}
+	return n + int(tag.RowsAffected()), nil
 }}
 
 // Streams inserts one job for every stream that is due, not paused, and has no unfinished job. The worker moves

@@ -1,4 +1,5 @@
 # cpanel-api 的對外契約（ARCHITECTURE §4.7）。SPA 不在這份契約裡。
+# 0.9.0 加上 credential 的停用、刪除與再驗證（C5-04）。
 # 0.8.0 加上帳號 join 與 unmatched（C4-03）。
 # 0.7.0 加上交易所帳號與 kind（C5-01）。
 # 0.6.0 的 mirror 狀態列出查不到的 scope UID（C4-05）。
@@ -9,7 +10,7 @@
 openapi: 3.0.3
 info:
   title: cpanel API
-  version: 0.8.0
+  version: 0.9.0
   description: |
     cpanel-api 的對外契約。
 
@@ -683,6 +684,7 @@ paths:
       summary: 軟刪除交易所帳號
       description: |
         寫入 `deleted_at`。列還在，`(exchange, exch_account_uid)` 仍被佔住。`revision` 不加。
+        同一筆交易把這個帳號的 credential 改成 `disabled` 並清掉密文，kind 列留下。
         已經刪除的再刪一次回同一筆，不再寫 audit。cookie 登入的請求要帶對的 `Origin`。
       responses:
         '200':
@@ -757,6 +759,127 @@ paths:
                 $ref: '#/components/schemas/Problem'
         '409':
           description: 這個帳號已經有一列 `unverified`。`code` 是 `conflict`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /exchange-accounts/{id}/credentials/{cid}/disable:
+    parameters:
+      - $ref: '#/components/parameters/ExchangeAccountId'
+      - $ref: '#/components/parameters/CredentialId'
+    post:
+      tags: [accounts]
+      operationId: disableExchangeAccountCredential
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: 停用一把 key
+      description: |
+        狀態改成 `disabled`，密文留下，並刪掉尚未完成的 `credential.verify` 與 `credential.probe`。
+        已經是 `disabled` 則原樣回傳，不加 revision、不重寫 audit。已軟刪除的帳號回 404。
+        停用成功讓帳號 `revision` 加 1。cookie 登入的請求要帶對的 `Origin`。
+      responses:
+        '200':
+          description: 停用後的 credential。沒有 secret。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Credential'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          description: Origin 不符。`code` 是 `forbidden`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: 沒有這個帳號或這把 key，或帳號已軟刪除。`code` 是 `not_found`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /exchange-accounts/{id}/credentials/{cid}:
+    parameters:
+      - $ref: '#/components/parameters/ExchangeAccountId'
+      - $ref: '#/components/parameters/CredentialId'
+    delete:
+      tags: [accounts]
+      operationId: deleteExchangeAccountCredential
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: 刪除一把 key
+      description: |
+        列與末四碼留下，狀態改成 `disabled`，密文清掉。解封這列會失敗。
+        尚未完成的 `credential.verify` 與 `credential.probe` 一併刪掉。
+        已經清掉密文則原樣回傳，不加 revision、不重寫 audit。已軟刪除的帳號回 404。
+        刪除成功讓帳號 `revision` 加 1。cookie 登入的請求要帶對的 `Origin`。
+      responses:
+        '200':
+          description: 刪除後的 credential。沒有 secret。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Credential'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          description: Origin 不符。`code` 是 `forbidden`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: 沒有這個帳號或這把 key，或帳號已軟刪除。`code` 是 `not_found`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /exchange-accounts/{id}/credentials/{cid}/verify:
+    parameters:
+      - $ref: '#/components/parameters/ExchangeAccountId'
+      - $ref: '#/components/parameters/CredentialId'
+    post:
+      tags: [accounts]
+      operationId: verifyExchangeAccountCredential
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: 再驗證一把 key
+      description: |
+        只接受 `rejected` 與 `auth_failed`。狀態改回 `unverified`，連續失敗歸零，並排 `credential.verify`。
+        `disabled`、`active`、`unverified`，密文已空，或這個帳號已經有另一列 `unverified`，回 409。
+        已軟刪除的帳號回 404。成功讓帳號 `revision` 加 1。cookie 登入的請求要帶對的 `Origin`。
+      responses:
+        '202':
+          description: 已改回 `unverified` 並排驗證。沒有 secret。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Credential'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          description: Origin 不符。`code` 是 `forbidden`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: 沒有這個帳號或這把 key，或帳號已軟刪除。`code` 是 `not_found`。
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: 不能從目前的狀態再驗證，密文已空，或已經有一列 `unverified`。`code` 是 `conflict`。
           content:
             application/problem+json:
               schema:
@@ -903,6 +1026,16 @@ components:
       in: path
       required: true
       description: pms.exchange_account.id。
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+        maximum: 9007199254740991
+    CredentialId:
+      name: cid
+      in: path
+      required: true
+      description: pms.credential.id。
       schema:
         type: integer
         format: int64

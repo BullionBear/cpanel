@@ -482,6 +482,9 @@ type UnresolvedUid struct {
 	Uid         int64      `json:"uid"`
 }
 
+// CredentialId defines model for CredentialId.
+type CredentialId = int64
+
 // ExchangeAccountId defines model for ExchangeAccountId.
 type ExchangeAccountId = int64
 
