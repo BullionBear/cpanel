@@ -56,7 +56,7 @@ func TestSealHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sealed[0] != Version || !SealedTo(p, sealed) {
+	if sealed[0] != Version || !SealedTo(p, sealed) || !bytes.Equal(sealed[:headerLen], RecipientHeader(p)) {
 		t.Fatalf("header %x", sealed[:headerLen])
 	}
 	var other PublicKey

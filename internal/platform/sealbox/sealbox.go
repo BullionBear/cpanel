@@ -64,14 +64,22 @@ func (p PublicKey) Fingerprint() [fingerprintLen]byte {
 // SHA256 is the full digest of the 32-byte key. The header keeps only the first 8 bytes.
 func (p PublicKey) SHA256() [sha256.Size]byte { return sha256.Sum256(p[:]) }
 
+// RecipientHeader is the version byte and the fingerprint, the prefix of every box sealed to p.
+func RecipientHeader(p PublicKey) []byte {
+	fp := p.Fingerprint()
+	h := make([]byte, headerLen)
+	h[0] = Version
+	copy(h[1:], fp[:])
+	return h
+}
+
 // SealedTo reports whether sealed's header names pub. It does not authenticate the box.
 // A short buffer or another version is false.
 func SealedTo(pub PublicKey, sealed []byte) bool {
 	if len(sealed) < headerLen || sealed[0] != Version {
 		return false
 	}
-	fp := pub.Fingerprint()
-	return bytes.Equal(sealed[1:headerLen], fp[:])
+	return bytes.Equal(sealed[:headerLen], RecipientHeader(pub))
 }
 
 // ParsePublicKey reads a key in standard base64. Surrounding space is ignored.

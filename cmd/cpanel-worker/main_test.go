@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -148,7 +149,7 @@ func TestBinary(t *testing.T) {
 			`cpanel_reconcile_inserted_total{rule="maint.partitions"} 1`,
 			`cpanel_reconcile_inserted_total{rule="mftiko.sync"} 1`,
 			`cpanel_reconcile_inserted_total{rule="sym.sync"} 1`,
-			`cpanel_reconcile_inserted_total{rule="periodics"} 3`,
+			`cpanel_reconcile_inserted_total{rule="periodics"} 4`,
 			`cpanel_reconcile_inserted_total{rule="streams"} 0`,
 			`cpanel_reconcile_rule_duration_seconds_count{rule="streams"}`,
 			`cpanel_reconcile_rounds_total{result="error"} 0`,
@@ -218,6 +219,132 @@ func TestBinary(t *testing.T) {
 			t.Errorf("exit %d, stderr %q", code, stderr)
 		}
 	})
+
+	t.Run("previous key same as current exits 2", func(t *testing.T) {
+		body, env := privateKeyFile(t)
+		prev := strings.Replace(env, "CPANEL_SEALBOX_PRIVATE_KEY_FILE", "CPANEL_SEALBOX_PREVIOUS_PRIVATE_KEY_FILE", 1)
+		code, stderr := cmdtest.Run(t, bin, []string{"CPANEL_DATABASE_URL=" + srv.DSN(), env, prev})
+		if code != 2 || !strings.Contains(stderr, "CPANEL_SEALBOX_PREVIOUS_PRIVATE_KEY") || strings.Contains(stderr, body) {
+			t.Errorf("exit %d, stderr %q", code, stderr)
+		}
+	})
+
+	t.Run("group-readable previous key exits 2", func(t *testing.T) {
+		_, current := privateKeyFile(t)
+		k, err := open.GenerateKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), "previous")
+		if err := open.WriteKeyFile(path, k); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		code, stderr := cmdtest.Run(t, bin, []string{"CPANEL_DATABASE_URL=" + srv.DSN(), current, "CPANEL_SEALBOX_PREVIOUS_PRIVATE_KEY_FILE=" + path})
+		if code != 2 || !strings.Contains(stderr, "0600") || strings.Contains(stderr, strings.TrimSpace(string(body))) {
+			t.Errorf("exit %d, stderr %q", code, stderr)
+		}
+	})
+
+	t.Run("old fingerprint without the previous key exits 1", func(t *testing.T) {
+		db := pgtest.Start(t)
+		upCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := migrations.Up(upCtx, db.DSN()); err != nil {
+			t.Fatal(err)
+		}
+		oldKey, err := open.GenerateKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		newKey, err := open.GenerateKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		const secret = "leftover-secret"
+		insertSealed(t, upCtx, db.DSN(), oldKey, secret)
+		newBody, newEnv := keyFileEnv(t, newKey, "CPANEL_SEALBOX_PRIVATE_KEY_FILE")
+		code, stderr := cmdtest.Run(t, bin, []string{"CPANEL_DATABASE_URL=" + db.DSN(), newEnv})
+		if code != 1 || !strings.Contains(stderr, "1 credential") || !strings.Contains(stderr, "CPANEL_SEALBOX_PREVIOUS_PRIVATE_KEY") || strings.Contains(stderr, secret) || strings.Contains(stderr, newBody) {
+			t.Errorf("exit %d, stderr %q", code, stderr)
+		}
+	})
+
+	t.Run("both keys reseal and the log hides them", func(t *testing.T) {
+		db := pgtest.Start(t)
+		upCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := migrations.Up(upCtx, db.DSN()); err != nil {
+			t.Fatal(err)
+		}
+		oldKey, err := open.GenerateKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		newKey, err := open.GenerateKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		const secret = "rotated-secret"
+		account, id := insertSealed(t, upCtx, db.DSN(), oldKey, secret)
+		oldBody, oldEnv := keyFileEnv(t, oldKey, "CPANEL_SEALBOX_PREVIOUS_PRIVATE_KEY_FILE")
+		newBody, newEnv := keyFileEnv(t, newKey, "CPANEL_SEALBOX_PRIVATE_KEY_FILE")
+		p := cmdtest.Start(t, bin, []string{
+			"CPANEL_WORKER_LISTEN=127.0.0.1:0", "CPANEL_DATABASE_URL=" + db.DSN(), oldEnv, newEnv,
+		}, "-reconcile-interval=50ms", "-shutdown-timeout=5s")
+		start := p.Log(t, "starting")
+		cfg, _ := start["config"].(map[string]any)
+		raw, err := json.Marshal(start)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg["sealbox-private-key"] != "***" || cfg["sealbox-previous-private-key"] != "***" || start["sealbox_fingerprint"] == "" || start["sealbox_previous_fingerprint"] == "" || strings.Contains(string(raw), oldBody) || strings.Contains(string(raw), newBody) {
+			t.Fatalf("starting log: %s", raw)
+		}
+		conn, err := pgx.Connect(upCtx, db.DSN())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close(context.Background())
+		var params string
+		for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+			err := conn.QueryRow(upCtx, `SELECT params::text FROM meta.audit WHERE action = 'sealbox.rekey'`).Scan(&params)
+			if err == nil || time.Now().After(deadline) {
+				break
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				t.Fatal(err)
+			}
+		}
+		var box []byte
+		var rev int64
+		if err := conn.QueryRow(upCtx, `SELECT c.ciphertext, a.revision FROM pms.credential c JOIN pms.exchange_account a ON a.id = c.exchange_account_id WHERE c.id = $1`, id).Scan(&box, &rev); err != nil {
+			t.Fatal(err)
+		}
+		got, err := open.OpenCredentials(newKey, box, account, id)
+		if err != nil || got.APISecret != secret || !sealbox.SealedTo(newKey.Public(), box) {
+			t.Fatalf("resealed box: %v", err)
+		}
+		if _, err := open.OpenCredentials(oldKey, box, account, id); !errors.Is(err, sealbox.ErrOtherKey) {
+			t.Fatalf("old key still opens: %v", err)
+		}
+		if rev != 1 {
+			t.Fatalf("revision %d", rev)
+		}
+		if params == "" || strings.Contains(params, secret) {
+			t.Fatalf("audit %q", params)
+		}
+		p.Signal(t, syscall.SIGINT)
+		if code := p.Exit(t); code != 0 {
+			t.Errorf("exit %d, want 0", code)
+		}
+	})
 }
 
 func TestKeygen(t *testing.T) {
@@ -271,4 +398,45 @@ func privateKeyFile(t *testing.T) (string, string) {
 		t.Fatal(err)
 	}
 	return strings.TrimSpace(string(body)), "CPANEL_SEALBOX_PRIVATE_KEY_FILE=" + path
+}
+
+func keyFileEnv(t *testing.T, k *open.PrivateKey, envName string) (string, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), envName)
+	if err := open.WriteKeyFile(path, k); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(body)), envName + "=" + path
+}
+
+func insertSealed(t *testing.T, ctx context.Context, dsn string, key *open.PrivateKey, secret string) (int64, int64) {
+	t.Helper()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	var account, id int64
+	if err := conn.QueryRow(ctx, `
+		INSERT INTO pms.exchange_account (exchange, exch_account_uid, label)
+		VALUES ('binance', 'uid-rekey', 'rekey') RETURNING id`).Scan(&account); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(ctx, `
+		INSERT INTO pms.credential (exchange_account_id, purpose, status, ciphertext, api_key_last4)
+		VALUES ($1, 'read', 'active', '\x01', '1234') RETURNING id`, account).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := sealbox.SealCredentials(key.Public(), account, id, sealbox.Credentials{APIKey: "key-rekey", APISecret: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE pms.credential SET ciphertext = $2 WHERE id = $1`, id, sealed); err != nil {
+		t.Fatal(err)
+	}
+	return account, id
 }

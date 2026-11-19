@@ -14,7 +14,7 @@ import (
 // Replicas run the same statements at the same time. Each rule takes its keys in one fixed order, so a replica
 // that hits another's uncommitted key waits for it instead of deadlocking.
 func Rules() []Rule {
-	return []Rule{MaintPartitions, MftikoSync, SymSync, Credentials, Streams, Periodics}
+	return []Rule{MaintPartitions, MftikoSync, SymSync, CredentialRekey, Credentials, Streams, Periodics}
 }
 
 // CredentialVerifyKind is the job that opens one unverified credential and checks it
@@ -43,6 +43,11 @@ var MftikoSync = Singleton("mftiko.sync", "global:mftiko", time.Minute)
 
 // SymSync registers sym.sync, which copies SYM's instruments into mirror.symbol every minute (C4-02).
 var SymSync = Singleton("sym.sync", "global:sym", time.Minute)
+
+// CredentialRekey registers credential.rekey, which reseals credentials still addressed to the
+// previous sealbox key (C5-05). The worker runs it. It does not call an exchange, so an egress
+// pause does not hold it. The row is inserted only when it is missing.
+var CredentialRekey = Singleton("credential.rekey", "global:sealbox", time.Minute)
 
 // Singleton returns a rule that inserts the ingest.periodic row name, whose jobs have kind name, due at once. It
 // inserts the row only when it is missing: after that the row is the operator's, and a changed period or

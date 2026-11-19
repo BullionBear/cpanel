@@ -144,16 +144,22 @@ CPANEL_IMAGE=ghcr.io/bullionbear/cpanel@$(cat state/current) docker compose -p c
 | `discord_bot_token` | Developer Portal → Bot → Reset Token | cpanel-api |
 | `mftiko_token` | `users[]` 加一個新名字（例如 `cpanel-2`）的 hash、重啟 mftiko-api、換檔、驗證 doctor、刪舊的再重啟 | cpanel-worker |
 | `sym_token` | `/etc/mftiko/sym/grpc-tokens` 加一行新的（例如 `cpanel-2`）、重啟 SYM、換檔、驗證 doctor、刪舊行再重啟 SYM（mftiko operations「輪換 gRPC 的 token」） | cpanel-worker |
-| `sealbox_public_key` | 跟私鑰成對，見下方。不要單獨換 | cpanel-api |
-| `sealbox_private_key` | **C5-05 之前不要輪換。** 換掉之後，已經封好的交易所 key 解不開，只能重新登記 | cpanel-worker |
+| `sealbox_public_key` | 跟現用私鑰成對，見下方。輪替時換成新公鑰，不要單獨換 | cpanel-api |
+| `sealbox_private_key` | 見下方。不要直接覆蓋；舊私鑰要留到 `credential.rekey` 跑完 | cpanel-worker |
 
 換完跑一次 `doctor`；Discord 的換完從瀏覽器登入一次。
 
-### sealbox 金鑰（C5-02）
+### sealbox 金鑰（C5-02、C5-05）
 
-這組金鑰在主機上產生一次，不進 git，也不進 `config.env`。私鑰只給 `cpanel-worker`，公鑰只給 `cpanel-api`。弄丟私鑰就解不開已封的 key，只能重新登記；C5-05 才是換鑰（新舊私鑰並存、背景重新封裝）。在那之前不要用上面的輪換步驟換這兩個檔。
+這組金鑰在主機上產生，不進 git，也不進 `config.env`。私鑰只給 `cpanel-worker`，公鑰只給 `cpanel-api`。弄丟私鑰就解不開已封的 key，只能重新登記。不要用上面「寫新檔蓋掉」的步驟換私鑰：蓋掉之後，已經封好的交易所 key 解不開。
 
-下一次部署之前，在主機上用即將上線的 image 產生（把 digest 換成 `state/current` 或要部署的那個）：
+輪替是新舊兩把同時在。現用私鑰仍是 `sealbox_private_key`，那是新鑰匙；舊的暫時叫 `sealbox_previous_private_key`。api 的公鑰檔換成新的那一把，新登記的 key 只封給它。worker 解封先試新的，不行再試舊的。`credential.rekey` 每分鐘把仍是舊指紋的列逐列改封，每一列自己的交易，不加帳號 `revision`，不打交易所。跑完會在 `meta.audit` 寫一筆 `sealbox.rekey`，params 只有列數與兩把指紋，沒有 secret。
+
+repo 的 compose 不掛舊私鑰。那個檔平常不存在，寫進 steady-state 的 secret 清單會讓 `compose up` 起不來。輪替這段才在 worker 加上 `CPANEL_SEALBOX_PREVIOUS_PRIVATE_KEY_FILE: /run/secrets/sealbox_previous_private_key`、`secrets` 清單與頂層的 `sealbox_previous_private_key: { file: ./secrets/sealbox_previous_private_key }`。api 只掛新的公鑰。重建 api 與 worker。
+
+舊指紋清完之後，拿掉剛才加的環境變數與 secret，移走 `sealbox_previous_private_key`，再重建 worker。還有舊列的話行程退出，訊息裡有剩餘列數；把舊私鑰掛回去等 job 跑完。起得來才算輪替結束。
+
+第一次部署、兩個檔都還沒有時，在主機上用即將上線的 image 產生（把 digest 換成 `state/current` 或要部署的那個）：
 
 ```sh
 cd /root/cpanel/deployment

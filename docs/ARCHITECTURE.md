@@ -172,7 +172,7 @@
 3. **stream 派工：** `next_due_at ≤ now`、沒有暫停（`paused_reason IS NULL`）、而且沒有未完成 job 的 stream 派一個 job。`next_due_at` 由 worker 在 job 結束時更新（C3-03）：上一個 job 回報 `more = true`（還沒追上現在）的，`next_due_at = now`。
 4. **待查訂單：** `ingest.pending_order` 裡到期的，依 `(exchange_account, venue)` 批次派 `order.resolve`（§4.5）。
 5. **快照：** 每個 active exchange_account，當前時間點 `b = floor(now, 1h)` 還沒有 batch、也沒有未完成 job，就派 `snapshot`。過去的時間點補不回來（不能對過去取快照），缺了就是看得見的缺口。
-6. **periodic：** `ingest.periodic` 裡啟用、到期、而且沒有未完成 job 的，各派一個 job，同時把 `next_due_at` 設成 `now + period`。間隔從派工時起算；上一個 job 到期時還沒完成，就等它完成後的下一輪再派。`mftiko.sync`、`sym.sync`（mirror）與 `maint.partitions`（每小時，`job_run` 的分區維護）都是 periodic。程式只在那一列不存在時登記，之後間隔與啟用由操作者在表上改。
+6. **periodic：** `ingest.periodic` 裡啟用、到期、而且沒有未完成 job 的，各派一個 job，同時把 `next_due_at` 設成 `now + period`。間隔從派工時起算；上一個 job 到期時還沒完成，就等它完成後的下一輪再派。`mftiko.sync`、`sym.sync`（mirror）、`maint.partitions`（每小時，`job_run` 的分區維護）與 `credential.rekey`（每分鐘，把仍是舊私鑰指紋的 credential 改封給現用公鑰；不打交易所）都是 periodic。程式只在那一列不存在時登記，之後間隔與啟用由操作者在表上改。
 
 **頻率分層**（控制 Binance per-symbol 端點的 request weight）：
 

@@ -41,11 +41,13 @@ type Endpoints struct {
 	OKX            string
 }
 
-// Verify opens credentials with Key and checks them. Open, when set, replaces the
-// exchange client; tests use it.
+// Verify opens credentials with Key and checks them. Previous is the key being
+// replaced: a box it still opens is accepted until credential.rekey moves it.
+// Open, when set, replaces the exchange client; tests use it.
 type Verify struct {
 	DB        *pgxpool.Pool
 	Key       *open.PrivateKey
+	Previous  *open.PrivateKey
 	Endpoints Endpoints
 	Open      func(exchange string, cred sealbox.Credentials) (Checker, error)
 }
@@ -65,7 +67,7 @@ func (v Verify) Handle(ctx context.Context, job *worker.Job) (worker.Result, err
 	if row.deleted || row.status != "unverified" {
 		return worker.Result{}, nil
 	}
-	cred, err := open.OpenCredentials(v.Key, row.ciphertext, row.accountID, row.id)
+	cred, err := openRow(v.Key, v.Previous, row.ciphertext, row.accountID, row.id)
 	if err != nil {
 		if err := v.reject(ctx, row, "sealed credentials are unreadable", "", ""); err != nil {
 			return worker.Result{}, err

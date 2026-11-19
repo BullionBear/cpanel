@@ -191,6 +191,36 @@ func TestNothingPrintsSecrets(t *testing.T) {
 	}
 }
 
+func TestOpenAnyTriesTheNextKey(t *testing.T) {
+	oldKey := mustKey(t)
+	newKey := mustKey(t)
+	c := creds(t)
+	sealed, err := sealbox.SealCredentials(oldKey.Public(), 3, 5, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := OpenAny([]*PrivateKey{newKey, oldKey}, sealed, 3, 5)
+	if err != nil || got.APISecret != c.APISecret || got.Passphrase != c.Passphrase {
+		t.Fatalf("opened with the previous key: %v", err)
+	}
+	if _, err := OpenAny([]*PrivateKey{newKey}, sealed, 3, 5); !errors.Is(err, sealbox.ErrOtherKey) {
+		t.Fatalf("new key alone: %v", err)
+	}
+	fresh, err := sealbox.SealCredentials(newKey.Public(), 3, 5, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenAny([]*PrivateKey{newKey, oldKey}, fresh, 3, 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenAny([]*PrivateKey{newKey, oldKey}, fresh, 3, 6); !errors.Is(err, sealbox.ErrIDMismatch) {
+		t.Fatalf("wrong id: %v", err)
+	}
+	if _, err := OpenAny(nil, sealed, 3, 5); !errors.Is(err, sealbox.ErrOtherKey) {
+		t.Fatalf("no keys: %v", err)
+	}
+}
+
 func mustKey(t *testing.T) *PrivateKey {
 	t.Helper()
 	k, err := GenerateKey()

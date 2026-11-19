@@ -97,6 +97,8 @@ func (s *server) createCredential(ctx context.Context, actor string, accountID i
 		}
 		return cpanelv1.Credential{}, err
 	}
+	// s.sealbox is the current recipient. A rotation points it at the new public key;
+	// credential.rekey moves rows that are still sealed to the previous one.
 	sealed, err := sealbox.SealCredentials(s.sealbox, accountID, id, sealbox.Credentials{
 		APIKey: apiKey, APISecret: secret, Passphrase: passphrase,
 	})
