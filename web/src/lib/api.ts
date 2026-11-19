@@ -20,6 +20,10 @@ export type MirrorSource = components['schemas']['MirrorSource'];
 export type UnresolvedUid = components['schemas']['UnresolvedUid'];
 export type UnmatchedAccount = components['schemas']['UnmatchedAccount'];
 export type UnmatchedReason = components['schemas']['UnmatchedReason'];
+export type Exchange = components['schemas']['Exchange'];
+export type ExchangeAccount = components['schemas']['ExchangeAccount'];
+export type ExchangeAccountKind = components['schemas']['ExchangeAccountKind'];
+export type Credential = components['schemas']['Credential'];
 
 // Same-origin cookies. Dev reaches the API through the Vite proxy.
 export const api = createClient<paths>({
