@@ -21,6 +21,7 @@ import (
 type Probe struct {
 	DB        *pgxpool.Pool
 	Key       *open.PrivateKey
+	Previous  *open.PrivateKey
 	Endpoints Endpoints
 	Open      func(exchange string, cred sealbox.Credentials) (Checker, error)
 }
@@ -40,7 +41,7 @@ func (p Probe) Handle(ctx context.Context, job *worker.Job) (worker.Result, erro
 	if row.deleted || (row.status != "auth_failed" && row.status != "active") || len(row.ciphertext) == 0 {
 		return worker.Result{}, nil
 	}
-	cred, err := open.OpenCredentials(p.Key, row.ciphertext, row.accountID, row.id)
+	cred, err := openRow(p.Key, p.Previous, row.ciphertext, row.accountID, row.id)
 	if err != nil {
 		if row.status == "auth_failed" {
 			if err := p.deferProbe(ctx, row.id, "sealed credentials are unreadable"); err != nil {

@@ -17,9 +17,11 @@
 //	-sym-url           $CPANEL_SYM_URL            SYM gRPC listener, e.g. http://100.65.26.119:7450
 //	-sym-token         $CPANEL_SYM_TOKEN          SYM gRPC bearer token; logged as ***
 //	-sealbox-private-key $CPANEL_SEALBOX_PRIVATE_KEY  X25519 private key, standard base64; required when -database is set
+//	-sealbox-previous-private-key $CPANEL_SEALBOX_PREVIOUS_PRIVATE_KEY  previous X25519 private key; set only while credentials are resealed
 //
 // Every secret may instead come from a file named by $NAME_FILE, which is how compose mounts them (C2-D008).
-// A private key file must be mode 0600. The key is not logged.
+// A private key file must be mode 0600. The key is not logged. Opening tries the current key, then the previous
+// one. cpanel-api seals with the current public key only.
 //
 //	cpanel-worker [flags] doctor
 //	cpanel-worker keygen <path>
@@ -85,6 +87,7 @@ type options struct {
 	symURL            string
 	symToken          string
 	sealboxPrivate    string
+	sealboxPrevious   string
 	doctor            bool
 	keygenPath        string
 }
@@ -106,6 +109,7 @@ func parseArgs(args []string, getenv func(string) string) (options, *config.Set,
 	set.String(&opt.symURL, "sym-url", "CPANEL_SYM_URL", "", "SYM gRPC listener URL")
 	set.Secret(&opt.symToken, "sym-token", "CPANEL_SYM_TOKEN", "SYM gRPC bearer token")
 	set.Secret(&opt.sealboxPrivate, "sealbox-private-key", "CPANEL_SEALBOX_PRIVATE_KEY", "X25519 private key, standard base64")
+	set.Secret(&opt.sealboxPrevious, "sealbox-previous-private-key", "CPANEL_SEALBOX_PREVIOUS_PRIVATE_KEY", "previous X25519 private key, standard base64; set while credentials are resealed")
 	rest, err := set.ParseRemaining(args)
 	if err != nil {
 		return options{}, nil, err
@@ -158,15 +162,19 @@ func main() {
 		}
 		return
 	}
-	key, ok, err := loadSealboxPrivate(opt)
+	key, prev, err := loadSealboxPrivate(opt)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
 		os.Exit(2)
 	}
 	ev := log.Info().Dict("config", set.Dict())
-	if ok {
+	if key != nil {
 		fp := key.Public().Fingerprint()
 		ev = ev.Str("sealbox_fingerprint", hex.EncodeToString(fp[:]))
+	}
+	if prev != nil {
+		fp := prev.Public().Fingerprint()
+		ev = ev.Str("sealbox_previous_fingerprint", hex.EncodeToString(fp[:]))
 	}
 	ev.Msg("starting")
 	if err := requireSchema(opt.database); err != nil {
@@ -190,6 +198,11 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if err := credential.CheckRecipients(ctx, pool, key, prev); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+		log.Error().Err(err).Msg("sealbox")
+		os.Exit(1)
+	}
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	reg.MustRegister(newOpsCollector(pool, log))
@@ -221,12 +234,13 @@ func main() {
 		reconcile.SymSync.Name:         mirror.SymSync(symbols),
 	}
 	if key != nil {
-		handlers[reconcile.CredentialVerifyKind] = credential.Verify{DB: pool, Key: key}.Handle
-		handlers[reconcile.CredentialProbeKind] = credential.Probe{DB: pool, Key: key}.Handle
+		handlers[reconcile.CredentialVerifyKind] = credential.Verify{DB: pool, Key: key, Previous: prev}.Handle
+		handlers[reconcile.CredentialProbeKind] = credential.Probe{DB: pool, Key: key, Previous: prev}.Handle
+		handlers[reconcile.CredentialRekey.Name] = credential.Rekey{DB: pool, Current: key, Previous: prev}.Handle
 	}
 	jobs := &worker.Worker{
 		DB: pool, Slots: opt.jobSlots, Grace: opt.shutdownTimeout, Egress: opt.egress, Log: log,
-		Local:          []string{reconcile.MftikoSync.Name, reconcile.SymSync.Name},
+		Local:          []string{reconcile.MftikoSync.Name, reconcile.SymSync.Name, reconcile.CredentialRekey.Name},
 		Handlers:       handlers,
 		CredentialHook: credential.ApplyAuth,
 	}
@@ -262,25 +276,45 @@ func keygen(path string) error {
 	return nil
 }
 
-// loadSealboxPrivate parses the worker private key when a database URL is set. doctor and keygen do
-// not call it. A file named by $CPANEL_SEALBOX_PRIVATE_KEY_FILE must be mode 0600.
-func loadSealboxPrivate(opt options) (*open.PrivateKey, bool, error) {
+// loadSealboxPrivate parses the worker private key when a database URL is set, and the previous
+// private key when one is configured. doctor and keygen do not call it. A file named by
+// $CPANEL_SEALBOX_PRIVATE_KEY_FILE or $CPANEL_SEALBOX_PREVIOUS_PRIVATE_KEY_FILE must be mode 0600.
+func loadSealboxPrivate(opt options) (current, previous *open.PrivateKey, err error) {
 	if opt.database == "" {
-		return nil, false, nil
+		return nil, nil, nil
 	}
 	if strings.TrimSpace(opt.sealboxPrivate) == "" {
-		return nil, false, errors.New("sealbox private key is required ($CPANEL_SEALBOX_PRIVATE_KEY or $CPANEL_SEALBOX_PRIVATE_KEY_FILE)")
+		return nil, nil, errors.New("sealbox private key is required ($CPANEL_SEALBOX_PRIVATE_KEY or $CPANEL_SEALBOX_PRIVATE_KEY_FILE)")
 	}
-	if path := os.Getenv("CPANEL_SEALBOX_PRIVATE_KEY_FILE"); path != "" {
-		if err := open.CheckKeyFile(path); err != nil {
-			return nil, false, err
-		}
+	if err := checkKeyFileEnv("CPANEL_SEALBOX_PRIVATE_KEY_FILE"); err != nil {
+		return nil, nil, err
 	}
-	k, err := open.ParsePrivateKey(opt.sealboxPrivate)
+	current, err = open.ParsePrivateKey(opt.sealboxPrivate)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, err
 	}
-	return k, true, nil
+	if strings.TrimSpace(opt.sealboxPrevious) == "" {
+		return current, nil, nil
+	}
+	if err := checkKeyFileEnv("CPANEL_SEALBOX_PREVIOUS_PRIVATE_KEY_FILE"); err != nil {
+		return nil, nil, err
+	}
+	previous, err = open.ParsePrivateKey(opt.sealboxPrevious)
+	if err != nil {
+		return nil, nil, err
+	}
+	if previous.Public() == current.Public() {
+		return nil, nil, errors.New("sealbox: CPANEL_SEALBOX_PREVIOUS_PRIVATE_KEY is the current private key")
+	}
+	return current, previous, nil
+}
+
+func checkKeyFileEnv(name string) error {
+	path := os.Getenv(name)
+	if path == "" {
+		return nil
+	}
+	return open.CheckKeyFile(path)
 }
 
 // requireSchema checks the database version. It does not migrate. An empty URL is a configuration

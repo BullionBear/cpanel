@@ -146,6 +146,23 @@ func Open(k *PrivateKey, sealed []byte) ([]byte, error) {
 	return out, nil
 }
 
+// OpenAny opens sealed with the first key that can. Keys are tried in order, so a rotation
+// passes the new key and then the previous one. A key sealed to someone else is skipped.
+// A box whose fingerprint matches a key but does not open, or that opens for different ids,
+// is not tried against a later key. Nil keys are skipped.
+func OpenAny(keys []*PrivateKey, sealed []byte, exchangeAccountID, credentialID int64) (sealbox.Credentials, error) {
+	for _, k := range keys {
+		if k == nil {
+			continue
+		}
+		cred, err := OpenCredentials(k, sealed, exchangeAccountID, credentialID)
+		if err == nil || !errors.Is(err, sealbox.ErrOtherKey) {
+			return cred, err
+		}
+	}
+	return sealbox.Credentials{}, sealbox.ErrOtherKey
+}
+
 // OpenCredentials opens sealed with k and checks that it was sealed for the two ids.
 // A mismatch is a failed open: the api key is not returned.
 func OpenCredentials(k *PrivateKey, sealed []byte, exchangeAccountID, credentialID int64) (sealbox.Credentials, error) {
