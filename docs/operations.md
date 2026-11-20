@@ -162,16 +162,29 @@ repo 的 compose 不掛舊私鑰。那個檔平常不存在，寫進 steady-stat
 第一次部署、兩個檔都還沒有時，在主機上用即將上線的 image 產生（把 digest 換成 `state/current` 或要部署的那個）：
 
 ```sh
-cd /root/cpanel/deployment
-install -d -m 700 secrets
-docker run --rm --user 65532:65532 \
-  -v "$PWD/secrets:/secrets" \
-  ghcr.io/bullionbear/cpanel@sha256:<digest> \
-  /usr/local/bin/cpanel-worker keygen /secrets/sealbox_private_key \
-  > secrets/sealbox_public_key
-chown 65532:65532 secrets/sealbox_private_key secrets/sealbox_public_key
-chmod 600 secrets/sealbox_private_key secrets/sealbox_public_key
+(
+  set -eu
+  cd /root/cpanel/deployment
+  install -d -m 700 secrets
+  for f in sealbox_private_key sealbox_public_key; do
+    if [ -e "secrets/$f" ]; then echo "secrets/$f already exists" >&2; exit 1; fi
+  done
+  t=$(mktemp -d)
+  chown 65532:65532 "$t"
+  chmod 700 "$t"
+  docker run --rm --user 65532:65532 \
+    -v "$t:/secrets" \
+    ghcr.io/bullionbear/cpanel@sha256:<digest> \
+    /usr/local/bin/cpanel-worker keygen /secrets/sealbox_private_key \
+    > "$t/sealbox_public_key"
+  mv "$t/sealbox_private_key" "$t/sealbox_public_key" secrets/
+  rmdir "$t"
+  chown 65532:65532 secrets/sealbox_private_key secrets/sealbox_public_key
+  chmod 600 secrets/sealbox_private_key secrets/sealbox_public_key
+)
 ```
+
+`secrets/` 是 root 的 `0700`，容器以 `65532` 執行，不能直接掛 `secrets/` 讓 `keygen` 寫進去（`permission denied`）。所以先寫到一個 owner 是 `65532` 的暫存目錄，再搬進 `secrets/`。`keygen` 拒絕覆蓋只對暫存目錄有效，所以開頭自己檢查兩個檔都還沒有，避免 `mv` 蓋掉現用的金鑰。整段包在 `set -e` 的 subshell 裡，直接貼進互動 shell 也會在任一步失敗時停下，不會關掉 shell。
 
 `keygen` 只把公鑰印到 stdout，私鑰留在檔案裡，並且拒絕覆蓋已存在的檔。兩個檔都還沒有時，帶著這張變更的 image 會在啟動時退出：api 缺公鑰、worker 缺私鑰或檔案不是 `0600`。`doctor` 不需要這把鑰匙。
 
