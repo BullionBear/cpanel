@@ -289,7 +289,8 @@ C6-D001–C6-D003 於 2026-11-20 定在 epic #37。C6-D004、C6-D005 於 2026-11
 
 ### C6-D002 斷路做在派工規則上
 
-- 整點快照規則（C6-02）與 stream 規則（現在的 `Streams`、C7-02）都排除沒有 `active` credential 的帳號；`auth_failed` 的帳號只剩 `credential.probe`。
+- 整點快照規則（C6-02）排除沒有 `active` credential 的帳號。stream 的派工（現在的 `Streams`）也要排除，實作在 C6-06；`auth_failed` 的帳號只剩 `credential.probe`。
+- C7-02 的清單與 stream 規劃不看 credential。沒有 key 的帳號仍有清單與 stream，只是派不出那些 job。
 - 理由：C5-04 的狀態機只改 credential 的狀態，現在的 `Streams` 規則不看它，「只剩 probe」要在派工時成立。
 
 ### C6-D003 C6-05 的演練在正式站

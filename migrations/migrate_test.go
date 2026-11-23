@@ -267,6 +267,7 @@ var ownedTables = map[int][]string{
 		"raw.venue_trade", "raw.venue_trade_default", "raw.venue_trade_key",
 		"raw.venue_order", "raw.venue_order_default", "raw.venue_order_key",
 		"raw.venue_income", "raw.venue_income_default", "raw.venue_income_key"},
+	14: {"ingest.persist_symbol"},
 }
 
 func relationExists(t *testing.T, ctx context.Context, conn *pgx.Conn, name string) bool {
