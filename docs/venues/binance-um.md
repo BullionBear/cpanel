@@ -35,7 +35,7 @@
 
 ### 餘額 → `ledger.balance_snapshot`
 
-v3 與 v2 的餘額欄位相同。C6-02 的表還沒有，先對到這些欄位：
+v3 與 v2 的餘額欄位相同。`wallet` 是 `um`（C6-D005）。欄位：
 
 | 概念 | 欄位 |
 |---|---|
@@ -58,7 +58,7 @@ v3 只回「有持倉或有掛單」的 symbol。欄位說明寫 `positionAmt` �
 | 開倉價 | `entryPrice` |
 | mark price | `markPrice` |
 | 未實現損益 | `unRealizedProfit`（v3 的大小寫；account v3 的 `positions` 寫成 `unrealizedProfit`） |
-| 保證金 | `isolatedMargin`。同列還有 `initialMargin`、`positionInitialMargin`、`isolatedWallet`。C6-02 從這幾個裡定欄位，這份保持原欄位 |
+| 保證金 | `isolatedMargin`。同列還有 `initialMargin`、`positionInitialMargin`、`isolatedWallet`。四個都進 `ledger.position_snapshot`（C6-D005），這份保持原欄位 |
 
 `positionAmt` 為 0 的列是有掛單、沒有持倉，不寫 `position_snapshot`。整份是空的也要寫 `snapshot_batch`（ARCHITECTURE §4.6），否則「最新」會讀到上一筆非空的快照。
 

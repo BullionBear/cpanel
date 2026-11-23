@@ -272,7 +272,7 @@ archtest 另外擋（C4-D002、C4-D006）：cpanel-api 不連結 `internal/mftik
 ### 4.6 快照
 
 - 每個有 `active` credential 的帳號每小時一個時間點（對齊整點），唯一鍵 `(exchange_account_id, bucket)`。所有帳號在同一刻取樣，跨帳號加總才可比。
-- 一個 snapshot job 依該帳號 kind 的錢包結構，抓餘額（各錢包）與持倉，寫一筆 `ledger.snapshot_batch` 加上明細。帳號是空的也要寫 batch，否則讀「最新」會讀到上一次的非空結果（v2 的教訓）。
+- 一個 snapshot job 依該帳號 kind 的錢包結構，抓餘額（各錢包）與持倉，寫一筆 `ledger.snapshot_batch` 加上明細。帳號是空的也要寫 batch，否則讀「最新」會讀到上一次的非空結果（v2 的教訓）。job 開始時若已離開該整點超過 15 分鐘，就不抓、也不寫 batch，該小時留成缺口；過去的整點不補（C6-D004）。
 - 持倉存交易所回報的數量、方向、開倉價、mark price、未實現損益、保證金。一期不做跨資產估值；要估值時再加價格來源。
 - 每小時對每個帳號都跑，所以快照 job 同時是 key 的健康探測：沒有 scope 的帳號，key 失效也會在一小時內被發現。這要靠快照的 `auth` 失敗會計數（C6-D001，C6-06）。
 - 失效演練（C6-05）在正式站，用一把專用的唯讀 key（C6-D003）。

@@ -205,8 +205,11 @@ func main() {
 	}
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
-	reg.MustRegister(newOpsCollector(pool, log))
-	rules := reconcile.Rules()
+	// C6-02 dispatches only a kind this worker can snapshot. C6-03 adds the first
+	// handler and its kind here. Empty inserts no snapshot jobs.
+	var snapshotKinds []string
+	reg.MustRegister(newOpsCollector(pool, log, snapshotKinds))
+	rules := reconcile.Rules(snapshotKinds)
 	loop := &reconcile.Loop{
 		DB: pool, Rules: rules, Interval: opt.reconcileInterval, Log: log,
 		Observe: newReconcileMetrics(reg, rules).observe,

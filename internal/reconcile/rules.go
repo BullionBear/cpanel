@@ -9,12 +9,12 @@ import (
 )
 
 // Rules are the rules in the order a round runs them. Registration comes before dispatch, so a singleton gets its
-// first job in the round that registers it. Later tickets add theirs.
+// first job in the round that registers it. snapshotKinds is the list this worker can snapshot; empty inserts none.
 //
 // Replicas run the same statements at the same time. Each rule takes its keys in one fixed order, so a replica
 // that hits another's uncommitted key waits for it instead of deadlocking.
-func Rules() []Rule {
-	return []Rule{MaintPartitions, MftikoSync, SymSync, CredentialRekey, Credentials, Streams, Periodics}
+func Rules(snapshotKinds []string) []Rule {
+	return []Rule{MaintPartitions, MftikoSync, SymSync, CredentialRekey, Credentials, Streams, Snapshots(snapshotKinds), Periodics}
 }
 
 // CredentialVerifyKind is the job that opens one unverified credential and checks it

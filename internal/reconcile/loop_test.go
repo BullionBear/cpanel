@@ -19,7 +19,7 @@ import (
 func TestRoundRunsTheRulesInOrder(t *testing.T) {
 	ctx, _, conn := testDB(t)
 	var observed []Result
-	l := &Loop{DB: conn, Rules: Rules(), Now: func() time.Time { return t0 }, Observe: func(r Result) { observed = append(observed, r) }}
+	l := &Loop{DB: conn, Rules: Rules(nil), Now: func() time.Time { return t0 }, Observe: func(r Result) { observed = append(observed, r) }}
 
 	// An empty database: the first round registers maint.partitions and dispatches it.
 	res := l.Round(ctx)
@@ -30,7 +30,7 @@ func TestRoundRunsTheRulesInOrder(t *testing.T) {
 	for _, r := range res.Rules {
 		got = append(got, fmt.Sprintf("%s=%d", r.Name, r.Inserted))
 	}
-	if want := []string{"maint.partitions=1", "mftiko.sync=1", "sym.sync=1", "credential.rekey=1", "credentials=0", "streams=0", "periodics=4"}; !slices.Equal(got, want) {
+	if want := []string{"maint.partitions=1", "mftiko.sync=1", "sym.sync=1", "credential.rekey=1", "credentials=0", "streams=0", "snapshots=0", "periodics=4"}; !slices.Equal(got, want) {
 		t.Errorf("rules %v, want %v", got, want)
 	}
 	if !res.At.Equal(t0) || len(observed) != 1 {
@@ -72,7 +72,7 @@ func TestRunStopsWhenItsContextEnds(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 	rounds := make(chan Result, 16)
-	l := &Loop{DB: pool, Rules: Rules(), Interval: 10 * time.Millisecond, Observe: func(r Result) {
+	l := &Loop{DB: pool, Rules: Rules(nil), Interval: 10 * time.Millisecond, Observe: func(r Result) {
 		select {
 		case rounds <- r:
 		default:
@@ -154,7 +154,7 @@ func simulate(t *testing.T, loops int) []finished {
 			t.Fatal(err)
 		}
 		t.Cleanup(pool.Close)
-		ls[i] = &Loop{DB: pool, Rules: Rules(), Now: func() time.Time { return time.Unix(0, clock.Load()).UTC() }}
+		ls[i] = &Loop{DB: pool, Rules: Rules(nil), Now: func() time.Time { return time.Unix(0, clock.Load()).UTC() }}
 	}
 
 	for r := range 100 {

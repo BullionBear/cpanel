@@ -7,14 +7,16 @@ import (
 )
 
 const (
-	partitionDaysAhead = 7  // UTC days after today whose job_run partition is made ahead
-	jobRunKeepDays     = 30 // job_run partitions older than this are dropped
+	partitionDaysAhead       = 7  // UTC days after today whose job_run partition is made ahead
+	jobRunKeepDays           = 30 // job_run partitions older than this are dropped
+	venueSnapshotMonthsAhead = 1  // UTC months after this one whose venue_snapshot partition is made ahead
 )
 
 // MaintPartitions runs maint.partitions (C3-01's functions): it makes the job_run partitions for today and the next
 // 7 UTC days, drops the partitions of days more than 30 days back after copying their failed runs into
-// ingest.job_failure, and deletes job_failure rows older than a year. Items is the partitions made and dropped plus
-// the failures deleted.
+// ingest.job_failure, and deletes job_failure rows older than a year. It also makes this month's raw.venue_snapshot
+// partition and the next one's (C6-02). Those are kept forever. Items is the partitions made and dropped plus the
+// failures deleted.
 //
 // Each step is its own transaction. A reader of job_run locks the parent and then each partition; one transaction
 // that attaches a partition (locking the default partition) and then drops one (locking the parent) deadlocks with
@@ -38,16 +40,26 @@ func MaintPartitions(ctx context.Context, job *Job) (Result, error) {
 		}
 		made += n
 	}
+	var months int64
+	for m := range venueSnapshotMonthsAhead + 1 {
+		n, err := step(`
+			SELECT raw.ensure_venue_snapshot_partition(
+				(date_trunc('month', now() AT TIME ZONE 'UTC') + $1::int * interval '1 month')::date)::int`, m)
+		if err != nil {
+			return Result{Items: int(made + months)}, err
+		}
+		months += n
+	}
 	dropped, err := step(`SELECT ingest.expire_job_runs((now() AT TIME ZONE 'UTC')::date - $1::int)`, jobRunKeepDays)
 	if err != nil {
-		return Result{Items: int(made)}, err
+		return Result{Items: int(made + months)}, err
 	}
 	deleted, err = step(`
 		WITH gone AS (DELETE FROM ingest.job_failure WHERE finished_at < now() - interval '1 year' RETURNING 1)
 		SELECT count(*) FROM gone`)
 	if err != nil {
-		return Result{Items: int(made + dropped)}, err
+		return Result{Items: int(made + months + dropped)}, err
 	}
-	job.r.log.Info().Int64("made", made).Int64("dropped", dropped).Int64("failures_deleted", deleted).Msg("job_run partitions")
-	return Result{Items: int(made + dropped + deleted)}, nil
+	job.r.log.Info().Int64("made", made).Int64("months", months).Int64("dropped", dropped).Int64("failures_deleted", deleted).Msg("job_run partitions")
+	return Result{Items: int(made + months + dropped + deleted)}, nil
 }

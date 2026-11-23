@@ -163,8 +163,8 @@ func TestJobRunPartitions(t *testing.T) {
 	if p := partitionOf(3); p != "ingest.job_run_20261107" {
 		t.Fatalf("row 3 in %s, want ingest.job_run_20261107", p)
 	}
-	if n := count(t, ctx, conn, `SELECT count(*) FROM pg_indexes WHERE schemaname = 'ingest' AND tablename = 'job_run_20261107'`); n != 4 {
-		t.Fatalf("indexes on the new partition = %d, want 4 (primary key and three partitioned indexes)", n)
+	if n := count(t, ctx, conn, `SELECT count(*) FROM pg_indexes WHERE schemaname = 'ingest' AND tablename = 'job_run_20261107'`); n != 5 {
+		t.Fatalf("indexes on the new partition = %d, want 5 (primary key, three job_run indexes, and dedup_key)", n)
 	}
 
 	// An old failure still in the default partition, and a later day that stays.
