@@ -33,12 +33,20 @@ type opsCollector struct {
 	outOfScope  *prometheus.Desc
 	credentials *prometheus.Desc
 	kindErrors  *prometheus.Desc
+	batchAge    *prometheus.Desc
+	gaps24h     *prometheus.Desc
+
+	snapshotKinds []string
 }
 
-func newOpsCollector(db *pgxpool.Pool, log zerolog.Logger) *opsCollector {
+func newOpsCollector(db *pgxpool.Pool, log zerolog.Logger, snapshotKinds []string) *opsCollector {
+	if snapshotKinds == nil {
+		snapshotKinds = []string{}
+	}
 	return &opsCollector{
-		db:  db,
-		log: log,
+		db:            db,
+		log:           log,
+		snapshotKinds: snapshotKinds,
 		lag: prometheus.NewDesc(
 			"cpanel_stream_lag_seconds",
 			"Seconds since a stream last succeeded, or since it was created. Paused streams are omitted.",
@@ -107,6 +115,14 @@ func newOpsCollector(db *pgxpool.Pool, log zerolog.Logger) *opsCollector {
 			"cpanel_account_kind_verify_errors",
 			"Enabled kinds on a live account whose last_error is set.",
 			nil, nil),
+		batchAge: prometheus.NewDesc(
+			"cpanel_snapshot_batch_age_seconds",
+			"Age of an account's latest snapshot batch, or of the hour coverage started when it has none.",
+			[]string{"account"}, nil),
+		gaps24h: prometheus.NewDesc(
+			"cpanel_snapshot_gaps_24h",
+			"Snapshot hours missing in the last 24, excluding the current hour.",
+			[]string{"account"}, nil),
 	}
 }
 
@@ -128,6 +144,8 @@ func (c *opsCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.outOfScope
 	ch <- c.credentials
 	ch <- c.kindErrors
+	ch <- c.batchAge
+	ch <- c.gaps24h
 }
 
 func (c *opsCollector) Collect(ch chan<- prometheus.Metric) {
@@ -389,5 +407,49 @@ func (c *opsCollector) collect(ctx context.Context, ch chan<- prometheus.Metric)
 		return err
 	}
 	ch <- prometheus.MustNewConstMetric(c.kindErrors, prometheus.GaugeValue, float64(kindErrors))
-	return nil
+
+	snapRows, err := c.db.Query(ctx, `
+		WITH covered AS (
+			SELECT a.id,
+			       (date_trunc('hour', min(c.verified_at) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') AS start_hour,
+			       (SELECT max(b.captured_at) FROM ledger.snapshot_batch b WHERE b.exchange_account_id = a.id) AS last_at
+			FROM pms.exchange_account a
+			JOIN pms.credential c
+			  ON c.exchange_account_id = a.id AND c.purpose = 'read' AND c.verified_at IS NOT NULL
+			WHERE a.deleted_at IS NULL
+			  AND EXISTS (
+			      SELECT 1 FROM pms.credential live
+			      WHERE live.exchange_account_id = a.id AND live.purpose = 'read' AND live.status = 'active'
+			        AND octet_length(live.ciphertext) > 0
+			  )
+			  AND EXISTS (
+			      SELECT 1 FROM pms.exchange_account_kind k
+			      WHERE k.exchange_account_id = a.id AND k.disabled_at IS NULL AND k.kind = ANY($1::text[])
+			  )
+			GROUP BY a.id
+		)
+		SELECT covered.id::text,
+		       EXTRACT(EPOCH FROM (now() - COALESCE(covered.last_at, covered.start_hour)))::float8,
+		       COALESCE(g.n, 0)
+		FROM covered
+		LEFT JOIN (
+			SELECT exchange_account_id, count(*) AS n
+			FROM ledger.snapshot_gaps($1::text[], now())
+			WHERE bucket >= (date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') - interval '24 hours'
+			GROUP BY exchange_account_id
+		) g ON g.exchange_account_id = covered.id`, c.snapshotKinds)
+	if err != nil {
+		return err
+	}
+	defer snapRows.Close()
+	for snapRows.Next() {
+		var account string
+		var age, gaps float64
+		if err := snapRows.Scan(&account, &age, &gaps); err != nil {
+			return err
+		}
+		ch <- prometheus.MustNewConstMetric(c.batchAge, prometheus.GaugeValue, age, account)
+		ch <- prometheus.MustNewConstMetric(c.gaps24h, prometheus.GaugeValue, gaps, account)
+	}
+	return snapRows.Err()
 }

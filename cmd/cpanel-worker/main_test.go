@@ -115,7 +115,7 @@ func TestBinary(t *testing.T) {
 		}
 
 		// The first round registers maint.partitions and dispatches its job; the job runner runs it, making today's
-		// partition and the next 7 days'.
+		// partition, the next 7 days', and this month's venue_snapshot partition plus the next month's.
 		conn, err := pgx.Connect(ctx, srv.DSN())
 		if err != nil {
 			t.Fatal(err)
@@ -135,8 +135,8 @@ func TestBinary(t *testing.T) {
 				break
 			}
 		}
-		if runs != 1 || items != 8 || jobs != 0 || parts != 1+8 {
-			t.Fatalf("after 10s: %d maint.partitions runs with %d items, %d jobs left, %d job_run partitions; want 1 with 8, 0 and 9",
+		if runs != 1 || items != 10 || jobs != 0 || parts != 1+8 {
+			t.Fatalf("after 10s: %d maint.partitions runs with %d items, %d jobs left, %d job_run partitions; want 1 with 10, 0 and 9",
 				runs, items, jobs, parts)
 		}
 		resp, err = http.Get("http://" + addr + "/metrics")

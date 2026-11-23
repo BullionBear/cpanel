@@ -113,3 +113,17 @@ groups:
           severity: warning
         annotations:
           summary: a kind has failed verification for 30 minutes
+      - alert: CpanelSnapshotGap
+        expr: cpanel_snapshot_gaps_24h > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: an account is missing a snapshot hour
+      - alert: CpanelSnapshotStale
+        expr: cpanel_snapshot_batch_age_seconds > 7200
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: the latest snapshot batch is more than two hours old

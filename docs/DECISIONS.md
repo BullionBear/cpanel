@@ -277,7 +277,7 @@ C5-D001–C5-D007 於 2026-11-10 定在 epic #36，原文照錄。同時確認�
 
 ## C6 快照（#37）
 
-C6-D001–C6-D003 於 2026-11-20 定在 epic #37。
+C6-D001–C6-D003 於 2026-11-20 定在 epic #37。C6-D004、C6-D005 於 2026-11-23 定在 C6-02。
 
 ### C6-D001 任何 job 的 `auth` 失敗都計數（修訂 C5-D003 對資料 job 的部分）
 
@@ -296,6 +296,19 @@ C6-D001–C6-D003 於 2026-11-20 定在 epic #37。
 
 - 用一把專用的唯讀 key（綁出口 IP）登記、撤銷、重新登記。撤銷唯讀 key 沒有風險。
 - 理由：Binance client 只打正式站，testnet 的支援是 C7-09；C6-05 不必等它。
+
+### C6-D004 遲到的快照不抓，過去的整點不補
+
+- 門檻 15 分鐘。snapshot job 開始時若已晚於該 UTC 整點加 15 分鐘，job 成功結束，不寫 `snapshot_batch`，該小時留在缺口裡。
+- 過去的整點不另插 job。同一把 `dedup_key` 已經成功結束（含這次放棄）就不再插，避免空轉；失敗的同一小時還可以再試。
+- 理由：晚到的餘額與持倉不是那個整點的快照。補抓會把晚的資料記成當時的狀態。
+
+### C6-D005 欄位、錢包代碼與缺口
+
+- 餘額欄位對 `docs/venues/binance-um.md`：`balance`、`available_balance`、`cross_wallet_balance`、`max_withdraw_amount`。沒有 `locked`。BinanceUM 的錢包代碼是 `um`。
+- 持倉保留 `position_amt`（不取絕對值；0 不寫）、`position_side`、`entry_price`、`mark_price`、`unrealized_profit`，以及 `isolated_margin`、`initial_margin`、`position_initial_margin`、`isolated_wallet`。`(venue, category, exch_ticker)` 對不到 UID 就存 null，ticker 仍留著。明細帶 `norm_version`。
+- kind 的結果是 `succeeded`、`failed`、`unimplemented`。
+- 缺口從該帳號最早的 `verified_at` 所在整點算到當前整點之前。只含現在仍有 active read credential、而且有啟用的 kind 落在 worker 傳入清單裡的帳號。清單不寫死在 SQL。正式 worker 在 C6-03 登記 handler 之前傳空清單，所以不派工、也不報缺口。
 
 ## C7 History（#38）
 

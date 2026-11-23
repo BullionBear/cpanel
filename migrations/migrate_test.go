@@ -261,6 +261,8 @@ var ownedTables = map[int][]string{
 	8:  {"pms.account_kind", "pms.exchange_account", "pms.exchange_account_kind"},
 	9:  {"pms.credential"},
 	10: {"pms.coverage", "pms.unmatched"},
+	12: {"ledger.snapshot_batch", "ledger.snapshot_batch_kind", "ledger.balance_snapshot", "ledger.position_snapshot",
+		"raw.venue_snapshot", "raw.venue_snapshot_default"},
 }
 
 func relationExists(t *testing.T, ctx context.Context, conn *pgx.Conn, name string) bool {

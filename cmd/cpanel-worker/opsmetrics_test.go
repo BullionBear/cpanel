@@ -58,7 +58,7 @@ func TestOpsMetrics(t *testing.T) {
 	}
 
 	reg := prometheus.NewRegistry()
-	reg.MustRegister(newOpsCollector(pool, zerolog.Nop()))
+	reg.MustRegister(newOpsCollector(pool, zerolog.Nop(), nil))
 	fams, err := reg.Gather()
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +213,7 @@ func TestUnmatchedGauges(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := prometheus.NewRegistry()
-	reg.MustRegister(newOpsCollector(pool, zerolog.Nop()))
+	reg.MustRegister(newOpsCollector(pool, zerolog.Nop(), nil))
 	fams, err := reg.Gather()
 	if err != nil {
 		t.Fatal(err)
@@ -226,6 +226,75 @@ func TestUnmatchedGauges(t *testing.T) {
 	}
 	if got := gauge(t, fams, "cpanel_mftiko_kinds_out_of_scope", map[string]string{"kind": "BinancePM", "traded": "true"}); got != 1 {
 		t.Fatalf("pm %v", got)
+	}
+}
+
+func TestSnapshotMetrics(t *testing.T) {
+	srv := pgtest.Start(t)
+	ctx := context.Background()
+	if _, err := migrations.Up(ctx, srv.DSN()); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, srv.DSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var id int64
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO pms.exchange_account (exchange, exch_account_uid, label)
+		VALUES ('binance', 'uid', 'desk') RETURNING id`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO pms.exchange_account_kind (exchange_account_id, kind) VALUES ($1, 'BinanceUM')`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO pms.credential (exchange_account_id, purpose, status, ciphertext, api_key_last4, verified_at)
+		VALUES ($1, 'read', 'active', '\x01', 'abcd',
+		        (date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') - interval '3 hours')`, id); err != nil {
+		t.Fatal(err)
+	}
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(newOpsCollector(pool, zerolog.Nop(), []string{"BinanceUM"}))
+	fams, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := strconv.FormatInt(id, 10)
+	labels := map[string]string{"account": account}
+	if got := gauge(t, fams, "cpanel_snapshot_gaps_24h", labels); got != 3 {
+		t.Fatalf("gaps %v, want 3", got)
+	}
+	if got := gauge(t, fams, "cpanel_snapshot_batch_age_seconds", labels); got < 3*3600 || got >= 4*3600 {
+		t.Fatalf("age %v, want between 3h and 4h", got)
+	}
+	quiet := prometheus.NewRegistry()
+	quiet.MustRegister(newOpsCollector(pool, zerolog.Nop(), nil))
+	quietFams, err := quiet.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := findGauge(quietFams, "cpanel_snapshot_gaps_24h", labels); ok {
+		t.Fatal("an empty kind list reported a gap")
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO ledger.snapshot_batch (exchange_account_id, bucket, captured_at)
+		VALUES ($1,
+		        (date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') - interval '3 hours',
+		        now() - interval '90 minutes')`, id); err != nil {
+		t.Fatal(err)
+	}
+	fams, err = reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gauge(t, fams, "cpanel_snapshot_gaps_24h", labels); got != 2 {
+		t.Fatalf("gaps %v, want 2", got)
+	}
+	if got := gauge(t, fams, "cpanel_snapshot_batch_age_seconds", labels); got < 90*60 || got >= 91*60 {
+		t.Fatalf("age %v, want about 90 minutes", got)
 	}
 }
 

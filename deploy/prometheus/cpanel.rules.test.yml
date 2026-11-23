@@ -209,3 +209,36 @@ tests:
               severity: warning
             exp_annotations:
               summary: a kind has failed verification for 30 minutes
+  - interval: 1m
+    input_series:
+      - series: 'cpanel_snapshot_gaps_24h{account="1"}'
+        values: '1+0x20'
+      - series: 'cpanel_snapshot_batch_age_seconds{account="1"}'
+        values: '8000+0x20'
+      - series: 'cpanel_snapshot_gaps_24h{account="2"}'
+        values: '0+0x20'
+      - series: 'cpanel_snapshot_batch_age_seconds{account="2"}'
+        values: '100+0x20'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: CpanelSnapshotGap
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: CpanelSnapshotGap
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              account: "1"
+            exp_annotations:
+              summary: an account is missing a snapshot hour
+      - eval_time: 14m
+        alertname: CpanelSnapshotStale
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: CpanelSnapshotStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              account: "1"
+            exp_annotations:
+              summary: the latest snapshot batch is more than two hours old
