@@ -42,8 +42,8 @@ func TestMaintPartitions(t *testing.T) {
 	if err := db.QueryRow(ctx, `SELECT status, items FROM ingest.job_run WHERE kind = 'maint.partitions'`).Scan(&status, &items); err != nil {
 		t.Fatal(err)
 	}
-	if status != "succeeded" || items != 8+2+1+1 {
-		t.Errorf("maint.partitions run: %s, %d items; want succeeded, 8 job_run + 2 venue_snapshot months + 1 dropped + 1 failure deleted", status, items)
+	if status != "succeeded" || items != 8+8+1+1 {
+		t.Errorf("maint.partitions run: %s, %d items; want succeeded, 8 job_run + 8 raw months + 1 dropped + 1 failure deleted", status, items)
 	}
 	rows, err := db.Query(ctx, `
 		SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
@@ -63,25 +63,27 @@ func TestMaintPartitions(t *testing.T) {
 	if !slices.Equal(parts, want) {
 		t.Errorf("partitions %v, want %v: today and 7 days ahead, the 40-day-old one dropped", parts, want)
 	}
-	rows, err = db.Query(ctx, `
-		SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
-		WHERE i.inhparent = 'raw.venue_snapshot'::regclass ORDER BY c.relname`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	months, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		t.Fatal(err)
-	}
 	monthStart := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC)
-	wantMonths := []string{
-		"venue_snapshot_" + monthStart.Format("200601"),
-		"venue_snapshot_" + monthStart.AddDate(0, 1, 0).Format("200601"),
-		"venue_snapshot_default",
-	}
-	slices.Sort(wantMonths)
-	if !slices.Equal(months, wantMonths) {
-		t.Errorf("venue_snapshot partitions %v, want %v", months, wantMonths)
+	for _, parent := range []string{"venue_snapshot", "venue_trade", "venue_order", "venue_income"} {
+		rows, err = db.Query(ctx, `
+			SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
+			WHERE i.inhparent = $1::regclass ORDER BY c.relname`, "raw."+parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		months, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantMonths := []string{
+			parent + "_" + monthStart.Format("200601"),
+			parent + "_" + monthStart.AddDate(0, 1, 0).Format("200601"),
+			parent + "_default",
+		}
+		slices.Sort(wantMonths)
+		if !slices.Equal(months, wantMonths) {
+			t.Errorf("%s partitions %v, want %v", parent, months, wantMonths)
+		}
 	}
 	rows, err = db.Query(ctx, `SELECT id FROM ingest.job_failure ORDER BY id`)
 	if err != nil {

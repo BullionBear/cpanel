@@ -229,7 +229,7 @@ HTTP 的預設在 [General Info](https://developers.binance.com/en/docs/products
 | 訂單 | `(symbol, orderId)` | 「orderId is self-increment for each specific symbol」 |
 | income | `(incomeType, tranId)` | 頁面寫「trandId is unique in the same incomeType for a user」。拼字是 `trandId`，回應欄位是 `tranId`。同一使用者、同一 `incomeType` 內唯一 |
 
-`pending_order` 現在的鍵是 `(exchange_account_id, venue, native_order_id)`，沒有 symbol。`orderId` 依 symbol 遞增，C7-01／C7-04 的 native id 要帶 symbol，或把鍵改成含 symbol。只存 `orderId` 會在不同 symbol 上碰撞。
+`pending_order` 現在的鍵是 `(exchange_account_id, venue, native_order_id)`，沒有 symbol。`orderId` 依 symbol 遞增，只存 `orderId` 會在不同 symbol 上碰撞。C7-D003 把 raw 的 native id 定成 `symbol:id`、`symbol:orderId`、`incomeType:tranId`。`pending_order` 建表時用同一種 id。
 
 成交的 `orderId` 用來寫 `pending_order`，不是成交的去重鍵。`clientOrderId` 只在訂單回應裡。
 
@@ -257,6 +257,6 @@ HTTP 的預設在 [General Info](https://developers.binance.com/en/docs/products
 | HTTP 403 是 WAF，目標 `rate_limited` | `classify` 與 ARCHITECTURE §4.4 當 `auth` | C6-03，只改 Binance 這條，並改 §4.4 的例子 |
 | C6-D001 任何 `account:<id>` job 的 `auth` 都計數 | `ApplyAuth` 只計 verify 與 probe | C6-06 |
 | fapi 的 weight 預算 | 程式用現貨的 6000／4800；fapi 上限未確認 | C6-03 分開預算，數字仍待文件 |
-| `orderId` 依 symbol 唯一 | `pending_order` 的鍵沒有 symbol | C7-01／C7-04 |
+| `orderId` 依 symbol 唯一 | raw 的 native id 已帶 symbol（C7-D003）。`pending_order` 的鍵還沒有 | C7-03／C7-04 |
 
 C6-03、C7-03～C7-05 加端點時照第 2、3 節，不在這張票加 client。

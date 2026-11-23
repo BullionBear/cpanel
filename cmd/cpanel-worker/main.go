@@ -25,6 +25,7 @@
 //
 //	cpanel-worker [flags] doctor
 //	cpanel-worker keygen <path>
+//	cpanel-worker [flags] rebuild -account <id> -venue <v> -data trade|order|funding
 //
 // doctor calls mftiko GET /accounts, SYM's grpc.health.v1 Check and SYM Revisions, prints one line per check and
 // exits 0 when all pass, 1 otherwise. It needs no database and starts no server. It does not open secrets, so it
@@ -32,6 +33,10 @@
 //
 // keygen writes a new private key to path, mode 0600, and prints only the public key. It refuses a path that
 // already exists. The private key is not printed.
+//
+// rebuild deletes one account's ledger rows for a venue and a data kind, and writes them again from raw with the
+// registered normalizer (C7-01). It does not call an exchange and does not move a stream cursor. It needs the
+// database and no sealbox key. No venue normalizer is registered until C7-03.
 //
 // The effective settings are logged at startup, as JSON on stderr. Startup does not migrate: the database
 // must already be at the embedded version (cpanel-migrate up), or the process refuses to start and says why.
@@ -60,6 +65,7 @@ import (
 
 	"github.com/BullionBear/cpanel/internal/credential"
 	"github.com/BullionBear/cpanel/internal/doctor"
+	"github.com/BullionBear/cpanel/internal/history"
 	"github.com/BullionBear/cpanel/internal/mftiko"
 	"github.com/BullionBear/cpanel/internal/mirror"
 	"github.com/BullionBear/cpanel/internal/platform/config"
@@ -90,6 +96,10 @@ type options struct {
 	sealboxPrevious   string
 	doctor            bool
 	keygenPath        string
+	rebuild           bool
+	rebuildAccount    int64
+	rebuildVenue      string
+	rebuildData       string
 }
 
 func parseArgs(args []string, getenv func(string) string) (options, *config.Set, error) {
@@ -128,10 +138,45 @@ func parseArgs(args []string, getenv func(string) string) (options, *config.Set,
 		opt.keygenPath = rest[1]
 	case len(rest) == 1 && rest[0] == "keygen":
 		return options{}, nil, errors.New("keygen needs the path of a new private key file")
+	case len(rest) >= 1 && rest[0] == "rebuild":
+		account, venue, data, err := parseRebuild(rest[1:])
+		if err != nil {
+			return options{}, nil, err
+		}
+		opt.rebuild = true
+		opt.rebuildAccount = account
+		opt.rebuildVenue = venue
+		opt.rebuildData = data
 	default:
-		return options{}, nil, fmt.Errorf("unexpected argument %q; commands are doctor and keygen", rest[0])
+		return options{}, nil, fmt.Errorf("unexpected argument %q; commands are doctor, keygen and rebuild", rest[0])
 	}
 	return opt, set, nil
+}
+
+func parseRebuild(args []string) (account int64, venue, data string, err error) {
+	fs := flag.NewFlagSet("rebuild", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.Int64Var(&account, "account", 0, "exchange account id")
+	fs.StringVar(&venue, "venue", "", "venue name, as SYM spells it")
+	fs.StringVar(&data, "data", "", "trade, order or funding")
+	if err = fs.Parse(args); err != nil {
+		return 0, "", "", err
+	}
+	if fs.NArg() != 0 {
+		return 0, "", "", fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	if account < 1 {
+		return 0, "", "", errors.New("rebuild -account is required")
+	}
+	if venue == "" {
+		return 0, "", "", errors.New("rebuild -venue is required")
+	}
+	switch data {
+	case "trade", "order", "funding":
+	default:
+		return 0, "", "", fmt.Errorf("rebuild -data must be trade, order or funding, got %q", data)
+	}
+	return account, venue, data, nil
 }
 
 func main() {
@@ -147,6 +192,16 @@ func main() {
 	if opt.keygenPath != "" {
 		if err := keygen(opt.keygenPath); err != nil {
 			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if opt.rebuild {
+		if err := runRebuild(context.Background(), opt); err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+			if errors.Is(err, migrations.ErrDatabaseURLEmpty) {
+				os.Exit(2)
+			}
 			os.Exit(1)
 		}
 		return
@@ -322,6 +377,23 @@ func checkKeyFileEnv(name string) error {
 
 // requireSchema checks the database version. It does not migrate. An empty URL is a configuration
 // error; a database that is behind, drifted, or unreachable is a failed startup.
+func runRebuild(ctx context.Context, opt options) error {
+	if err := requireSchema(opt.database); err != nil {
+		return err
+	}
+	pool, err := pgxpool.New(ctx, opt.database)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	kind := history.Kind(opt.rebuildData)
+	n, ok := history.Lookup(opt.rebuildVenue, kind)
+	if !ok {
+		return fmt.Errorf("no %s normalizer for %s", opt.rebuildData, opt.rebuildVenue)
+	}
+	return history.Rebuild(ctx, pool, n, opt.rebuildAccount)
+}
+
 func requireSchema(database string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

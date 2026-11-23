@@ -7,16 +7,16 @@ import (
 )
 
 const (
-	partitionDaysAhead       = 7  // UTC days after today whose job_run partition is made ahead
-	jobRunKeepDays           = 30 // job_run partitions older than this are dropped
-	venueSnapshotMonthsAhead = 1  // UTC months after this one whose venue_snapshot partition is made ahead
+	partitionDaysAhead = 7  // UTC days after today whose job_run partition is made ahead
+	jobRunKeepDays     = 30 // job_run partitions older than this are dropped
+	rawMonthsAhead     = 1  // UTC months after this one whose raw partition is made ahead
 )
 
 // MaintPartitions runs maint.partitions (C3-01's functions): it makes the job_run partitions for today and the next
 // 7 UTC days, drops the partitions of days more than 30 days back after copying their failed runs into
-// ingest.job_failure, and deletes job_failure rows older than a year. It also makes this month's raw.venue_snapshot
-// partition and the next one's (C6-02). Those are kept forever. Items is the partitions made and dropped plus the
-// failures deleted.
+// ingest.job_failure, and deletes job_failure rows older than a year. It also makes this month's raw partitions
+// and the next month's for venue_snapshot, venue_trade, venue_order and venue_income (C6-02, C7-01). Those are
+// kept forever. Items is the partitions made and dropped plus the failures deleted.
 //
 // Each step is its own transaction. A reader of job_run locks the parent and then each partition; one transaction
 // that attaches a partition (locking the default partition) and then drops one (locking the parent) deadlocks with
@@ -41,14 +41,16 @@ func MaintPartitions(ctx context.Context, job *Job) (Result, error) {
 		made += n
 	}
 	var months int64
-	for m := range venueSnapshotMonthsAhead + 1 {
-		n, err := step(`
-			SELECT raw.ensure_venue_snapshot_partition(
-				(date_trunc('month', now() AT TIME ZONE 'UTC') + $1::int * interval '1 month')::date)::int`, m)
-		if err != nil {
-			return Result{Items: int(made + months)}, err
+	for _, parent := range []string{"venue_snapshot", "venue_trade", "venue_order", "venue_income"} {
+		for m := range rawMonthsAhead + 1 {
+			n, err := step(`
+				SELECT raw.ensure_month_partition($1, (date_trunc('month', now() AT TIME ZONE 'UTC') + $2::int * interval '1 month')::date)::int`,
+				parent, m)
+			if err != nil {
+				return Result{Items: int(made + months)}, err
+			}
+			months += n
 		}
-		months += n
 	}
 	dropped, err := step(`SELECT ingest.expire_job_runs((now() AT TIME ZONE 'UTC')::date - $1::int)`, jobRunKeepDays)
 	if err != nil {
