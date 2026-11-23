@@ -312,7 +312,7 @@ C6-D001–C6-D003 於 2026-11-20 定在 epic #37。C6-D004、C6-D005 於 2026-11
 
 ## C7 History（#38）
 
-C7-D001、C7-D002 於 2026-11-20 定在 epic #38。
+C7-D001、C7-D002 於 2026-11-20 定在 epic #38。C7-D003 於 2026-11-23 定在 C7-01。
 
 ### C7-D001 落庫清單只認 mftiko 與手動（確認 C5-D007）
 
@@ -326,3 +326,10 @@ C7-D001、C7-D002 於 2026-11-20 定在 epic #38。
 - C7-08 要在 mftiko 的 `accept.sh pms` 環境對拍，那裡是 BinanceUM testnet、ed25519 key、假的 `exch_account_uid`（`accept-pms`）。cpanel 原本只打正式站、只支援 HMAC，`credential.verify` 要 spot 的 `uid` 與 `sapi` 的 `apiRestrictions`，testnet 都沒有。
 - C7-09：部署層級的環境旗標；credential 記下所屬環境，worker 拒絕其他環境的；`key_type`（`hmac`、`ed25519`）；testnet 的 `credential.verify` 讀 `fapi` 的帳號，uid 以登記時填的為準，不驗唯讀（只發 GET 仍由 client 保證，D2）。
 - testnet 的 cpanel 是另一套部署與自己的 database；正式環境的設定不能打開 testnet。Bybit testnet、OKX demo 在 C8-03、C8-04 各自補。
+
+### C7-D003 raw 的 native id 與唯一鍵
+
+- 成交的 native id 是 `symbol:id`，訂單是 `symbol:orderId`，income 是 `incomeType:tranId`。只存數字會在不同 symbol 或不同 incomeType 上碰撞（`docs/venues/binance-um.md` 第 8 節）。
+- `(exchange_account_id, venue, native_id)` 放在不分區的 `raw.venue_*_key`。月分區鍵是 `fetched_at`，分區表上的唯一索引必須包含分區鍵（ARCHITECTURE §4.4）。
+- raw 不可變用 trigger，跟 `raw.venue_snapshot` 一樣。分區搬移那一次 DELETE 由 `cpanel.<parent>_moving` 放行。
+- `pending_order` 的鍵等 C7-03、C7-04 建表時用同一種帶 symbol 的 id。

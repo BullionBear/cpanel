@@ -328,6 +328,8 @@ archtest 另外擋（C4-D002、C4-D006）：cpanel-api 不連結 `internal/mftik
 
 `ledger.order` 給二期歸屬預先建 index：`(exchange_account_id, algo, cloid_ts_ms)`。
 
+`raw` 的 `(exchange_account_id, venue, native_id)` 在不分區的 `venue_*_key`。月分區鍵是 `fetched_at`，唯一索引必須包含分區鍵（§4.4），所以業務鍵不能只放在分區表上（C7-D003）。native id 帶著 symbol 或 incomeType，格式寫在 C7-D003。
+
 ---
 
 ## 6. 限速與出口 IP

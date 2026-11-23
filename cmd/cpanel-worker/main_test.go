@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 
 	"github.com/BullionBear/cpanel/internal/cmdtest"
+	"github.com/BullionBear/cpanel/internal/history"
 	"github.com/BullionBear/cpanel/internal/platform/logger"
 	"github.com/BullionBear/cpanel/internal/platform/pgtest"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox"
@@ -62,6 +64,13 @@ func TestParseArgs(t *testing.T) {
 	if _, _, err := parseArgs([]string{"serve"}, nil); err == nil {
 		t.Error("accepted an unknown command")
 	}
+	got, _, err := parseArgs([]string{"-database=postgres://db/cpanel", "rebuild", "-account=4", "-venue=BinanceUM", "-data=trade"}, nil)
+	if err != nil || !got.rebuild || got.rebuildAccount != 4 || got.rebuildVenue != "BinanceUM" || got.rebuildData != "trade" || got.database != "postgres://db/cpanel" {
+		t.Fatalf("rebuild: %+v, %v", got, err)
+	}
+	if _, _, err := parseArgs([]string{"rebuild", "-account=4", "-venue=BinanceUM", "-data=nope"}, nil); err == nil {
+		t.Error("accepted rebuild -data=nope")
+	}
 	for _, bad := range []string{"0s", "-1s"} {
 		_, _, err := parseArgs(nil, func(k string) string { return map[string]string{"CPANEL_RECONCILE_INTERVAL": bad}[k] })
 		if err == nil || !strings.Contains(err.Error(), "$CPANEL_RECONCILE_INTERVAL") {
@@ -73,6 +82,67 @@ func TestParseArgs(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "$CPANEL_JOB_SLOTS") {
 			t.Errorf("CPANEL_JOB_SLOTS=%s: %v", bad, err)
 		}
+	}
+}
+
+type rebuildNorm struct{ version int }
+
+func (rebuildNorm) Venue() string      { return "BinanceUM" }
+func (rebuildNorm) Kind() history.Kind { return history.KindTrade }
+func (n rebuildNorm) Version() int     { return n.version }
+func (rebuildNorm) Normalize(context.Context, pgx.Tx, history.Raw) (history.Result, error) {
+	return history.Result{Trade: &history.Trade{
+		UID: 1, OrderNativeID: "BTCUSDT:1", Price: "1", Qty: "1", QuoteQty: "1",
+		Side: "BUY", PositionSide: "BOTH", TradedAt: time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC),
+		Commission: "0", CommissionAsset: "USDT", RealizedPnl: "0",
+	}}, nil
+}
+
+func TestRebuildCommand(t *testing.T) {
+	srv := pgtest.Start(t)
+	ctx := context.Background()
+	if _, err := migrations.Up(ctx, srv.DSN()); err != nil {
+		t.Fatal(err)
+	}
+	opt := options{database: srv.DSN(), rebuild: true, rebuildAccount: 1, rebuildVenue: "BinanceUM", rebuildData: "trade"}
+	if err := runRebuild(ctx, opt); err == nil || !strings.Contains(err.Error(), "no trade normalizer") {
+		t.Fatalf("missing normalizer: %v", err)
+	}
+	history.Register(rebuildNorm{version: 1})
+	t.Cleanup(func() { history.Unregister("BinanceUM", history.KindTrade) })
+	pool, err := pgxpool.New(ctx, srv.DSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var id int64
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO pms.exchange_account (exchange, exch_account_uid, label)
+		VALUES ('binance', 'uid', 'desk') RETURNING id`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	opt.rebuildAccount = id
+	err = pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		return history.Apply(ctx, tx, rebuildNorm{version: 1}, history.Raw{
+			ExchangeAccountID: id, Venue: "BinanceUM", NativeID: "BTCUSDT:1",
+			Payload: []byte(`{}`), FetchedAt: time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC),
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM ledger.trade`); err != nil {
+		t.Fatal(err)
+	}
+	if err := runRebuild(ctx, opt); err != nil {
+		t.Fatal(err)
+	}
+	var version int
+	if err := pool.QueryRow(ctx, `SELECT norm_version FROM ledger.trade`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 1 {
+		t.Fatalf("version %d", version)
 	}
 }
 
@@ -115,7 +185,7 @@ func TestBinary(t *testing.T) {
 		}
 
 		// The first round registers maint.partitions and dispatches its job; the job runner runs it, making today's
-		// partition, the next 7 days', and this month's venue_snapshot partition plus the next month's.
+		// partition, the next 7 days', and this month plus the next for the four raw tables.
 		conn, err := pgx.Connect(ctx, srv.DSN())
 		if err != nil {
 			t.Fatal(err)
@@ -135,8 +205,8 @@ func TestBinary(t *testing.T) {
 				break
 			}
 		}
-		if runs != 1 || items != 10 || jobs != 0 || parts != 1+8 {
-			t.Fatalf("after 10s: %d maint.partitions runs with %d items, %d jobs left, %d job_run partitions; want 1 with 10, 0 and 9",
+		if runs != 1 || items != 16 || jobs != 0 || parts != 1+8 {
+			t.Fatalf("after 10s: %d maint.partitions runs with %d items, %d jobs left, %d job_run partitions; want 1 with 16, 0 and 9",
 				runs, items, jobs, parts)
 		}
 		resp, err = http.Get("http://" + addr + "/metrics")
