@@ -18,6 +18,7 @@
 - Discord OAuth 的 redirect URI：`https://cpanel.lynxlinkage.com/auth/discord/callback`。
 - Discord：app 是 LynxBot（client id `1525825932999266404`，沿用 v2，C2-D006），guild 是 MFTIK（`1297170481031548928`），登入要有 `Admin` role（`1529506484894044231`）。不能用 bot 自己的 `LynkBear` role：那是 Discord 管理的 role（`managed`），不能指派給人。
 - image：GHCR 的 `cpanel` package 是 public，主機不登入 GHCR 就能拉（C2-D014）。
+- cpanel-api 與 cpanel-worker 同機是運維上的取捨（C2-D015）。I6 在程式層由 archtest 擋，sealbox 私鑰只掛進 worker 容器；拿到主機 root 就同時拿到私鑰。要拆開時把 worker 移到不對公網的主機，程式不用改。
 
 ## 主機上的檔案
 

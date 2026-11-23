@@ -1,6 +1,6 @@
 # cpanel v3 — Epic 與 Ticket（一期）
 
-2026-11-06 · 依據 [ARCHITECTURE.md](ARCHITECTURE.md)
+2026-11-06 · 2026-11-23 更新（C6-06、C7-09、issue 編號）· 依據 [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ## 慣例
 
@@ -30,8 +30,8 @@ C2 骨架 ──► C3 Job 系統 ──┬─► C4 Mirror ──┐
 | C3 | Job 系統（#34） | 5 | 多副本 ReconcileLoop 不產生重複 job；錯誤分類與退避生效 |
 | C4 | mftiko 與 SYM mirror（#35） | 5 | mftiko 掛掉時 scope 不縮；symbol 跟得上 SYM revision；unmatched 可見 |
 | C5 | Account／Key 管理（#36） | 6 | uid 不符或非唯讀的 key 被拒；cpanel-api 的環境裡沒有私鑰 |
-| C6 | 快照（#37） | 5 | BinanceUM 整點快照、缺口可見；key 失效演練通過 |
-| C7 | History（BinanceUM）（#38） | 8 | 與 `mftiko-pms-sim` 對拍一致；一致性檢查全綠 |
+| C6 | 快照（#37） | 6 | BinanceUM 整點快照、缺口可見；key 失效演練通過（正式站的專用唯讀 key，C6-D003） |
+| C7 | History（BinanceUM）（#38） | 9 | 與 `mftiko-pms-sim` 對拍一致；一致性檢查全綠 |
 | C8 | 其他 venue（#39） | 4 | 各 venue 的快照與 History 達到 C6、C7 的標準 |
 
 ---
@@ -94,7 +94,9 @@ C2 骨架 ──► C3 Job 系統 ──┬─► C4 Mirror ──┐
 | C4-04 #77 | scope mirror：`/scopes` 全量 → `mirror.scope`（列不刪、`since` 只往小、`freshness` 有缺口時只新增；不依 kind 過濾）；不完整的告警 | mftiko API 停掉或回空的 scope 時，`mirror.scope` 不變 | C4-01 |
 | C4-05 #78 | scope 的 UID 補齊：不在 `mirror.symbol` 的 UID 以 `GetByUid(include_inactive)` 補；查不到的計數與告警 | scope 指到已下架的商品也查得到 `exch_ticker`；查不到的看得見 | C4-02、C4-04 |
 
-## C5 Account／Key 管理
+## C5 Account／Key 管理（#36）
+
+決策 C5-D001–D007 見 [DECISIONS.md](DECISIONS.md)。
 
 | Ticket | 內容 | 驗收 | 依賴 |
 |---|---|---|---|
@@ -107,26 +109,32 @@ C2 骨架 ──► C3 Job 系統 ──┬─► C4 Mirror ──┐
 
 ## C6 快照（BinanceUM 起步）
 
+決策 C6-D001–D003 見 [DECISIONS.md](DECISIONS.md)。
+
 | Ticket | 內容 | 驗收 | 依賴 |
 |---|---|---|---|
-| C6-01 | venue profile 範本＋BinanceUM：快照與歷史用到的端點、分頁、限速與 weight、錯誤碼對照錯誤類別、終態對照、去重鍵、查詢期限 | 文件 review 過；之後每個 venue 照這份寫 | — |
-| C6-02 | 快照表（`snapshot_batch`、`balance_snapshot`、`position_snapshot`、`raw.venue_snapshot`）；ReconcileLoop 的整點規則，唯一鍵 `(exchange_account_id, bucket)` | 停掉 worker 一小時，該時間點顯示為缺口 | C3-02、C4-02 |
+| C6-01 #99 | venue profile 範本＋BinanceUM：快照與歷史用到的端點、分頁、限速與 weight、錯誤碼對照錯誤類別、終態對照、去重鍵、查詢期限 | 文件 review 過；之後每個 venue 照這份寫 | C5-03 |
+| C6-02 #100 | 快照表（`snapshot_batch`、`balance_snapshot`、`position_snapshot`、`raw.venue_snapshot`）；ReconcileLoop 的整點規則，唯一鍵 `(exchange_account_id, bucket)`；只派給有 `active` credential 的帳號（C6-D002）；缺口的計算與告警 | 停掉 worker 一小時，該時間點顯示為缺口 | C3-02、C4-02 |
 | C6-03 | BinanceUM 快照 job：各錢包餘額、持倉（數量、方向、開倉價、mark、未實現損益、保證金）；空帳號也寫 batch | 結果與 Binance 網頁一致；清空的帳號讀到空的最新快照 | C6-01、C6-02、C5-03 |
 | C6-04 | 快照 API（`/snapshots`、`/balances?at=`、`/positions?at=`）＋ UI | | C6-03 |
-| C6-05 | 驗收：key 失效演練。撤銷一把 testnet key，一小時內轉 `auth_failed`、歷史與快照 job 停派、只剩 probe；重新登記後恢復 | 演練紀錄附在 ticket | C6-03、C5-04 |
+| C6-05 | 驗收：key 失效演練。撤銷一把正式站上專用的唯讀 key（C6-D003），一小時內轉 `auth_failed`、歷史與快照 job 停派、只剩 probe；重新登記後恢復 | 演練紀錄附在 ticket | C6-03、C6-06 |
+| C6-06 | credential 斷路（C6-D001、C6-D002）：`account:<id>` 上任何 job 的 `auth` 都計數；`credential.probe` 讀帳號層與每個啟用的 kind；`Streams` 規則排除沒有 `active` credential 的帳號 | 缺 `fapi` 權限的 key：第一次快照之後兩輪內轉 `auth_failed`，之後只剩 probe，不會自己跳回 `active`；補上權限後恢復 | C5-04、C6-02 |
 
 ## C7 History（BinanceUM 起步）
 
+決策 C7-D001、C7-D002 見 [DECISIONS.md](DECISIONS.md)。
+
 | Ticket | 內容 | 驗收 | 依賴 |
 |---|---|---|---|
-| C7-01 | `raw.venue_trade`、`raw.venue_order`、`raw.venue_income`；`ledger.trade`、`ledger.order`、`ledger.funding`（帶 `norm_version`）；從 raw 重建的指令 | 刪掉 ledger 後重建，結果相同 | C2-02 |
-| C7-02 | stream 規劃規則：scope join（`api_id` → `(exchange, exch_account_uid)` → exchange_account）、同一 UID 取最早的 `since` 減 1 分鐘、hot／cold 分層 | 規則的單元測試只用 DB fixture | C3-02、C4-03、C4-04、C4-05 |
+| C7-01 #101 | `raw.venue_trade`、`raw.venue_order`、`raw.venue_income`；`ledger.trade`、`ledger.order`、`ledger.funding`（帶 `norm_version`）；從 raw 重建的指令 | 刪掉 ledger 後重建，結果相同 | C2-02 |
+| C7-02 #102 | 落庫清單 `ingest.persist_symbol`（`source` 只有 `mftiko`、`manual`，C7-D001）；scope 投影（`api_id` → `(exchange, exch_account_uid)` → exchange_account，kind 要已啟用）、同一 UID 取最早的 `since` 減 1 分鐘；stream 規劃；`ingest.stream.source` 收斂成 `mftiko／manual／system`；hot／cold 分層 | 規則的單元測試只用 DB fixture | C3-02、C4-03、C4-04、C4-05 |
 | C7-03 | TradeHistory BinanceUM：從 `since` 以 7 天窗回補，追上後改 `fromId`；成交裡沒見過的 `orderId` 寫進 `pending_order` | 回補與增量交界處不漏不重 | C7-01、C7-02、C5-03 |
 | C7-04 | OrderHistory：`order.resolve`（少量逐筆 `GET /order`，大量 `allOrders(orderId=最小值)`）；終態定義；`not_found` → `unresolved`；cloid 解碼存 `cloid_ver`、`algo`、`cloid_ts_ms`；一致性檢查（成交量等於成交加總、每單至少一筆成交） | 部分成交中的單留在 pending，結束後才寫入 | C7-03 |
 | C7-05 | FundingHistory BinanceUM：income `FUNDING_FEE`，時間窗 cursor，每小時 | 與 Binance 網頁的 funding 紀錄一致 | C7-01、C5-03 |
-| C7-06 | discovery：income 的 `COMMISSION` 與持倉快照裡沒有 stream 的商品 → `source = discovered`；watch list API（`source = manual`） | 在網頁上手動下一單，一輪內出現新的 stream | C7-03、C6-03 |
+| C7-06 | 手動清單（`source = manual`）的 API 與 UI；income 的 `COMMISSION` 與持倉快照裡不在清單的商品只告警、不建 stream（C7-D001） | 在網頁上手動下一單：不在清單時一輪內告警；加進清單後出現對應的 stream 與成交 | C7-03、C6-03 |
 | C7-07 | History API（`/trades`、`/orders`、`/funding`、`/pending-orders`，不透明 cursor 分頁）＋ UI | | C7-04、C7-05 |
-| C7-08 | 驗收：在 mftiko 的 `deploy/accept/accept.sh pms` 環境跑，cpanel 的成交與有成交的訂單（含 cloid）和 `pms-report.json` 一致 | 對拍報告附在 ticket | C7-04 |
+| C7-08 | 驗收：在 mftiko 的 `deploy/accept/accept.sh pms` 環境跑，cpanel 的成交與有成交的訂單（含 cloid）和 `pms-report.json` 一致 | 對拍報告附在 ticket | C7-04、C7-09 |
+| C7-09 #103 | testnet profile（C7-D002）：部署層級的環境旗標，credential 記下所屬環境、worker 拒絕其他環境的；`key_type`（`hmac`、`ed25519`）；testnet 的 `credential.verify` 讀 `fapi` 的帳號，uid 以登記時填的為準，不驗唯讀；Binance 的 testnet host | `accept.sh pms` 環境的 `accept-pms` key 登記後轉 `active`；兩種環境互相拒絕 | C5-03；先於 C7-03、C7-08 |
 
 ## C8 其他 venue
 
@@ -136,7 +144,7 @@ C2 骨架 ──► C3 Job 系統 ──┬─► C4 Mirror ──┐
 |---|---|---|
 | C8-01 | Binance CM（inverse；qty 以 quote 計）。SYM 有 `BinanceCM` 之前不做，跟著 mftiko 的範圍，不另外提需求。開始時打開參照表的 `BinanceCM`、補 `dapi` 的 client 與 `credential.verify`，操作者在帳號上啟用 | C6、C7、SYM 有 `BinanceCM` |
 | C8-02 | Binance Spot（沒有 funding；手動交易只能靠 watch list） | C6、C7 |
-| C8-03 | Bybit UTA（帳號層級的 execution、order history、transaction log 的 `SETTLEMENT`） | C6、C7 |
-| C8-04 | OKX（fills-history、orders-history、bills 的 funding） | C6、C7 |
+| C8-03 | Bybit UTA（帳號層級的 execution、order history、transaction log 的 `SETTLEMENT`）；testnet 的 host 補進 C7-09 的環境設定 | C6、C7 |
+| C8-04 | OKX（fills-history、orders-history、bills 的 funding）；demo（`x-simulated-trading: 1`）補進 C7-09 的環境設定 | C6、C7 |
 
 Binance PM（`papi`）與 Binance EO：有帳號用到時再開票。在那之前，C4 把它們標成 `kind_out_of_scope`，有 scope 的另外告警（C4-D017）。

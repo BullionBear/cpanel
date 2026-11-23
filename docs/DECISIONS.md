@@ -100,6 +100,13 @@ C2-D001–C2-D007 於 2026-11-06 定在 epic，原文照錄。
 - image 裡沒有 secret：設定與 secret 都在部署時以 `config.env` 與 `secrets/` 給。repo 本身仍是 private。
 - 代價：任何人都拉得到 binary 與內嵌的 SPA。cpanel 沒有要對外保密的程式邏輯；之後若有，改回 private 並在主機上以只有 `read:packages` 的 token 登入。
 
+### C2-D015 cpanel-api 與 cpanel-worker 同機（2026-11-20，#33）
+
+- 接受兩者都在 `172.237.19.123`。這是運維決策，不改程式。
+- I6 在程式層仍由 archtest 擋（`cmd/cpanel-api` 連不到 `internal/platform/sealbox/open`），私鑰只掛進 worker 容器。
+- 主機層的隔離屬於部署：拿到主機 root 就同時拿到密文的連線與私鑰。key 都是唯讀、綁出口 IP，外洩的後果是帳務資料被讀，不是資金。
+- 要拆開時把 worker 移到不對公網的主機，程式不用改。
+
 ## C3 Job 系統（#34）
 
 ### C3-D001 未完成與已完成的 job 分兩張表（#64）
@@ -133,7 +140,7 @@ C2-D001–C2-D007 於 2026-11-06 定在 epic，原文照錄。
 
 ## C4 mftiko 與 SYM mirror（#35）
 
-C4-D001–C4-D017 於 2026-11-08 定在 epic #35。
+C4-D001–C4-D017 於 2026-11-08 定在 epic #35，2026-11-23 併回 ARCHITECTURE §2、§4.1、§4.2、§4.3、§4.7、§5。
 
 ### C4-D001 I2 由 CI 擋（C4-01，#35）
 
@@ -255,3 +262,54 @@ C4-D001–C4-D017 於 2026-11-08 定在 epic #35。
 - mirror 照抄這些 `api_id` 與它們的 scope，不過濾。
 - Coverage 標成 `kind_out_of_scope`：不算 unmatched，另外以 `cpanel_mftiko_kinds_out_of_scope{kind, traded}` 計數；有 scope 的持續 30 分鐘觸發 `CpanelMftikoKindOutOfScope`。C7-02 不建 stream。
 - 之後要做時：參照表改成 `in_scope`、補上那組 API 的 client 與驗證、操作者啟用 kind。Coverage 不用改；C7-02 從 mirror 裡最早的 `since` 建 stream。PM 與 classic kind 是否互斥、切換前的歷史在哪組 API，留到做 PM 時查證。
+
+## C5 Account／Key 管理（#36）
+
+C5-D001–C5-D007 於 2026-11-10 定在 epic #36，原文照錄。同時確認：C4-D001～C4-D017 不重開；uid 不可改、probe 15 分鐘、連續 2 次 `auth`、封裝格式沿用 ARCHITECTURE §4.1、§4.3、§4.4、§4.8；vault 的 key 不離開 cpanel（D11）。
+
+- **C5-D001** 同時最多一把 `active`、一把 `unverified`。新的通過時舊的 `active` 改為 `disabled`。
+- **C5-D002** 建立時 uid 必填。不符只拒絕 credential。
+- **C5-D003**（資料 job 的部分已由 C6-D001 修訂）kind 的失敗不把 credential 打成 `auth_failed`。
+- **C5-D004** probe 成功回到 `active`。
+- **C5-D005** `auth_failed` 與 `rejected` 立即告警，kind 失敗持續 30 分鐘。
+- **C5-D006** 帳號有可修改的 `label`。
+- **C5-D007** 落庫清單只有 mftiko 的 scope mirror 與 cpanel 手動新增。表在 C7-02，手動路徑在 C7-06。
+
+## C6 快照（#37）
+
+C6-D001–C6-D003 於 2026-11-20 定在 epic #37。
+
+### C6-D001 任何 job 的 `auth` 失敗都計數（修訂 C5-D003 對資料 job 的部分）
+
+- `account:<id>` lease 上任何 job 的 `auth` 失敗都計入 credential 的連續失敗，連續 2 次轉 `auth_failed`，不再只計 `credential.verify`、`credential.probe`。
+- 理由：一把 key 可以通過帳號層的檢查，卻沒開快照或歷史要的那條產品線的權限，這同樣是 key 不能用。
+- `global:*` 的 `auth` 失敗仍只記錄（C4-D008）。`credential.verify` 時 kind 讀不到仍只記在 kind 上（C5-D003 的這一半不變）。
+- 推論：`credential.probe` 要讀帳號層與每個啟用的 kind，全部通過才回 `active`。只讀帳號層的話，缺權限的 key 會每 15 分鐘在 `active` 與 `auth_failed` 之間來回。要恢復，操作者補 key 的權限或停用那個 kind。
+- 實作在 C6-06；`TestKindAndGlobalAuthDoNotTrip` 要改成 `snapshot` 會計數、`global:*` 不會。
+
+### C6-D002 斷路做在派工規則上
+
+- 整點快照規則（C6-02）與 stream 規則（現在的 `Streams`、C7-02）都排除沒有 `active` credential 的帳號；`auth_failed` 的帳號只剩 `credential.probe`。
+- 理由：C5-04 的狀態機只改 credential 的狀態，現在的 `Streams` 規則不看它，「只剩 probe」要在派工時成立。
+
+### C6-D003 C6-05 的演練在正式站
+
+- 用一把專用的唯讀 key（綁出口 IP）登記、撤銷、重新登記。撤銷唯讀 key 沒有風險。
+- 理由：Binance client 只打正式站，testnet 的支援是 C7-09；C6-05 不必等它。
+
+## C7 History（#38）
+
+C7-D001、C7-D002 於 2026-11-20 定在 epic #38。
+
+### C7-D001 落庫清單只認 mftiko 與手動（確認 C5-D007）
+
+- `(venue, uid, symbol)` 只有兩個來源：mftiko 的 scope 與手動新增。要擴展時另開票。
+- C7-02 建 `ingest.persist_symbol`，並把 `ingest.stream.source` 的 CHECK 從 `scope／discovered／manual／system` 收斂成 `mftiko／manual／system`。
+- C7-06 是手動清單的 API 與 UI，加一個只告警、不建 stream 的檢查：income 出現 `COMMISSION`、或持倉快照出現、卻不在清單裡的商品，計數並告警。沒有第三個來源，漏掉的也會被看見。
+- 修訂 ARCHITECTURE §4.1、§4.3（刪掉 discovery）、§5 原本的寫法與 PLAN 的 C7-06。
+
+### C7-D002 支援 testnet（C7-09）
+
+- C7-08 要在 mftiko 的 `accept.sh pms` 環境對拍，那裡是 BinanceUM testnet、ed25519 key、假的 `exch_account_uid`（`accept-pms`）。cpanel 原本只打正式站、只支援 HMAC，`credential.verify` 要 spot 的 `uid` 與 `sapi` 的 `apiRestrictions`，testnet 都沒有。
+- C7-09：部署層級的環境旗標；credential 記下所屬環境，worker 拒絕其他環境的；`key_type`（`hmac`、`ed25519`）；testnet 的 `credential.verify` 讀 `fapi` 的帳號，uid 以登記時填的為準，不驗唯讀（只發 GET 仍由 client 保證，D2）。
+- testnet 的 cpanel 是另一套部署與自己的 database；正式環境的設定不能打開 testnet。Bybit testnet、OKX demo 在 C8-03、C8-04 各自補。

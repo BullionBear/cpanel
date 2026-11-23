@@ -1,6 +1,6 @@
 # cpanel v3 — 架構
 
-2026-11-06 · 狀態：一期範圍已定；未來帳號流向的一個問題待定（§12 D10）
+2026-11-06 起草；2026-11-23 併入 C4、C5 的決策與 C6、C7 已定的決策 · 狀態：一期範圍已定；D10 已由 D11 排除（§12）
 
 版本命名：**v1** = 2026-07-13 封存的原始版（`archive/v1-20260713/`，tag `v1-final`）；**v2** = 2026-07-13 起重建的版本（最後一個 commit 2026-09-29 `9ae8629`，2026-11-06 封存到 `archive/v2-20261106/`，tag `v2-final`）；**v3** = 本文件。
 
@@ -14,7 +14,7 @@
   - **Account／Key 管理：** PMS 自己的唯讀 key，對應到 mftiko 的交易所帳號。
   - **History：** TradeHistory、OrderHistory（只落已結束且有成交的單）、FundingHistory，加上定時的餘額快照與持倉快照。
 - **管線：** `API Server → Account／Key 管理 → DB`；`DB → ReconcileLoop → job 表 → Worker → DB`。ReconcileLoop 只讀 DB，所有對外呼叫（mftiko、SYM、交易所）都是 job，失敗都看得到。
-- **帳號系統與 mftiko 分開。** cpanel 的 exchange_account 只由 cpanel 建立；與 mftiko 唯一的接點是 `(exchange, exch_account_uid)` 的 join，用來把 `/scopes` 對到 cpanel 的帳號。未來的走向是帳號先注入 cpanel，mftiko 再向 cpanel 拿（§4.9）。
+- **帳號系統與 mftiko 分開。** cpanel 的 exchange_account 只由 cpanel 建立；與 mftiko 唯一的接點是 `(exchange, exch_account_uid)` 的 join，用來把 `/scopes` 對到 cpanel 的帳號。未來的走向是帳號先注入 cpanel，mftiko 再向 cpanel 拿（§4.9）；交易所的 key 不離開 cpanel（D11）。
 - **UI 開放公網。** 公網層（cpanel-api）收到 secret 只負責封裝，自己解不開；解密與驗證只在私網的 worker 做（§4.1、§4.8）。
 - **二期：** 歸屬（cloid × session 區間）、由成交推導的持倉與 PnL、funding 分配、對帳（§7）。一期先把 cloid 解碼後的欄位存好，二期不必重抓。
 - **v2 整個凍結：** 程式碼搬 `archive/v2-20261106/`，正式環境停機，資料庫整顆唯讀保留，v3 用新的 database（§9）。
@@ -78,22 +78,24 @@
 |---|---|---|
 | 商品（ticker、filter、UID、上下架） | mftiko SYM | E02-D003、E21-D009、E22-D001 |
 | 交易帳號（交易 key、`api_id`、kind、`exch_account_uid`） | mftiko API（現在） | E21-D002、D008 |
-| 交易所帳號的身分（`exchange`、經交易所驗證的 `exch_account_uid`）與 PMS 的唯讀 key | cpanel；未來 mftiko 也從這裡拿（§4.9） | 本文件 D9、D10 |
+| 交易所帳號的身分（`exchange`、經交易所驗證的 `exch_account_uid`）與 PMS 的唯讀 key | cpanel；未來 mftiko 可以從這裡拿身分，key 不交出（§4.9） | 本文件 D9、D11 |
 | session、algo、下單 | mftiko STS／TD | E06-D002、E21-D011 |
 | scope（哪個 `api_id` 從何時開始交易哪個商品 UID） | mftiko TD agent 寫，API 開出 | E21-D009、D010 |
 | 訂單、成交、funding、餘額、持倉的事實 | 交易所 REST | E21-D001 |
 | **PMS 的唯讀 key、落庫、cursor、去重、快照**（一期）；**歸屬、PnL、對帳**（二期） | **cpanel v3** | E21-D001、D014 |
 
-用詞：本文的 **UID 一律指 SYM 的商品 UID**；帳號用 `api_id`（mftiko 的交易身分）、`exch_account_uid`（交易所的帳號 id）、`exchange_account`（cpanel 的對帳單位）。
+用詞：本文的 **UID 一律指 SYM 的商品 UID**；帳號用 `api_id`（mftiko 的交易身分）、`exch_account_uid`（交易所的帳號 id）、`exchange_account`（cpanel 的對帳單位）。**venue**、**帳號種類（kind）**、**exchange** 是三個不同的 enum（C4-D003）：venue 是行情的分類（`Binance`、`BinanceUM`、`BinanceCM`、`BinanceEO`、`Bybit`、`Okx`）；kind 是帳號依 API 的分類，沿用 venue 的名稱，Binance 多一個 `BinancePM`；exchange 是交易所，值是 mftiko `/accounts` 的 `binance`、`bybit`、`okx`。名稱可能重疊，不能互查。
 
 **不變式**（CI 以依賴與 lint 檢查擋）：
 
 - I1 只 import `github.com/BullionBear/mftiko/contract/...`，不 import `internal/`、`exchange/`、etcd、mftiko 的 DB。
 - I2 對 mftiko API 只發 GET。PMS 的 token 是單一角色（E21-D010 沿用 E10-D009），實際上有完整寫權限；只有 `internal/mftiko` 能 import generated client，而且它的 `RoundTripper` 在送出前擋掉 GET、HEAD 以外的方法。CI 擋（`internal/archtest`），不只是慣例。
-- I3 PMS 的交易所 key 必須是唯讀，登記時驗證，IP 白名單綁 cpanel 的出口 IP。
+- I3 PMS 的交易所 key 必須是唯讀，登記時驗證，IP 白名單綁 cpanel 的出口 IP。例外是 testnet：testnet 沒有權限查詢的端點，不驗唯讀，只靠 client 只發 GET（D2、C7-D002）。
 - I4 寫進 `ledger` 的每一列都能從 `raw` 重建。
 - I5 ReconcileLoop 不做 I/O，只讀寫 DB。
-- I6 公網層（cpanel-api）不持有任何能解開 secret 的金鑰。
+- I6 公網層（cpanel-api）不持有任何能解開 secret 的金鑰。程式層由 archtest 擋；cpanel-api 與 worker 目前同機，主機層的隔離屬於部署（C2-D015，§8）。
+
+archtest 另外擋（C4-D002、C4-D006）：cpanel-api 不連結 `internal/mftiko`、`internal/sym`、`internal/mirror` 與兩份 generated client，只以 SQL 讀副本；generated 型別不出 `internal/mftiko`、`internal/sym`；`internal/reconcile` 與 cpanel-api 都不連結交易所 client（`internal/venue`）。
 
 ---
 
@@ -134,19 +136,30 @@
 ### 4.1 Account／Key 管理
 
 - **exchange_account 只由 cpanel 建立**（操作者在 UI 或 API 建立），不從 mftiko 自動帶入。兩邊的帳號系統分開。
-  - 與 mftiko 的接點只有 join：`mirror.account` 的 `(exchange, exch_account_uid)` 對到 `pms.exchange_account`，一個 cpanel 帳號可對到多個 `api_id`（同一把交易 key 登記多個 kind，或多把 key）。
-  - mftiko 有、cpanel 沒有的交易所帳號，列成「mftiko 在交易、PMS 沒涵蓋」的告警，不自動建立。
-  - cpanel 有、mftiko 沒有的帳號（純手動交易）照常支援：沒有 scope，stream 只來自 discovery 與 watch list（§4.3）。
-- **`exch_account_uid` 以交易所回報為準。** 建立帳號時可以先填，但要等第一把 key 驗證過才轉 `active`；驗證結果與填的值不同就拒絕。mftiko 不驗證這個欄位，E21-D008 列為已知風險（填錯時 PMS 會把它當成另一個帳號），cpanel 這一側補上，也讓 cpanel 的帳號身分可以成為未來 mftiko 的來源（§4.9）。
+  - 與 mftiko 的接點只有 join：`mirror.account` 的 `(exchange, exch_account_uid)` 對到 `pms.exchange_account`，一個 cpanel 帳號可對到多個 `api_id`（同一把交易 key 登記多個 kind，或多把 key）。兩邊的 `exch_account_uid` 都在寫入時去掉前後空白，join 時逐字相等（C4-D003）。
+  - mftiko 有、cpanel 沒有的交易所帳號，或帳號上沒啟用那個 kind 的，列成 unmatched（C4-D004）：以 `(exchange, exch_account_uid)` 計數，不以 `api_id`；`reason` 是 `no_exchange_account`、`missing_identity`、`kind_not_enabled`（C4-D014）。只有有 scope 的告警。不自動建立。
+  - cpanel 有、mftiko 沒有的帳號（純手動交易）照常支援：沒有 scope，落庫清單只來自手動新增（§4.3，C7-D001）。
+- **帳號的粒度（C4-D016）：** 一個帳號是一個 `(exchange, exch_account_uid)`。帳號底下以 `pms.exchange_account_kind` 記啟用的帳號種類；kind 決定要打哪一組 API、`credential.verify` 驗哪些權限、快照打哪些錢包、stream 走哪個 client。身分、key 與 uid 的驗證一個帳號一份。帳號有可修改的 `label`（C5-D006）。
+- **帳號種類的參照表 `pms.account_kind`（C4-D015）：** `kind`、`exchange`、`venues`（可交易的 venue）、`api_family`、`in_scope`，SQL 與 Go 共用。一期 `in_scope` 的是 `Binance`（`api`）、`BinanceUM`（`fapi`）、`Bybit`、`Okx`（`v5`）；`BinanceCM`（`dapi`）由 C8-01 打開；`BinancePM`、`BinanceEO` 一期不做，mirror 照抄，標成 `kind_out_of_scope`，不算 unmatched，有 scope 的另外告警（C4-D017）。kind 由操作者啟用；Bybit、OKX 只有一個 kind，建帳號時自動啟用。
+- **`exch_account_uid` 以交易所回報為準。** 建立帳號時必填，之後不可改（C5-D002）。credential 驗證時交易所回報的值與它不同，只拒絕那把 credential，帳號不動。mftiko 不驗證這個欄位，E21-D008 列為已知風險（填錯時 PMS 會把它當成另一個帳號），cpanel 這一側補上，也讓 cpanel 的帳號身分可以成為未來 mftiko 的來源（§4.9）。
 - **登記 key 的流程（公網層解不開 secret，I6）：**
   1. cpanel-api 收到 key 與 secret，立刻以 worker 的公鑰封裝（§4.8），寫入 `pms.credential`，狀態 `unverified`，回 `202`。明文只在這個請求的記憶體裡。
   2. ReconcileLoop 派 `credential.verify` job。worker 解封後向交易所確認兩件事，任一不過就轉 `rejected` 並寫明原因：
      - 權限是唯讀（I3）。
      - 交易所回報的帳號 id 等於 `exch_account_uid`。各 venue 的端點：Binance `GET /api/v3/account` 的 `uid`、Bybit `GET /v5/user/query-api` 的 `userID`、OKX `GET /api/v5/account/config` 的 `uid`（以 venue profile 為準）。
+
+     兩件事都通過後，再對每個啟用的 kind 確認讀得到那組 API，結果記在 kind 那一列。kind 讀不到不讓 credential 失敗（C5-D003）；之後那個 kind 的資料 job 失敗，走 §4.4 的 `auth`（C6-D001）。
   3. 通過就轉 `active`。驗證從 worker 發出，用的正是之後拉歷史的出口 IP，所以 key 的 IP 白名單設錯會在這一步就被發現。
+  - testnet（C7-D002，C7-09）：沒有 spot 的 `uid` 與 `sapi` 的 `apiRestrictions`，改成讀 `fapi` 的帳號確認 key 可用；uid 以登記時填的為準；不驗唯讀。credential 記下所屬環境，worker 拒絕其他環境的 credential。
 - **key 是 write-only：** 登記後不回傳 secret（比照 mftiko E10-D063）。唯讀 key 沒有 reveal 的需要；要換就重新登記。
-- `pms.credential.purpose` 一期只有 `read`。欄位先留著，給 §4.9 的未來用。
-- **credential 的健康狀態是一等公民**（`pms.credential.status`）：`unverified → active | rejected`，`active → auth_failed`，另有 `disabled`（操作者停用）。由 worker 依錯誤分類寫入（§4.4），ReconcileLoop 依它決定要不要派 job。
+- `pms.credential.purpose` 一期只有 `read`。
+- **key 不離開 cpanel（D11）：** 不與 mftiko 共享，也不供 mftiko 使用；vault 沒有把 key 交給 mftiko 的 API。
+- **credential 的健康狀態是一等公民**（`pms.credential.status`）：`unverified → active | rejected`，`active → auth_failed`，`auth_failed → active`（probe 成功，C5-D004），另有 `disabled`（操作者停用）。由 worker 依錯誤分類寫入（§4.4），ReconcileLoop 依它決定要不要派 job。
+  - 一個帳號同時最多一把 `active`、一把 `unverified`；新的通過時，舊的 `active` 改為 `disabled`（C5-D001）。
+  - `account:<id>` 上任何 job 的 `auth` 失敗都計數，連續 2 次轉 `auth_failed`（C6-D001，修訂 C5-D003 對資料 job 的部分）。理由：一把 key 可以通過帳號層的檢查，卻沒開快照或歷史要的那條產品線的權限。
+  - `credential.probe` 讀帳號層與每個啟用的 kind，全部通過才回 `active`；只讀帳號層的話，缺權限的 key 會每 15 分鐘在 `active` 與 `auth_failed` 之間來回（C6-D001）。
+  - 告警：`auth_failed`、`rejected` 立即；kind 的失敗持續 30 分鐘（C5-D005）。
+  - C6-D001 的計數與 probe 讀 kind 由 C6-06 實作；在那之前，只有 `credential.verify`、`credential.probe` 的 `auth` 失敗會計數。
 - 所有寫入（建立、登記、停用、刪除）進 `meta.audit`。
 
 ### 4.2 mirror（兩個 job）
@@ -155,7 +168,17 @@
   - `GET /accounts?include_deleted=true` 全量分頁 → `mirror.account`。只用來做 join，不建立 cpanel 的帳號。
   - `GET /scopes` 全量 → `mirror.scope`。**列永不刪，`since` 只往小改**。回應的 `freshness` 列出不可用的 region 時，只新增、不推論「沒有 scope」（E21-D010）。
   - 一期不 mirror session records；歸屬是二期的事。
+  - 同一個 `api_id` 讀到不同的 `(exchange, exch_account_uid)` 時不覆寫，記成身分衝突並立即告警（C4-D013）：覆寫會讓已經寫進去的歸屬悄悄換到另一個交易所帳號。
 - **`sym.sync`**（預設每 60 秒）：`Revisions` 比對每個 `(venue, category)` 的 revision，落後的以 `List` 整張重載 → `mirror.symbol`。遇到不在表內的 UID（例如 scope 指向已下架的商品）以 `GetByUid(include_inactive=true)` 補。之後要更即時再改成 `WatchChanges`；一期用 job 的好處是失敗會出現在 job 歷史裡，也不需要長連線的 leader。
+  - SYM 走 gRPC over h2c（C4-D007）。
+  - 重載與下架（C4-D011）：只讀活躍表；`List` 之後 revision 沒變，才把不在清單裡的列標成不活躍，並以 `GetByUid` 補上終結狀態；revision 變了就只 upsert，下一輪重載。反查 `(venue, category, exch_ticker)` → UID 時活躍列優先。
+  - scope 的 UID 補不到（`NotFound` 或 `universal_ticker` 拆不開）記進 `mirror.uid_lookup`，不算 job 失敗，計數並告警（C4-D012）。
+- **兩個 job 共同的規則：**
+  - 每一輪從第一頁讀到最後一頁，不跨 job 保存 cursor；每頁一個 transaction，寫入只新增或往小改，中斷是安全的。完整性記在 `mirror.sync_state`：`last_ok_at` 是這一輪沒有錯誤，`last_complete_at` 是讀完而且沒有不可用的 region（C4-D009）。
+  - 每張表只有 mirror job 寫，列都不刪；`kind`、`exchange`、`venue`、`category` 原樣存，不依 kind 過濾（C4-D010）。
+  - 錯誤對應（C4-D008）：mftiko 的 401／403 → `auth`、429 → `rate_limited`、5xx 與連線失敗 → `unavailable`、其他 4xx → `bad_request`；SYM 的 `Unauthenticated` → `auth`、`InvalidArgument` → `bad_request`、`Unavailable` 等 → `unavailable`。兩個 job 走 tailnet，交易所的出口暫停不擋它們；`global:*` 的 `auth` 失敗只記錄，不動 credential。
+  - 套件（C4-D006）：`internal/mftiko`、`internal/sym` 是防腐層，`internal/mirror` 寫 `mirror.*`，只有 `cpanel-worker` 連結它們。
+  - 告警（C4-D005）：任一來源超過 10 分鐘沒成功、SYM 的表落後、scope 不完整、scope 的 UID 查不到、有 scope 的 unmatched 與一期不做的 kind、帳號身分衝突。規則在 `deploy/prometheus/cpanel.rules.yml`。
 
 ### 4.3 ReconcileLoop
 
@@ -165,13 +188,15 @@
 
 規則，依序：
 
-1. **credential：** `unverified` 的派 `credential.verify`。`auth_failed` 的不派任何歷史或快照 job，只派一個低頻的 `credential.probe`（預設每 15 分鐘）。`rejected`、`disabled` 什麼都不派。
-2. **stream 規劃**（upsert `ingest.stream`，不刪）：
-   - scope：`api_id` → `mirror.account` 的 `(exchange, exch_account_uid)` → `pms.exchange_account`；對不到的計入 §4.1 的「PMS 沒涵蓋」告警，不建 stream。UID → `mirror.symbol` → `(venue, exch_ticker)`；同一個 exchange_account 內同一個 UID 取各 `api_id` 最早的 `since`，往前多讀 1 分鐘（TD 主機與交易所的時鐘差，E21-D085）。
-   - discovery：funding／income 與持倉快照裡出現、但沒有 stream 的商品（手動單），加成 `source = discovered`。Binance UM／CM 的 income 帶 `COMMISSION` 的 symbol，能找出有成交的商品；Binance 現貨沒有帳號層級的成交端點，手動現貨交易要操作者加進 watch list（`source = manual`），UI 上明講。
-3. **stream 派工：** `next_due_at ≤ now`、沒有暫停（`paused_reason IS NULL`）、而且沒有未完成 job 的 stream 派一個 job。`next_due_at` 由 worker 在 job 結束時更新（C3-03）：上一個 job 回報 `more = true`（還沒追上現在）的，`next_due_at = now`。
+1. **credential：** `unverified` 的派 `credential.verify`。`auth_failed` 的只派一個低頻的 `credential.probe`（預設每 15 分鐘）。`rejected`、`disabled` 什麼都不派。沒有 `active` credential 的帳號，第 3、5 條都不派（C6-D002）。
+2. **落庫清單與 stream 規劃**（C7-02；upsert，不刪）：
+   - 落庫清單 `ingest.persist_symbol` 只有兩個來源（C5-D007、C7-D001）：mftiko 的 scope（`source = mftiko`）與手動新增（`source = manual`，C7-06）。要擴展另開票。
+   - scope 投影：`api_id` → `mirror.account` 的 `(exchange, exch_account_uid)` → `pms.exchange_account`，而且 `api_id` 的 kind 要在帳號上啟用（C4-D016）；對不到的計入 §4.1 的 unmatched，不建列。UID → `mirror.symbol` → `(venue, exch_ticker)`；scope 的 venue 要在 kind 的 `venues` 裡（C4-D015）。同一個 exchange_account 內同一個 UID 取各 `api_id` 最早的 `since`，往前多讀 1 分鐘（TD 主機與交易所的時鐘差，E21-D085）。列不刪、`since` 只往小改。
+   - 清單的每一列對到該 venue 需要的 stream，upsert 進 `ingest.stream`。帳號層級的 stream（funding）的 `source` 是 `system`。
+   - 不在清單的商品不建 stream，只告警：income 出現 `COMMISSION`、或持倉快照出現、卻不在清單裡的商品（C7-D001，C7-06）。Binance 現貨沒有帳號層級的成交端點，手動現貨交易只能靠操作者加進清單，UI 上明講。
+3. **stream 派工：** `next_due_at ≤ now`、沒有暫停（`paused_reason IS NULL`）、而且沒有未完成 job 的 stream 派一個 job；帳號沒有 `active` credential 的不派（C6-D002，C6-06）。`next_due_at` 由 worker 在 job 結束時更新（C3-03）：上一個 job 回報 `more = true`（還沒追上現在）的，`next_due_at = now`。
 4. **待查訂單：** `ingest.pending_order` 裡到期的，依 `(exchange_account, venue)` 批次派 `order.resolve`（§4.5）。
-5. **快照：** 每個 active exchange_account，當前時間點 `b = floor(now, 1h)` 還沒有 batch、也沒有未完成 job，就派 `snapshot`。過去的時間點補不回來（不能對過去取快照），缺了就是看得見的缺口。
+5. **快照：** 每個有 `active` credential 的帳號（C6-D002），當前時間點 `b = floor(now, 1h)` 還沒有 batch、也沒有未完成 job，就派 `snapshot`（C6-02）。過去的時間點補不回來（不能對過去取快照），缺了就是看得見的缺口。
 6. **periodic：** `ingest.periodic` 裡啟用、到期、而且沒有未完成 job 的，各派一個 job，同時把 `next_due_at` 設成 `now + period`。間隔從派工時起算；上一個 job 到期時還沒完成，就等它完成後的下一輪再派。`mftiko.sync`、`sym.sync`（mirror）、`maint.partitions`（每小時，`job_run` 的分區維護）與 `credential.rekey`（每分鐘，把仍是舊私鑰指紋的 credential 改封給現用公鑰；不打交易所）都是 periodic。程式只在那一列不存在時登記，之後間隔與啟用由操作者在表上改。
 
 **頻率分層**（控制 Binance per-symbol 端點的 request weight）：
@@ -194,7 +219,7 @@
 
 | 類別 | 例子 | 處理 |
 |---|---|---|
-| `auth` | 401、403：key 無效、權限不足、IP 不在白名單 | job 失敗，並呼叫 credential hook（C5-04 才把連續 2 次轉成 `auth_failed` 與斷路，§4.3-1） |
+| `auth` | 401、403：key 無效、權限不足、IP 不在白名單；Binance `-2014`、`-2015` | job 失敗，並呼叫 credential hook：`account:<id>` 上任何 job 都計數，連續 2 次轉 `auth_failed`（C6-D001，§4.1）；`global:*` 只記錄（C4-D008） |
 | `rate_limited` | 429 | 依 `Retry-After`（沒有就指數退避）把整個 `lease_key` 的 `not_before` 與其他 stream 的 `next_due_at` 往後推。不寫 `ingest.pause` |
 | `ip_banned` | 418，Binance 的 IP 封禁 | 寫 `ingest.pause`，scope 是 `egress:<名稱>`（`-egress`，同一出口的副本共用）。到期前不認領要對外的 job；`maint.partitions` 照常 |
 | `unavailable` | 5xx、408、逾時、連線錯誤、維護 | 只延後這條 stream：30 秒起、加倍、上限 30 分鐘，再乘 0.5–1 的 jitter |
@@ -246,17 +271,19 @@
 
 ### 4.6 快照
 
-- 每個 active exchange_account 每小時一個時間點（對齊整點），唯一鍵 `(exchange_account_id, bucket)`。所有帳號在同一刻取樣，跨帳號加總才可比。
+- 每個有 `active` credential 的帳號每小時一個時間點（對齊整點），唯一鍵 `(exchange_account_id, bucket)`。所有帳號在同一刻取樣，跨帳號加總才可比。
 - 一個 snapshot job 依該帳號 kind 的錢包結構，抓餘額（各錢包）與持倉，寫一筆 `ledger.snapshot_batch` 加上明細。帳號是空的也要寫 batch，否則讀「最新」會讀到上一次的非空結果（v2 的教訓）。
 - 持倉存交易所回報的數量、方向、開倉價、mark price、未實現損益、保證金。一期不做跨資產估值；要估值時再加價格來源。
-- 每小時對每個帳號都跑，所以快照 job 同時是 key 的健康探測：沒有 scope 的帳號，key 失效也會在一小時內被發現。
+- 每小時對每個帳號都跑，所以快照 job 同時是 key 的健康探測：沒有 scope 的帳號，key 失效也會在一小時內被發現。這要靠快照的 `auth` 失敗會計數（C6-D001，C6-06）。
+- 失效演練（C6-05）在正式站，用一把專用的唯讀 key（C6-D003）。
 
 ### 4.7 cpanel-api 與 web
 
 - 無狀態、可多副本，OpenAPI-first（`contract/openapi/cpanel.v1.yaml`），經 Traefik 對公網。
 - **認證：** 人用 Discord OAuth（guild＋role，v2 已在跑的流程），登入後發 HttpOnly、Secure、SameSite=Strict 的 session cookie；程式存取用 static bearer token，只存 SHA-256（比照 mftiko 的 API）。帳號與 key 的寫入端點全部進 audit。
 - 一期端點：
-  - Account／Key：`GET /exchange-accounts`（含 join 到的 `api_id`、key 狀態、stream 健康摘要）、`GET /exchange-accounts/unmatched`（mftiko 有、cpanel 沒有的帳號）、`POST /exchange-accounts`、`POST /exchange-accounts/{id}/credentials`（封裝後回 `202`，驗證走 job）、`POST …/credentials/{cid}/verify`（重新驗證）、`POST …/credentials/{cid}/disable`、`DELETE …/credentials/{cid}`。
+  - Account／Key：`GET /exchange-accounts`（含 join 到的 `api_id`、key 狀態、stream 健康摘要）、`GET /exchange-accounts/unmatched`（mftiko 有、cpanel 沒有的帳號）、`POST /exchange-accounts`、`…/{id}/kinds`（啟用與停用 kind）、`POST /exchange-accounts/{id}/credentials`（封裝後回 `202`，驗證走 job）、`POST …/credentials/{cid}/verify`（重新驗證）、`POST …/credentials/{cid}/disable`、`DELETE …/credentials/{cid}`。mirror 的副本以 SQL 讀（C4-D002），`GET /mirror/status` 給 Ops 頁。
+  - 落庫清單（C7-06）：手動新增與移除。
   - History：`GET /trades`、`GET /orders`、`GET /funding`（篩選：exchange_account、UID、時間），不透明 cursor 分頁，比照 mftiko 的慣例（`limit` 1–1000、`next_cursor`）。
   - 快照：`GET /snapshots`（batch 與缺口）、`GET /balances?at=`、`GET /positions?at=`。
   - 營運（C3-05）：`GET /streams`、`GET /jobs`、`GET /job-runs`（時間、kind、lease key、狀態、錯誤類別，cursor 分頁）、`POST /streams/{id}/resume`（清掉暫停並寫 audit）。`GET /pending-orders` 還沒有。
@@ -266,7 +293,8 @@
 
 - **PMS key 的封裝：非對稱，公網層只有公鑰。** worker 共用一組 X25519 金鑰對：私鑰以部署 secret 交付給 worker，cpanel-api 只拿得到公鑰。格式照 mftiko 的 `sealbox`（E06-D013）：`version (1 byte) | 收件公鑰指紋 (8 bytes) | NaCl anonymous sealed box`，封的內容是含 `exchange_account_id`、`credential_id` 的 protobuf。sealed box 沒有 associated data，所以解開後要比對這兩個 id，防止密文被搬到別的帳號底下。換鑰時新舊私鑰並存，由背景 job 重新封裝。
   - 這樣做的理由：公網層被攻破時，攻擊者拿得到資料庫裡的密文，也拿得到之後送進來的新 key，但解不開已經存的 key。
-  - 與 mftiko 用同一個格式，是為了 §4.9：哪天 cpanel 要把 key 交給 mftiko，可以直接封給 TD instance 的公鑰（E21-D004）。`internal/platform/sealbox` 不能 import（I1），cpanel 自己實作，用 mftiko 的測試向量對拍。
+  - 與 mftiko 用同一個格式，可以直接用 mftiko 的測試向量對拍。原本也是為了 §4.9 把 key 封給 TD instance 的公鑰交出去（E21-D004），D11 已排除這條路。mftiko 的 `internal/platform/sealbox` 不能 import（I1），cpanel 自己實作。
+  - 封裝與解封拆成兩個套件，cpanel-api 只連結封裝的那個（C5-02，archtest 擋）。封的內容之後加上 `key_type`（`hmac`、`ed25519`），舊的密文視為 `hmac`（C7-09）。
   - 私鑰與 DB 分開備份；私鑰遺失，所有 key 都要重新登記。
 - migration：純 SQL；部署流程先 migrate、成功才換版。
 - log：結構化 JSON；`/metrics`（Prometheus）：stream lag、job 失敗率（依錯誤類別）、credential 狀態、pending order 的存活時間、快照缺口、PMS 沒涵蓋的 mftiko 帳號數。C3-05 先把 stream lag、連續失敗、暫停的 stream、生效中的 `ingest.pause`、未完成 job 的數量與最老年齡、最近一小時的 `job_run` 放在 `cpanel-worker` 的 `/metrics`。規則在 `deploy/prometheus/cpanel.rules.yml`（C3-D005）。credential、pending order、快照缺口仍等後面的 epic。
@@ -279,7 +307,7 @@
 - **給 mftiko 的是內部 API，不經公網：** 另一個只聽私網的 listener，service token 認證，分頁與 cursor 比照 mftiko 的慣例。
 - **mftiko 在交易路徑上不能依賴 cpanel 活著：** mftiko 應該把拿到的帳號存一份在自己那邊（它本來就把帳號投影到 etcd），cpanel 掛掉只影響新增與修改，不影響正在跑的 session。
 - **相依方向：** cpanel 依賴 mftiko 的 scope 與 SYM，mftiko 依賴 cpanel 的帳號。只要兩邊都存副本、啟動時不互等，這個循環就沒問題。
-- **待定的是 secret（D10）。** 見 §12。
+- **secret 不交出（D11，排除 D10）：** §4.9 只可能給帳號身分，交易 key 仍登記在 mftiko。
 
 ---
 
@@ -287,9 +315,10 @@
 
 | schema | 表 | 重點 |
 |---|---|---|
-| `pms` | `exchange_account(id)`，`UNIQUE(exchange, exch_account_uid)`；`credential(id)` | `credential.status`、`exch_reported_uid`、`permissions`、`verified_at`、`consecutive_auth_failures` |
-| `mirror` | `account(api_id)`、`scope(api_id, uid)`、`symbol(uid)`、`sync_state(source)` | 只有 mirror job 寫；二期加 `session_record`、`session_account` |
-| `ingest` | `stream(id)`，`UNIQUE(kind, lease_key, key)` | `source`（scope／discovered／manual／system）、`tier`、`period`、`cursor jsonb`、`cursor_version`、`next_due_at`、`paused_reason`、健康欄位 |
+| `pms` | `exchange_account(id)`，`UNIQUE(exchange, exch_account_uid)`（含軟刪除的列）；`account_kind(kind)`；`exchange_account_kind(exchange_account_id, kind)`；`credential(id)`；view `coverage`、`unmatched` | `exchange_account.label`、`revision`、`deleted_at`；`exchange_account_kind.disabled_at`、`verified_at`、`last_error`；`credential.status`、`reported_uid`、`permission_summary`、`failure_reason`、`consecutive_auth_failures`；每個帳號最多一把 `active`、一把 `unverified`（partial unique，C5-D001） |
+| `mirror` | `account(api_id)`、`scope(api_id, uid)`、`symbol(uid)`、`uid_lookup(uid)`、`sync_state(source)` | 只有 mirror job 寫，列不刪（C4-D010）；二期加 `session_record`、`session_account` |
+| `ingest` | `stream(id)`，`UNIQUE(kind, lease_key, key)` | `source`（`mftiko`／`manual`／`system`，C7-D001；C7-02 merge 前 migration 裡仍是 `scope／discovered／manual／system`）、`tier`、`period`、`cursor jsonb`、`cursor_version`、`next_due_at`、`paused_reason`、健康欄位 |
+| | `persist_symbol(exchange_account_id, venue, uid, source)` | 落庫清單（C7-02）：`source` 是 `mftiko` 或 `manual`，`since` 只往小改 |
 | | `job(id)`，不分區，只放未完成的 job | `dedup_key UNIQUE`：`stream:<id>`、`periodic:<name>`、`bucket:<kind>:<lease_key>:<時間點>`（C3-D001、D002） |
 | | `job_run`，按 UTC 日分區加 default 分區；`job_failure` | 完成的 job；分區由 `ingest.ensure_job_run_partition`、`ingest.expire_job_runs` 維護 |
 | | `periodic(name)`、`lease(key)`、`pause(scope)`、`pending_order(exchange_account_id, venue, native_order_id)` | singleton 的排程、lease（C3-D003）、出口 IP 層級的暫停 |
@@ -331,6 +360,8 @@
 - **資料庫**：與 mftiko 同一個 Postgres instance，自己的 database `cpanel_v3` 與 role `cpanel_v3`（非 superuser，`pg_hba` 只放行這個 database、只從部署主機）。
 - **secret**：主機上的檔案，compose `secrets` 掛進容器；環境變數只放路徑。
 - **部署**：GitHub Actions 只 build 與發布 image（C2-06）。主機上的 `deploy.sh <digest>`：拉 image → migrate（失敗即停）→ 換版 → 等 `/readyz` → 不過就換回上一個 digest。
+- **cpanel-api 與 worker 同機（C2-D015）：** 運維上的取捨，不是程式的約束。I6 在程式層由 archtest 擋，私鑰只掛進 worker 容器；拿到主機 root 就同時拿到私鑰。key 都是唯讀、綁出口 IP，外洩的後果是帳務資料被讀。要拆開時把 worker 移到不對公網的主機，程式不用改。
+- **testnet（C7-D002）：** 另一套部署與自己的 database，不和正式資料混用；正式環境的設定不能打開 testnet。
 - §4.9 給 mftiko 的內部 API 之後是另一個只聽私網的 listener，不掛在 Traefik 上。
 
 ---
@@ -368,7 +399,7 @@ v2 裡超過 90 天的訂單已經無法從交易所重抓，所以封存的資�
 
 ## 10. 分期
 
-一期拆成 8 個 epic、44 張 ticket，細節見 [PLAN.md](PLAN.md)。
+一期拆成 8 個 epic、48 張 ticket，細節見 [PLAN.md](PLAN.md)。
 
 | Epic | 名稱 | 驗收 |
 |---|---|---|
@@ -377,7 +408,7 @@ v2 裡超過 90 天的訂單已經無法從交易所重抓，所以封存的資�
 | C3 | Job 系統 | 多副本 ReconcileLoop 不產生重複 job；錯誤分類與退避生效 |
 | C4 | mftiko 與 SYM mirror | mftiko 掛掉時 scope 不縮；unmatched 可見 |
 | C5 | Account／Key 管理 | uid 不符或非唯讀的 key 被拒；cpanel-api 的環境裡沒有私鑰 |
-| C6 | 快照（BinanceUM 起步） | 整點快照、缺口可見；key 失效演練通過 |
+| C6 | 快照（BinanceUM 起步） | 整點快照、缺口可見；key 失效演練通過（正式站的專用唯讀 key，C6-D003） |
 | C7 | History（BinanceUM 起步） | 與 `mftiko-pms-sim` 對拍一致 |
 | C8 | 其他 venue | 各 venue 達到 C6、C7 的標準 |
 | 二期 | §7 | §7 |
@@ -386,7 +417,7 @@ v2 裡超過 90 天的訂單已經無法從交易所重抓，所以封存的資�
 
 ## 11. 需要 mftiko 配合的事
 
-- PMS 用的 bearer token 有完整寫權限（單一角色）：建議加唯讀角色。
+- PMS 用的 bearer token 有完整寫權限（單一角色）：建議加唯讀角色。mftiko 目前不另做（E21-D010），cpanel 這一側由 C4-D001 在 client 擋。
 - `/events` 的 `accounts`、`scopes` topic（E21-D010 列為之後再加）：有了 `mftiko.sync` 才能從輪詢改成推送。
 - 要支援 GateIO、Bitget、Deribit，得先在 SYM 補 listing adapter。
 - §4.9 的帳號流向：mftiko 改成向 cpanel 拿帳號，要修訂 E21-D002、E21-D008，`api.v1` 的帳號建立流程也會變。
@@ -408,12 +439,10 @@ v2 裡超過 90 天的訂單已經無法從交易所重抓，所以封存的資�
 | D4 | UI 開放公網（經 Traefik），公網層只能封裝 secret、解不開（I6） |
 | D5 | v2 資料不匯入，封存的 DB 唯讀保留 |
 | D9 | 支援不在 mftiko 裡的帳號；兩邊的帳號系統分開，只以 `(exchange, exch_account_uid)` join |
+| D10 | （已由 D11 排除）未來 mftiko 向 cpanel 拿的帳號是否包含交易 key 的 secret |
+| D11 | （2026-11-10，修訂 D10）交易所的 key 不離開 cpanel，不與 mftiko 共享，也不供 mftiko 使用 |
 
-**待定**
-
-| # | 問題 | 選項 | 建議 |
-|---|---|---|---|
-| D10 | 未來 mftiko 向 cpanel 拿的「帳號」包不包含交易 key 的 secret | (a) 只有身分：cpanel 管帳號身分與 uid 驗證，交易 key 仍登記在 mftiko、引用 cpanel 的帳號 id；(b) 連 secret：cpanel 也存交易 key，封給 TD instance 的公鑰交出去 | (a)。(b) 等於讓一個開在公網的服務成為所有交易 key 的根；若要 (b)，存交易 key 的服務要從 cpanel-api 拆出去、只在私網 |
+epic 內的決策（`C{n}-D{nnn}`）與每一條的理由見 [DECISIONS.md](DECISIONS.md)。
 
 ---
 
