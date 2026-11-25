@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/BullionBear/cpanel/internal/platform/exchangeenv"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox/open"
 	"github.com/BullionBear/cpanel/internal/reconcile"
@@ -33,12 +34,14 @@ type Checker interface {
 	Calls() int
 }
 
-// Endpoints overrides the public hosts. Empty fields use the exchange defaults.
+// Endpoints overrides the public hosts. Empty fields use the exchange defaults
+// for Env. Env empty is prod.
 type Endpoints struct {
 	BinanceSpot    string
 	BinanceFutures string
 	Bybit          string
 	OKX            string
+	Env            string
 }
 
 // Verify opens credentials with Key and checks them. Previous is the key being
@@ -49,6 +52,7 @@ type Verify struct {
 	Key       *open.PrivateKey
 	Previous  *open.PrivateKey
 	Endpoints Endpoints
+	Env       string
 	Open      func(exchange string, cred sealbox.Credentials) (Checker, error)
 }
 
@@ -67,6 +71,12 @@ func (v Verify) Handle(ctx context.Context, job *worker.Job) (worker.Result, err
 	if row.deleted || row.status != "unverified" {
 		return worker.Result{}, nil
 	}
+	if !exchangeenv.Same(v.Env, row.exchangeEnv) {
+		if err := v.reject(ctx, row, environmentMismatch(v.Env, row.exchangeEnv), "", ""); err != nil {
+			return worker.Result{}, err
+		}
+		return worker.Result{}, nil
+	}
 	cred, err := openRow(v.Key, v.Previous, row.ciphertext, row.accountID, row.id)
 	if err != nil {
 		if err := v.reject(ctx, row, "sealed credentials are unreadable", "", ""); err != nil {
@@ -82,6 +92,7 @@ func (v Verify) Handle(ctx context.Context, job *worker.Job) (worker.Result, err
 	if err != nil {
 		return worker.Result{Requests: client.Calls()}, err
 	}
+	check = alignCheck(v.Env, row, check)
 	if !check.ReadOnly || check.UID != row.uid {
 		reason := check.Reason
 		if check.UID != row.uid {
@@ -126,23 +137,24 @@ type kindResult struct {
 }
 
 type credRow struct {
-	id         int64
-	accountID  int64
-	exchange   string
-	uid        string
-	status     string
-	ciphertext []byte
-	deleted    bool
-	kinds      []kindRow
+	id          int64
+	accountID   int64
+	exchange    string
+	uid         string
+	status      string
+	ciphertext  []byte
+	exchangeEnv string
+	deleted     bool
+	kinds       []kindRow
 }
 
 func (v Verify) load(ctx context.Context, id int64) (credRow, error) {
 	var row credRow
 	err := v.DB.QueryRow(ctx, `
-		SELECT c.id, c.exchange_account_id, a.exchange, a.exch_account_uid, c.status, c.ciphertext, a.deleted_at IS NOT NULL
+		SELECT c.id, c.exchange_account_id, a.exchange, a.exch_account_uid, c.status, c.ciphertext, c.exchange_env, a.deleted_at IS NOT NULL
 		FROM pms.credential c
 		JOIN pms.exchange_account a ON a.id = c.exchange_account_id
-		WHERE c.id = $1`, id).Scan(&row.id, &row.accountID, &row.exchange, &row.uid, &row.status, &row.ciphertext, &row.deleted)
+		WHERE c.id = $1`, id).Scan(&row.id, &row.accountID, &row.exchange, &row.uid, &row.status, &row.ciphertext, &row.exchangeEnv, &row.deleted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return credRow{}, fmt.Errorf("credential.verify: credential %d not found", id)
 	}
@@ -173,7 +185,9 @@ func (v Verify) load(ctx context.Context, id int64) (credRow, error) {
 }
 
 func (v Verify) checker(exchange string, cred sealbox.Credentials) (Checker, error) {
-	return openChecker(v.Endpoints, v.Open, exchange, cred)
+	endpoints := v.Endpoints
+	endpoints.Env = exchangeenv.Normalize(v.Env)
+	return openChecker(endpoints, v.Open, exchange, cred)
 }
 
 func openChecker(endpoints Endpoints, override func(string, sealbox.Credentials) (Checker, error), exchange string, cred sealbox.Credentials) (Checker, error) {
@@ -182,7 +196,10 @@ func openChecker(endpoints Endpoints, override func(string, sealbox.Credentials)
 	}
 	switch exchange {
 	case "binance":
-		return &binance.Client{Spot: endpoints.BinanceSpot, Futures: endpoints.BinanceFutures, Key: cred.APIKey, Secret: cred.APISecret}, nil
+		return &binance.Client{
+			Spot: endpoints.BinanceSpot, Futures: endpoints.BinanceFutures,
+			Key: cred.APIKey, Secret: cred.APISecret, KeyType: cred.KeyType, Env: endpoints.Env,
+		}, nil
 	case "bybit":
 		return &bybit.Client{Host: endpoints.Bybit, Key: cred.APIKey, Secret: cred.APISecret}, nil
 	case "okx":
@@ -283,6 +300,20 @@ func (v Verify) activate(ctx context.Context, job *worker.Job, row credRow, chec
 			fmt.Sprintf("credential:%d", row.id), raw, fmt.Sprintf("job:%d", jobID))
 		return err
 	})
+}
+
+func environmentMismatch(process, stored string) string {
+	return fmt.Sprintf("credential environment is %s; this worker is %s", exchangeenv.Normalize(stored), exchangeenv.Normalize(process))
+}
+
+// alignCheck keeps the registered uid on testnet. The exchange is not asked for one,
+// and read-only is not a reason to reject when the client already skipped that check.
+func alignCheck(env string, row credRow, check venue.Check) venue.Check {
+	if exchangeenv.Normalize(env) != exchangeenv.Testnet {
+		return check
+	}
+	check.UID = row.uid
+	return check
 }
 
 func scrub(s string, cred sealbox.Credentials) string {

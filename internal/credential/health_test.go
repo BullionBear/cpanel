@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/BullionBear/cpanel/internal/classify"
+	"github.com/BullionBear/cpanel/internal/platform/exchangeenv"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox/open"
 	"github.com/BullionBear/cpanel/internal/reconcile"
@@ -114,6 +115,46 @@ func TestProbeRestoresActive(t *testing.T) {
 	}
 	if kindState(t, ctx, pool, account, "BinanceUM").err == "" {
 		t.Fatal("probe cleared a kind error")
+	}
+}
+
+func TestProbeSkipsOtherEnvironment(t *testing.T) {
+	ctx, pool := testDB(t)
+	key, err := open.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		hits++
+		t.Error("exchange was called")
+	}))
+	t.Cleanup(srv.Close)
+	account := insertAccount(t, ctx, pool, "binance", "uid-1", "probe-env")
+	id := insertCredential(t, ctx, pool, key, account, "auth_failed", "key", "secret", "")
+	if _, err := pool.Exec(ctx, `UPDATE pms.credential SET exchange_env = 'testnet' WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	p := Probe{DB: pool, Key: key, Env: exchangeenv.Prod, Endpoints: Endpoints{BinanceSpot: srv.URL, BinanceFutures: srv.URL, Env: exchangeenv.Prod}}
+	if _, err := p.Handle(ctx, job(id)); err != nil {
+		t.Fatal(err)
+	}
+	var due *time.Time
+	if err := pool.QueryRow(ctx, `SELECT next_probe_at FROM pms.credential WHERE id = $1`, id).Scan(&due); err != nil {
+		t.Fatal(err)
+	}
+	if status(t, ctx, pool, id) != "auth_failed" || due == nil || hits != 0 || !contains(reason(t, ctx, pool, id), "testnet") {
+		t.Fatalf("status %s due %v hits %d reason %q", status(t, ctx, pool, id), due, hits, reason(t, ctx, pool, id))
+	}
+
+	prod := insertCredential(t, ctx, pool, key, account, "auth_failed", "key", "secret", "")
+	p.Env = exchangeenv.Testnet
+	p.Endpoints.Env = exchangeenv.Testnet
+	if _, err := p.Handle(ctx, job(prod)); err != nil {
+		t.Fatal(err)
+	}
+	if status(t, ctx, pool, prod) != "auth_failed" || hits != 0 || !contains(reason(t, ctx, pool, prod), "prod") {
+		t.Fatalf("testnet probe: %s hits %d reason %q", status(t, ctx, pool, prod), hits, reason(t, ctx, pool, prod))
 	}
 }
 

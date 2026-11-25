@@ -18,6 +18,8 @@
 //	-sym-token         $CPANEL_SYM_TOKEN          SYM gRPC bearer token; logged as ***
 //	-sealbox-private-key $CPANEL_SEALBOX_PRIVATE_KEY  X25519 private key, standard base64; required when -database is set
 //	-sealbox-previous-private-key $CPANEL_SEALBOX_PREVIOUS_PRIVATE_KEY  previous X25519 private key; set only while credentials are resealed
+//	-exchange-env      $CPANEL_EXCHANGE_ENV       prod or testnet, default prod; must match cpanel-api
+//	-allow-testnet     $CPANEL_ALLOW_TESTNET      must be 1 to start as testnet; unset on a production host
 //
 // Every secret may instead come from a file named by $NAME_FILE, which is how compose mounts them (C2-D008).
 // A private key file must be mode 0600. The key is not logged. Opening tries the current key, then the previous
@@ -69,6 +71,7 @@ import (
 	"github.com/BullionBear/cpanel/internal/mftiko"
 	"github.com/BullionBear/cpanel/internal/mirror"
 	"github.com/BullionBear/cpanel/internal/platform/config"
+	"github.com/BullionBear/cpanel/internal/platform/exchangeenv"
 	"github.com/BullionBear/cpanel/internal/platform/httpserver"
 	"github.com/BullionBear/cpanel/internal/platform/logger"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox/open"
@@ -100,6 +103,8 @@ type options struct {
 	rebuildAccount    int64
 	rebuildVenue      string
 	rebuildData       string
+	exchangeEnv       string
+	allowTestnet      string
 }
 
 func parseArgs(args []string, getenv func(string) string) (options, *config.Set, error) {
@@ -120,6 +125,8 @@ func parseArgs(args []string, getenv func(string) string) (options, *config.Set,
 	set.Secret(&opt.symToken, "sym-token", "CPANEL_SYM_TOKEN", "SYM gRPC bearer token")
 	set.Secret(&opt.sealboxPrivate, "sealbox-private-key", "CPANEL_SEALBOX_PRIVATE_KEY", "X25519 private key, standard base64")
 	set.Secret(&opt.sealboxPrevious, "sealbox-previous-private-key", "CPANEL_SEALBOX_PREVIOUS_PRIVATE_KEY", "previous X25519 private key, standard base64; set while credentials are resealed")
+	set.String(&opt.exchangeEnv, "exchange-env", "CPANEL_EXCHANGE_ENV", exchangeenv.Prod, "prod or testnet; must match cpanel-api")
+	set.String(&opt.allowTestnet, "allow-testnet", "CPANEL_ALLOW_TESTNET", "", "1 to start as testnet; leave unset on a production host")
 	rest, err := set.ParseRemaining(args)
 	if err != nil {
 		return options{}, nil, err
@@ -130,6 +137,11 @@ func parseArgs(args []string, getenv func(string) string) (options, *config.Set,
 	if opt.jobSlots < 1 {
 		return options{}, nil, fmt.Errorf("-job-slots ($CPANEL_JOB_SLOTS) must be at least 1, got %d", opt.jobSlots)
 	}
+	env, err := exchangeenv.Resolve(opt.exchangeEnv, opt.allowTestnet)
+	if err != nil {
+		return options{}, nil, err
+	}
+	opt.exchangeEnv = env
 	switch {
 	case len(rest) == 0:
 	case len(rest) == 1 && rest[0] == "doctor":
@@ -292,8 +304,9 @@ func main() {
 		reconcile.SymSync.Name:         mirror.SymSync(symbols),
 	}
 	if key != nil {
-		handlers[reconcile.CredentialVerifyKind] = credential.Verify{DB: pool, Key: key, Previous: prev}.Handle
-		handlers[reconcile.CredentialProbeKind] = credential.Probe{DB: pool, Key: key, Previous: prev}.Handle
+		endpoints := credential.Endpoints{Env: opt.exchangeEnv}
+		handlers[reconcile.CredentialVerifyKind] = credential.Verify{DB: pool, Key: key, Previous: prev, Endpoints: endpoints, Env: opt.exchangeEnv}.Handle
+		handlers[reconcile.CredentialProbeKind] = credential.Probe{DB: pool, Key: key, Previous: prev, Endpoints: endpoints, Env: opt.exchangeEnv}.Handle
 		handlers[reconcile.CredentialRekey.Name] = credential.Rekey{DB: pool, Current: key, Previous: prev}.Handle
 	}
 	jobs := &worker.Worker{

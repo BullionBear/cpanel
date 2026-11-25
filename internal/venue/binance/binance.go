@@ -1,28 +1,39 @@
 // Package binance is the read-only Binance client (C5-03). Spot and SAPI share one host.
-// USD-M futures use another. Signing is HMAC-SHA256 of the query string, as the spot
-// REST docs specify. Only GET is sent.
+// USD-M futures use another. Signing is HMAC-SHA256 of the query string, or Ed25519 of
+// that same string when the key type is ed25519. Only GET is sent.
+//
+// Env testnet uses the public testnet hosts unless Spot or Futures is set. It does not
+// call a host from this package's tests; those pass httptest URLs.
 package binance
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/BullionBear/cpanel/internal/classify"
+	"github.com/BullionBear/cpanel/internal/platform/ed25519pem"
+	"github.com/BullionBear/cpanel/internal/platform/exchangeenv"
 	"github.com/BullionBear/cpanel/internal/venue"
 )
 
 const (
-	spotHost    = "https://api.binance.com"
-	futuresHost = "https://fapi.binance.com"
-	recvWindow  = "5000"
+	spotHost       = "https://api.binance.com"
+	futuresHost    = "https://fapi.binance.com"
+	spotTestnet    = "https://testnet.binance.vision"
+	futuresTestnet = "https://testnet.binancefuture.com"
+	recvWindow     = "5000"
+	testnetSummary = "testnet; read-only not checked"
 
 	// WeightLimit is the spot REQUEST_WEIGHT budget per minute. WeightBudget is the
 	// point at which the next call waits for the next minute (80%).
@@ -30,12 +41,15 @@ const (
 	WeightBudget = 4800
 )
 
-// Client calls Binance with one key. Spot and Futures default to the public hosts.
+// Client calls Binance with one key. Spot and Futures default to the public hosts
+// for the client's Env. KeyType empty is hmac.
 type Client struct {
 	Spot     string
 	Futures  string
 	Key      string
 	Secret   string
+	KeyType  string
+	Env      string
 	Now      func() time.Time
 	HTTP     *venue.Transport
 	requests int
@@ -44,7 +58,21 @@ type Client struct {
 // CheckAccount reads uid from GET /api/v3/account and key permissions from
 // GET /sapi/v1/account/apiRestrictions. The account payload's permissions and
 // canTrade fields describe the account, not the key, so they are ignored.
+//
+// Testnet has neither endpoint. It reads GET /fapi/v2/account and reports the key
+// usable. The registered uid is filled in by the caller. Read-only is not checked.
 func (c *Client) CheckAccount(ctx context.Context) (venue.Check, error) {
+	if c.Env == exchangeenv.Testnet {
+		body, _, err := c.get(ctx, c.futures(), "/fapi/v2/account", "")
+		if err != nil {
+			return venue.Check{}, err
+		}
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(body, &obj); err != nil {
+			return venue.Check{}, &classify.ClassifiedError{Class: classify.BadRequest, Detail: "fapi account response is not an object"}
+		}
+		return venue.Check{ReadOnly: true, Summary: testnetSummary}, nil
+	}
 	body, _, err := c.get(ctx, c.spot(), "/api/v3/account", "")
 	if err != nil {
 		return venue.Check{}, err
@@ -85,12 +113,18 @@ func (c *Client) spot() string {
 	if c.Spot != "" {
 		return strings.TrimRight(c.Spot, "/")
 	}
+	if c.Env == exchangeenv.Testnet {
+		return spotTestnet
+	}
 	return spotHost
 }
 
 func (c *Client) futures() string {
 	if c.Futures != "" {
 		return strings.TrimRight(c.Futures, "/")
+	}
+	if c.Env == exchangeenv.Testnet {
+		return futuresTestnet
 	}
 	return futuresHost
 }
@@ -111,7 +145,11 @@ func (c *Client) get(ctx context.Context, host, path, query string) ([]byte, htt
 		query += "&"
 	}
 	query += "recvWindow=" + recvWindow + "&timestamp=" + ts
-	query += "&signature=" + sign(c.Secret, query)
+	sig, err := sign(c.KeyType, c.Secret, query)
+	if err != nil {
+		return nil, nil, err
+	}
+	query += "&signature=" + url.QueryEscape(sig)
 	req, err := http.NewRequest(http.MethodGet, host+path+"?"+query, nil)
 	if err != nil {
 		return nil, nil, err
@@ -155,11 +193,24 @@ func usedWeight(h http.Header) int {
 	return best
 }
 
-// sign is HMAC-SHA256 of query, hex encoded. query does not include the signature.
-func sign(secret, query string) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write([]byte(query))
-	return hex.EncodeToString(mac.Sum(nil))
+// sign is the signature of query. query does not include the signature.
+// hmac is SHA256 hex. ed25519 is the raw signature, standard base64.
+// An empty key type is hmac.
+func sign(keyType, secret, query string) (string, error) {
+	switch exchangeenv.KeyType(keyType) {
+	case exchangeenv.KeyHMAC:
+		mac := hmac.New(sha256.New, []byte(secret))
+		_, _ = mac.Write([]byte(query))
+		return hex.EncodeToString(mac.Sum(nil)), nil
+	case exchangeenv.KeyEd25519:
+		key, err := ed25519pem.PrivateKey(secret)
+		if err != nil {
+			return "", err
+		}
+		return base64.StdEncoding.EncodeToString(ed25519.Sign(key, []byte(query))), nil
+	default:
+		return "", &classify.ClassifiedError{Class: classify.BadRequest, Detail: "unknown key type"}
+	}
 }
 
 // readOnly requires enableReading and rejects every other boolean that is not a read
@@ -221,4 +272,16 @@ func unmarshal(body []byte, dest any) error {
 }
 
 // SignQuery is the documented HMAC of a query string. Tests lock it to the spot docs.
-func SignQuery(secret, query string) string { return sign(secret, query) }
+func SignQuery(secret, query string) string {
+	sig, err := sign(exchangeenv.KeyHMAC, secret, query)
+	if err != nil {
+		return ""
+	}
+	return sig
+}
+
+// SignEd25519 is the Ed25519 signature of payload, standard base64.
+// payload is the query string for REST, or the FIX logon string in the official example.
+func SignEd25519(pemText, payload string) (string, error) {
+	return sign(exchangeenv.KeyEd25519, pemText, payload)
+}

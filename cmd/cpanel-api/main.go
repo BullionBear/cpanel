@@ -19,6 +19,8 @@
 //	-session-ttl       $CPANEL_SESSION_TTL        session lifetime, default 12h
 //	-role-recheck      $CPANEL_ROLE_RECHECK       how often to recheck the Discord role, default 1h
 //	-sealbox-public-key $CPANEL_SEALBOX_PUBLIC_KEY  worker public key, standard base64; required when -database is set
+//	-exchange-env      $CPANEL_EXCHANGE_ENV       prod or testnet, default prod; must match cpanel-worker
+//	-allow-testnet     $CPANEL_ALLOW_TESTNET      must be 1 to start as testnet; unset on a production host
 //
 // Every secret may instead come from a file named by $NAME_FILE, which is how compose mounts them (C2-D008).
 // The sealbox public key is only the sealing key. This process does not link the code that opens a box (I6).
@@ -48,6 +50,7 @@ import (
 	"github.com/BullionBear/cpanel/internal/api"
 	"github.com/BullionBear/cpanel/internal/auth"
 	"github.com/BullionBear/cpanel/internal/platform/config"
+	"github.com/BullionBear/cpanel/internal/platform/exchangeenv"
 	"github.com/BullionBear/cpanel/internal/platform/httpserver"
 	"github.com/BullionBear/cpanel/internal/platform/logger"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox"
@@ -72,6 +75,8 @@ type options struct {
 	sessionTTL          time.Duration
 	roleRecheck         time.Duration
 	sealboxPublic       string
+	exchangeEnv         string
+	allowTestnet        string
 }
 
 func parseArgs(args []string, getenv func(string) string) (options, *config.Set, error) {
@@ -94,9 +99,16 @@ func parseArgs(args []string, getenv func(string) string) (options, *config.Set,
 	set.Duration(&opt.sessionTTL, "session-ttl", "CPANEL_SESSION_TTL", auth.DefaultSessionTTL, "session lifetime")
 	set.Duration(&opt.roleRecheck, "role-recheck", "CPANEL_ROLE_RECHECK", auth.DefaultRoleRecheck, "how often to recheck the Discord role")
 	set.Secret(&opt.sealboxPublic, "sealbox-public-key", "CPANEL_SEALBOX_PUBLIC_KEY", "worker public key, standard base64")
+	set.String(&opt.exchangeEnv, "exchange-env", "CPANEL_EXCHANGE_ENV", exchangeenv.Prod, "prod or testnet; must match cpanel-worker")
+	set.String(&opt.allowTestnet, "allow-testnet", "CPANEL_ALLOW_TESTNET", "", "1 to start as testnet; leave unset on a production host")
 	if err := set.Parse(args); err != nil {
 		return options{}, nil, err
 	}
+	env, err := exchangeenv.Resolve(opt.exchangeEnv, opt.allowTestnet)
+	if err != nil {
+		return options{}, nil, err
+	}
+	opt.exchangeEnv = env
 	return opt, set, nil
 }
 
@@ -145,7 +157,7 @@ func main() {
 	h := api.Handler(api.Config{
 		Log: log, Pool: pool, Database: opt.database, Timeout: opt.requestTimeout,
 		SessionTTL: opt.sessionTTL, RoleRecheck: opt.roleRecheck,
-		Sealbox: pub, HasSealbox: ok,
+		Sealbox: pub, HasSealbox: ok, ExchangeEnv: opt.exchangeEnv,
 		Auth: auth.Settings{
 			PublicOrigin: opt.publicOrigin, ClientID: opt.discordClientID, ClientSecret: opt.discordClientSecret,
 			BotToken: opt.discordBotToken, GuildID: opt.discordGuildID, RoleID: opt.discordRoleID,

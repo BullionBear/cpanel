@@ -1544,7 +1544,7 @@ components:
     Credential:
       type: object
       additionalProperties: false
-      required: [id, status, api_key_last4, failure_reason, verified_at]
+      required: [id, status, api_key_last4, failure_reason, verified_at, exchange_env, key_type]
       properties:
         id:
           type: integer
@@ -1563,6 +1563,14 @@ components:
           type: string
           format: date-time
           nullable: true
+        exchange_env:
+          type: string
+          enum: [prod, testnet]
+          description: 建立這把 credential 的部署。worker 拒絕另一個環境的。
+        key_type:
+          type: string
+          enum: [hmac, ed25519]
+          description: 省略登記時是 hmac。ed25519 的 secret 是未加密的 PKCS#8 PEM，不在這個回應裡。
     CredentialCreate:
       type: object
       additionalProperties: false
@@ -1575,3 +1583,7 @@ components:
         passphrase:
           type: string
           description: OKX 必填。Binance、Bybit 不可帶。
+        key_type:
+          type: string
+          enum: [hmac, ed25519]
+          description: 省略是 hmac。ed25519 只給 binance，api_secret 是未加密的 PKCS#8 PEM。

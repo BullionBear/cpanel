@@ -16,6 +16,7 @@ import (
 	cpanelv1 "github.com/BullionBear/cpanel/contract/gen/cpanel/v1"
 	"github.com/BullionBear/cpanel/internal/auth"
 	"github.com/BullionBear/cpanel/internal/platform/buildinfo"
+	"github.com/BullionBear/cpanel/internal/platform/exchangeenv"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox"
 	"github.com/BullionBear/cpanel/migrations"
 	"github.com/BullionBear/cpanel/web"
@@ -32,7 +33,8 @@ type Config struct {
 	SessionTTL  time.Duration  // zero means auth.DefaultSessionTTL
 	RoleRecheck time.Duration  // zero means auth.DefaultRoleRecheck
 	Sealbox     sealbox.PublicKey
-	HasSealbox  bool // false until the process loaded the worker public key
+	HasSealbox  bool   // false until the process loaded the worker public key
+	ExchangeEnv string // prod or testnet; empty means prod
 }
 
 // Handler is /healthz, /readyz, /metrics, the auth routes, the ops routes, the account routes, and the SPA for every other path.
@@ -63,6 +65,7 @@ func Handler(cfg Config) http.Handler {
 		roleRecheck: recheck,
 		sealbox:     cfg.Sealbox,
 		hasSealbox:  cfg.HasSealbox,
+		exchangeEnv: cfg.ExchangeEnv,
 	}
 	strict := cpanelv1.NewStrictHandlerWithOptions(s, []cpanelv1.StrictMiddlewareFunc{s.withRequest}, cpanelv1.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
@@ -123,6 +126,14 @@ type server struct {
 	roleRecheck time.Duration
 	sealbox     sealbox.PublicKey
 	hasSealbox  bool
+	exchangeEnv string
+}
+
+func (s *server) exchangeEnvironment() string {
+	if s.exchangeEnv == "" {
+		return exchangeenv.Prod
+	}
+	return s.exchangeEnv
 }
 
 var _ cpanelv1.StrictServerInterface = (*server)(nil)

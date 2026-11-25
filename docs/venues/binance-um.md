@@ -1,8 +1,8 @@
 # BinanceUM
 
-讀取日 2026-11-23。這一頁的數字都來自當天打開的端點頁。testnet 的 host 不在這份，由 C7-09 補。
+讀取日 2026-11-23。這一頁的數字都來自當天打開的端點頁。testnet host 於 2026-11-25 補上（C7-09）。
 
-正式站 host：`https://fapi.binance.com`（[General Info](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info)）。
+正式站 host：`https://fapi.binance.com`（[General Info](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info)）。testnet 的 USD-M host 是 `https://testnet.binancefuture.com`，spot testnet 是 `https://testnet.binance.vision`（[Spot Testnet](https://github.com/binance/binance-spot-api-docs/blob/master/testnet/general-info.md)）。testnet 的 weight 與回查期限不另抄；端點路徑與正式站相同。
 
 ## 1. 適用範圍
 
@@ -13,6 +13,7 @@
 | venue | `BinanceUM` |
 | API 家族 | `fapi`（`pms.account_kind` 的種子） |
 | 正式站 | `https://fapi.binance.com` |
+| testnet | `https://testnet.binancefuture.com`（spot `https://testnet.binance.vision`） |
 
 呼叫是簽過名的 USER_DATA GET：header `X-MBX-APIKEY`，query 附 `timestamp` 與 `signature`。`recvWindow` 不送時文件預設 5000；現行程式送 `5000`。多數端點的上限是 60000。
 

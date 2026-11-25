@@ -214,14 +214,16 @@ func cancelCredentialJobs(ctx context.Context, tx pgx.Tx, credentialID int64) er
 
 func loadOneCredential(ctx context.Context, tx pgx.Tx, id int64) (cpanelv1.Credential, error) {
 	var cred cpanelv1.Credential
-	var status string
+	var status, env, keyType string
 	err := tx.QueryRow(ctx, `
-		SELECT id, status, api_key_last4, failure_reason, verified_at
-		FROM pms.credential WHERE id = $1`, id).Scan(&cred.Id, &status, &cred.ApiKeyLast4, &cred.FailureReason, &cred.VerifiedAt)
+		SELECT id, status, api_key_last4, failure_reason, verified_at, exchange_env, key_type
+		FROM pms.credential WHERE id = $1`, id).Scan(&cred.Id, &status, &cred.ApiKeyLast4, &cred.FailureReason, &cred.VerifiedAt, &env, &keyType)
 	if err != nil {
 		return cpanelv1.Credential{}, err
 	}
 	cred.Status = cpanelv1.CredentialStatus(status)
+	cred.ExchangeEnv = cpanelv1.CredentialExchangeEnv(env)
+	cred.KeyType = cpanelv1.CredentialKeyType(keyType)
 	return cred, nil
 }
 

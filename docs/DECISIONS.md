@@ -326,7 +326,7 @@ C7-D001、C7-D002 於 2026-11-20 定在 epic #38。C7-D003 於 2026-11-23 定在
 
 - C7-08 要在 mftiko 的 `accept.sh pms` 環境對拍，那裡是 BinanceUM testnet、ed25519 key、假的 `exch_account_uid`（`accept-pms`）。cpanel 原本只打正式站、只支援 HMAC，`credential.verify` 要 spot 的 `uid` 與 `sapi` 的 `apiRestrictions`，testnet 都沒有。
 - C7-09：部署層級的環境旗標；credential 記下所屬環境，worker 拒絕其他環境的；`key_type`（`hmac`、`ed25519`）；testnet 的 `credential.verify` 讀 `fapi` 的帳號，uid 以登記時填的為準，不驗唯讀（只發 GET 仍由 client 保證，D2）。
-- testnet 的 cpanel 是另一套部署與自己的 database；正式環境的設定不能打開 testnet。Bybit testnet、OKX demo 在 C8-03、C8-04 各自補。
+- testnet 的 cpanel 是另一套部署與自己的 database；正式環境的設定不能打開 testnet。判斷是：`-exchange-env testnet` 還要 `-allow-testnet`（`$CPANEL_ALLOW_TESTNET=1`）。正式的 `deploy/host/config.env.example` 不設這面旗標，所以只把環境改成 testnet 會在啟動時拒絕。Binance testnet host 是 `https://testnet.binancefuture.com` 與 `https://testnet.binance.vision`。Bybit testnet、OKX demo 在 C8-03、C8-04 各自補。
 
 ### C7-D003 raw 的 native id 與唯一鍵
 

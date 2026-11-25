@@ -809,12 +809,27 @@ export interface components {
             failure_reason: string | null;
             /** Format: date-time */
             verified_at: string | null;
+            /**
+             * @description 建立這把 credential 的部署。worker 拒絕另一個環境的。
+             * @enum {string}
+             */
+            exchange_env: "prod" | "testnet";
+            /**
+             * @description 省略登記時是 hmac。ed25519 的 secret 是未加密的 PKCS#8 PEM，不在這個回應裡。
+             * @enum {string}
+             */
+            key_type: "hmac" | "ed25519";
         };
         CredentialCreate: {
             api_key: string;
             api_secret: string;
             /** @description OKX 必填。Binance、Bybit 不可帶。 */
             passphrase?: string;
+            /**
+             * @description 省略是 hmac。ed25519 只給 binance，api_secret 是未加密的 PKCS#8 PEM。
+             * @enum {string}
+             */
+            key_type?: "hmac" | "ed25519";
         };
     };
     responses: {

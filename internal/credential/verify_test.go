@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/BullionBear/cpanel/internal/classify"
+	"github.com/BullionBear/cpanel/internal/platform/exchangeenv"
 	"github.com/BullionBear/cpanel/internal/platform/pgtest"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox/open"
@@ -344,3 +345,94 @@ func auditHas(t *testing.T, ctx context.Context, pool *pgxpool.Pool, secret stri
 }
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
+
+func TestVerifyRejectsOtherEnvironment(t *testing.T) {
+	ctx, pool := testDB(t)
+	key, err := open.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		hits++
+		t.Error("exchange was called")
+	}))
+	t.Cleanup(srv.Close)
+	account := insertAccount(t, ctx, pool, "binance", "uid-1", "env")
+	testnetCred := insertCredential(t, ctx, pool, key, account, "unverified", "key", "secret", "")
+	if _, err := pool.Exec(ctx, `UPDATE pms.credential SET exchange_env = 'demo' WHERE id = $1`, testnetCred); err == nil {
+		t.Fatal("accepted exchange_env demo")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE pms.credential SET exchange_env = 'testnet' WHERE id = $1`, testnetCred); err != nil {
+		t.Fatal(err)
+	}
+	v := Verify{DB: pool, Key: key, Env: exchangeenv.Prod, Endpoints: Endpoints{BinanceSpot: srv.URL, BinanceFutures: srv.URL, Env: exchangeenv.Prod}}
+	if _, err := v.Handle(ctx, job(testnetCred)); err != nil {
+		t.Fatal(err)
+	}
+	if status(t, ctx, pool, testnetCred) != "rejected" || !contains(reason(t, ctx, pool, testnetCred), "testnet") || contains(reason(t, ctx, pool, testnetCred), "secret") {
+		t.Fatalf("prod worker: %s %q", status(t, ctx, pool, testnetCred), reason(t, ctx, pool, testnetCred))
+	}
+	prodCred := insertCredential(t, ctx, pool, key, account, "unverified", "key", "secret", "")
+	v.Env = exchangeenv.Testnet
+	v.Endpoints.Env = exchangeenv.Testnet
+	if _, err := v.Handle(ctx, job(prodCred)); err != nil {
+		t.Fatal(err)
+	}
+	if status(t, ctx, pool, prodCred) != "rejected" || !contains(reason(t, ctx, pool, prodCred), "prod") || hits != 0 {
+		t.Fatalf("testnet worker: %s %q hits %d", status(t, ctx, pool, prodCred), reason(t, ctx, pool, prodCred), hits)
+	}
+}
+
+func TestVerifyTestnetAccount(t *testing.T) {
+	ctx, pool := testDB(t)
+	key, err := open.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := insertAccount(t, ctx, pool, "binance", "accept-pms", "testnet")
+	enableKind(t, ctx, pool, account, "Binance")
+	enableKind(t, ctx, pool, account, "BinanceUM")
+	id := insertCredential(t, ctx, pool, key, account, "unverified", "key", "secret", "")
+	var sealed []byte
+	if err := pool.QueryRow(ctx, `SELECT ciphertext FROM pms.credential WHERE id = $1`, id).Scan(&sealed); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := open.OpenCredentials(key, sealed, account, id)
+	if err != nil || opened.KeyType != "" || opened.APISecret != "secret" {
+		t.Fatalf("old ciphertext %+v %v", opened, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE pms.credential SET exchange_env = 'testnet' WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path != "/fapi/v2/account" {
+			http.Error(w, "unexpected", http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"totalWalletBalance":"1"}`))
+	}))
+	t.Cleanup(srv.Close)
+	v := Verify{DB: pool, Key: key, Env: exchangeenv.Testnet, Endpoints: Endpoints{BinanceSpot: srv.URL, BinanceFutures: srv.URL, Env: exchangeenv.Testnet}}
+	if _, err := v.Handle(ctx, job(id)); err != nil {
+		t.Fatal(err)
+	}
+	if status(t, ctx, pool, id) != "active" {
+		t.Fatalf("status %s reason %q paths %v", status(t, ctx, pool, id), reason(t, ctx, pool, id), paths)
+	}
+	var uid, summary string
+	if err := pool.QueryRow(ctx, `SELECT reported_uid, permission_summary FROM pms.credential WHERE id = $1`, id).Scan(&uid, &summary); err != nil {
+		t.Fatal(err)
+	}
+	if uid != "accept-pms" || !contains(summary, "testnet") || !contains(summary, "read-only") {
+		t.Fatalf("uid %q summary %q", uid, summary)
+	}
+	if len(paths) != 2 || paths[0] != "/fapi/v2/account" || paths[1] != "/fapi/v2/account" {
+		t.Fatalf("paths %v", paths)
+	}
+	if kindState(t, ctx, pool, account, "BinanceUM").verified == nil {
+		t.Fatal("futures kind was not verified")
+	}
+}

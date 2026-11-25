@@ -10,7 +10,7 @@
 - 每一條附官方文件的連結與讀取日期（`YYYY-MM-DD`）。
 - weight、筆數上限、時間窗、回查期限只從文件抄。頁面沒寫，就寫「未確認」，並附上查過的頁面。不估計、不沿用另一家或另一份文件的數字。
 - changelog 與端點頁不一致時，以讀取日的端點頁為準，兩處都附連結。
-- testnet、demo 的 host 不寫。C7-09 再補。
+- Binance 的 testnet host 寫在 [binance-um.md](binance-um.md)（C7-09）。Bybit testnet、OKX demo 仍不寫，等 C8-03、C8-04。
 - 不在 profile 裡加 client、job 或 migration。
 
 ## 章節
