@@ -307,6 +307,49 @@ func TestSymReloadDelistAndReverse(t *testing.T) {
 	}
 }
 
+func TestLookupTicker(t *testing.T) {
+	ctx, db := testDB(t)
+	seen := time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC)
+	for _, row := range []struct {
+		uid               int64
+		venue, category   string
+		ticker, universal string
+		active            bool
+	}{
+		{2, "BinanceUM", "Delivery", "ETHUSDT", "BinanceUM_Delivery_ETHUSDT", false},
+		{3, "BinanceUM", "Perp", "ETHUSDT", "BinanceUM_Perp_ETHUSDT", true},
+		{4, "Binance", "Spot", "BTCUSDT", "Binance_Spot_BTCUSDT", true},
+	} {
+		if _, err := db.Exec(ctx, `
+			INSERT INTO mirror.symbol (
+				uid, venue, category, exch_ticker, universal_ticker, base, quote, status, active, first_seen_at, last_seen_at)
+			VALUES ($1, $2, $3, $4, $5, 'B', 'Q', 'TRADING', $6, $7, $7)`,
+			row.uid, row.venue, row.category, row.ticker, row.universal, row.active, seen); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lookup := func(venue, ticker string) (string, uint32, bool) {
+		t.Helper()
+		var category string
+		var uid uint32
+		var ok bool
+		if err := pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
+			var err error
+			category, uid, ok, err = LookupTicker(ctx, tx, venue, ticker)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return category, uid, ok
+	}
+	if category, uid, ok := lookup("BinanceUM", "ETHUSDT"); !ok || category != "Perp" || uid != 3 {
+		t.Fatalf("active row: %s %d %v", category, uid, ok)
+	}
+	if category, uid, ok := lookup("BinanceUM", "BTCUSDT"); ok || category != "" || uid != 0 {
+		t.Fatalf("another venue's ticker matched: %s %d", category, uid)
+	}
+}
+
 func TestSymRevisionMovesDuringList(t *testing.T) {
 	ctx, db := testDB(t)
 	book := newBook()

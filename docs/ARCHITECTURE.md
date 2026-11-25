@@ -196,7 +196,7 @@ archtest 另外擋（C4-D002、C4-D006）：cpanel-api 不連結 `internal/mftik
    - 不在清單的商品不建 stream，只告警：income 出現 `COMMISSION`、或持倉快照出現、卻不在清單裡的商品（C7-D001，C7-06）。Binance 現貨沒有帳號層級的成交端點，手動現貨交易只能靠操作者加進清單，UI 上明講。
 3. **stream 派工：** `next_due_at ≤ now`、沒有暫停（`paused_reason IS NULL`）、而且沒有未完成 job 的 stream 派一個 job；帳號沒有 `active` credential 的不派（C6-D002，C6-06）。`next_due_at` 由 worker 在 job 結束時更新（C3-03）：上一個 job 回報 `more = true`（還沒追上現在）的，`next_due_at = now`。
 4. **待查訂單：** `ingest.pending_order` 裡到期的，依 `(exchange_account, venue)` 批次派 `order.resolve`（§4.5）。
-5. **快照：** 每個有 `active` credential 的帳號（C6-D002），當前時間點 `b = floor(now, 1h)` 還沒有 batch、也沒有未完成 job，就派 `snapshot`（C6-02）。過去的時間點補不回來（不能對過去取快照），缺了就是看得見的缺口。
+5. **快照：** 每個有 `active` credential 的帳號（C6-D002），當前時間點 `b = floor(now, 1h)` 還沒有 batch、也沒有未完成 job，就派 `snapshot`（C6-02）。同一個 `dedup_key` 已有 `succeeded` 的 `job_run` 不再派；最近一次 `failed` 的 `job_run` 結束未滿 2 分鐘也不派（`reconcile.SnapshotRetryAfter`，C6-D006），所以整點前段的失敗會在 15 分鐘內重試幾次。過去的時間點補不回來（不能對過去取快照），缺了就是看得見的缺口。
 6. **periodic：** `ingest.periodic` 裡啟用、到期、而且沒有未完成 job 的，各派一個 job，同時把 `next_due_at` 設成 `now + period`。間隔從派工時起算；上一個 job 到期時還沒完成，就等它完成後的下一輪再派。`mftiko.sync`、`sym.sync`（mirror）、`maint.partitions`（每小時，`job_run` 的分區維護）與 `credential.rekey`（每分鐘，把仍是舊私鑰指紋的 credential 改封給現用公鑰；不打交易所）都是 periodic。程式只在那一列不存在時登記，之後間隔與啟用由操作者在表上改。
 
 **頻率分層**（控制 Binance per-symbol 端點的 request weight）：
@@ -219,8 +219,8 @@ archtest 另外擋（C4-D002、C4-D006）：cpanel-api 不連結 `internal/mftik
 
 | 類別 | 例子 | 處理 |
 |---|---|---|
-| `auth` | 401、403：key 無效、權限不足、IP 不在白名單；Binance `-2014`、`-2015` | job 失敗，並呼叫 credential hook：`account:<id>` 上任何 job 都計數，連續 2 次轉 `auth_failed`（C6-D001，§4.1）；`global:*` 只記錄（C4-D008） |
-| `rate_limited` | 429 | 依 `Retry-After`（沒有就指數退避）把整個 `lease_key` 的 `not_before` 與其他 stream 的 `next_due_at` 往後推。不寫 `ingest.pause` |
+| `auth` | 401：key 無效、權限不足、IP 不在白名單；Binance `-1022`、`-2014`、`-2015`；mftiko 的 403（C4-D008） | job 失敗，並呼叫 credential hook：`account:<id>` 上任何 job 都計數，連續 2 次轉 `auth_failed`（C6-D001，§4.1）；`global:*` 只記錄（C4-D008） |
+| `rate_limited` | 429；Binance 的 403（WAF，不看 body，`docs/venues/binance-um.md` §6） | 依 `Retry-After`（沒有就指數退避）把整個 `lease_key` 的 `not_before` 與其他 stream 的 `next_due_at` 往後推。不寫 `ingest.pause` |
 | `ip_banned` | 418，Binance 的 IP 封禁 | 寫 `ingest.pause`，scope 是 `egress:<名稱>`（`-egress`，同一出口的副本共用）。到期前不認領要對外的 job；`maint.partitions` 照常 |
 | `unavailable` | 5xx、408、逾時、連線錯誤、維護 | 只延後這條 stream：30 秒起、加倍、上限 30 分鐘，再乘 0.5–1 的 jitter |
 | `bad_request` | 其他 4xx，參數錯誤 | 視為 bug：`paused_reason = bad_request`，記 log、呼叫 alert hook（只記 log）。告警由 C3-05 的 metrics 與 Prometheus 規則送出，不重試 |
@@ -273,7 +273,9 @@ archtest 另外擋（C4-D002、C4-D006）：cpanel-api 不連結 `internal/mftik
 
 - 每個有 `active` credential 的帳號每小時一個時間點（對齊整點），唯一鍵 `(exchange_account_id, bucket)`。所有帳號在同一刻取樣，跨帳號加總才可比。
 - 一個 snapshot job 依該帳號 kind 的錢包結構，抓餘額（各錢包）與持倉，寫一筆 `ledger.snapshot_batch` 加上明細。帳號是空的也要寫 batch，否則讀「最新」會讀到上一次的非空結果（v2 的教訓）。job 開始時若已離開該整點超過 15 分鐘，就不抓、也不寫 batch，該小時留成缺口；過去的整點不補（C6-D004）。
-- 持倉存交易所回報的數量、方向、開倉價、mark price、未實現損益、保證金。一期不做跨資產估值；要估值時再加價格來源。
+- 全部成功才寫：每支回應一列 `raw.venue_snapshot`、batch、每個啟用 kind 的結果、明細在同一個 `CommitPage`。任一支失敗就什麼都不寫，job 以原錯誤類別結束（`auth` 照 §4.4 交給 credential hook），由 §4.3 第 5 條在 2 分鐘後重派（C6-D006）。可快照的 kind 清單在 `internal/snapshotkind`（現在只有 `BinanceUM`）；worker 有 sealbox 私鑰才登記 handler、才派 snapshot。
+- 持倉存交易所回報的數量、方向、開倉價、mark price、未實現損益、保證金。一期不做跨資產估值；要估值時再加價格來源。端點沒有 category 時（BinanceUM），category 與 UID 用 `(venue, exch_ticker)` 在 `mirror.symbol` 查，活躍列優先；查不到兩個都存 null（C6-D007）。
+- 缺口從帳號的第一筆 batch 起算（C6-D009）：第一筆 batch 之前的整點不是缺口，之後沒有 batch 的整點（不含當下這個小時）才是。還沒有 batch 的帳號，`cpanel_snapshot_batch_age_seconds` 從它最早一筆 snapshot job 的整點起算；從沒派過就不輸出。
 - 每小時對每個帳號都跑，所以快照 job 同時是 key 的健康探測：沒有 scope 的帳號，key 失效也會在一小時內被發現。這要靠快照的 `auth` 失敗會計數（C6-D001，C6-06）。
 - 失效演練（C6-05）在正式站，用一把專用的唯讀 key（C6-D003）。
 

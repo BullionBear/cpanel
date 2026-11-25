@@ -12,7 +12,6 @@ import (
 
 	"github.com/BullionBear/cpanel/internal/platform/pgtest"
 	"github.com/BullionBear/cpanel/internal/reconcile"
-	"github.com/BullionBear/cpanel/internal/worker"
 	"github.com/BullionBear/cpanel/migrations"
 )
 
@@ -74,109 +73,6 @@ func runRule(t *testing.T, ctx context.Context, db *pgxpool.Pool, now time.Time)
 	return n
 }
 
-func TestEmptyAccountAndMissedHour(t *testing.T) {
-	ctx, db := testPool(t)
-	id := addAccount(t, ctx, db, []string{"Binance", "BinanceUM"}, hour.Add(5*time.Minute))
-	if n := runRule(t, ctx, db, hour.Add(10*time.Minute)); n != 1 {
-		t.Fatalf("first hour inserted %d", n)
-	}
-	returned := hour.Add(time.Hour + 10*time.Minute)
-	if n := runRule(t, ctx, db, returned); n != 1 {
-		t.Fatalf("second hour inserted %d; the missed hour must not be backfilled", n)
-	}
-	if got := gaps(t, ctx, db, returned); len(got) != 1 || !got[0].Equal(hour) {
-		t.Fatalf("gaps before the worker returns %v", got)
-	}
-
-	w := &worker.Worker{
-		DB: db, Name: "w1", Poll: 20 * time.Millisecond, Slots: 1,
-		Handlers: worker.Handlers{JobKind: Capture{Kinds: []string{"BinanceUM"}, Now: func() time.Time { return returned }}.Handle},
-	}
-	ctxStop, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		w.Run(ctxStop)
-	}()
-	t.Cleanup(func() {
-		cancel()
-		<-done
-	})
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		var n int
-		if err := db.QueryRow(ctx, `SELECT count(*) FROM ingest.job_run WHERE kind = $1`, JobKind).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n == 2 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("snapshot jobs did not finish")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	cancel()
-	<-done
-
-	var lateItems, onTimeItems int
-	if err := db.QueryRow(ctx, `
-		SELECT items FROM ingest.job_run WHERE dedup_key = $1`, reconcile.SnapshotDedup(id, hour)).Scan(&lateItems); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(ctx, `
-		SELECT items FROM ingest.job_run WHERE dedup_key = $1`, reconcile.SnapshotDedup(id, hour.Add(time.Hour))).Scan(&onTimeItems); err != nil {
-		t.Fatal(err)
-	}
-	if lateItems != 0 || onTimeItems != 1 {
-		t.Fatalf("items late=%d on time=%d, want 0 and 1", lateItems, onTimeItems)
-	}
-	var batches int
-	var bucket time.Time
-	if err := db.QueryRow(ctx, `
-		SELECT count(*), min(bucket) FROM ledger.snapshot_batch WHERE exchange_account_id = $1`, id).Scan(&batches, &bucket); err != nil {
-		t.Fatal(err)
-	}
-	if batches != 1 || !bucket.Equal(hour.Add(time.Hour)) {
-		t.Fatalf("batches %d at %s", batches, bucket)
-	}
-	rows, err := db.Query(ctx, `
-		SELECT k.kind, k.status
-		FROM ledger.snapshot_batch_kind k
-		JOIN ledger.snapshot_batch b ON b.id = k.batch_id
-		WHERE b.exchange_account_id = $1
-		ORDER BY k.kind`, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	type kindStatus struct{ Kind, Status string }
-	got, err := pgx.CollectRows(rows, pgx.RowToStructByPos[kindStatus])
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []kindStatus{{"Binance", "unimplemented"}, {"BinanceUM", "succeeded"}}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("kinds %+v", got)
-	}
-	var balances, positions int
-	if err := db.QueryRow(ctx, `
-		SELECT
-		  (SELECT count(*) FROM ledger.balance_snapshot s JOIN ledger.snapshot_batch b ON b.id = s.batch_id WHERE b.exchange_account_id = $1),
-		  (SELECT count(*) FROM ledger.position_snapshot s JOIN ledger.snapshot_batch b ON b.id = s.batch_id WHERE b.exchange_account_id = $1)`,
-		id).Scan(&balances, &positions); err != nil {
-		t.Fatal(err)
-	}
-	if balances != 0 || positions != 0 {
-		t.Fatalf("empty account wrote %d balances and %d positions", balances, positions)
-	}
-	if got := gaps(t, ctx, db, returned); len(got) != 1 || !got[0].Equal(hour) {
-		t.Fatalf("gaps after the worker returns %v", got)
-	}
-	if n := runRule(t, ctx, db, returned); n != 0 {
-		t.Fatalf("rule inserted %d after the late hour was skipped", n)
-	}
-}
-
 func TestPositionLookupAndBalance(t *testing.T) {
 	ctx, db := testPool(t)
 	id := addAccount(t, ctx, db, []string{"BinanceUM"}, hour)
@@ -199,14 +95,14 @@ func TestPositionLookupAndBalance(t *testing.T) {
 			return err
 		}
 		if err := AddPosition(ctx, tx, batch, Position{
-			Kind: "BinanceUM", Venue: "BinanceUM", Category: "Perp", ExchTicker: "BTCUSDT", PositionSide: "BOTH",
+			Kind: "BinanceUM", Venue: "BinanceUM", ExchTicker: "BTCUSDT", PositionSide: "BOTH",
 			PositionAmt: "-1.5", EntryPrice: "10", MarkPrice: "11", UnrealizedProfit: "-0.1",
 			IsolatedMargin: "2", InitialMargin: "3", PositionInitialMargin: "4", IsolatedWallet: "5",
 		}); err != nil {
 			return err
 		}
 		return AddPosition(ctx, tx, batch, Position{
-			Kind: "BinanceUM", Venue: "BinanceUM", Category: "Perp", ExchTicker: "ETHUSDT", PositionSide: "SHORT",
+			Kind: "BinanceUM", Venue: "BinanceUM", ExchTicker: "ETHUSDT", PositionSide: "SHORT",
 			PositionAmt: "2", EntryPrice: "1", MarkPrice: "1", UnrealizedProfit: "0",
 			IsolatedMargin: "0", InitialMargin: "0", PositionInitialMargin: "0", IsolatedWallet: "0",
 		})
@@ -225,28 +121,28 @@ func TestPositionLookupAndBalance(t *testing.T) {
 		t.Fatalf("balance %s %s version %d", wallet, balance, version)
 	}
 	var uid *int64
+	var category *string
 	var ticker, amt string
 	if err := db.QueryRow(ctx, `
-		SELECT uid, exch_ticker, position_amt::text FROM ledger.position_snapshot
-		WHERE batch_id = $1 AND exch_ticker = 'BTCUSDT'`, batch).Scan(&uid, &ticker, &amt); err != nil {
+		SELECT category, uid, exch_ticker, position_amt::text FROM ledger.position_snapshot
+		WHERE batch_id = $1 AND exch_ticker = 'BTCUSDT'`, batch).Scan(&category, &uid, &ticker, &amt); err != nil {
 		t.Fatal(err)
 	}
-	if uid == nil || *uid != 42 || amt != "-1.5" {
-		t.Fatalf("btc uid %v amt %s", uid, amt)
+	if category == nil || *category != "Perp" || uid == nil || *uid != 42 || amt != "-1.5" {
+		t.Fatalf("btc category %v uid %v amt %s", category, uid, amt)
 	}
-	uid = nil
 	if err := db.QueryRow(ctx, `
-		SELECT uid, exch_ticker FROM ledger.position_snapshot
-		WHERE batch_id = $1 AND exch_ticker = 'ETHUSDT'`, batch).Scan(&uid, &ticker); err != nil {
+		SELECT category, uid, exch_ticker FROM ledger.position_snapshot
+		WHERE batch_id = $1 AND exch_ticker = 'ETHUSDT'`, batch).Scan(&category, &uid, &ticker); err != nil {
 		t.Fatal(err)
 	}
-	if uid != nil || ticker != "ETHUSDT" {
-		t.Fatalf("missing symbol stored uid %v ticker %s", uid, ticker)
+	if category != nil || uid != nil || ticker != "ETHUSDT" {
+		t.Fatalf("missing symbol stored category %v uid %v ticker %s", category, uid, ticker)
 	}
 
 	err = pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
 		return AddPosition(ctx, tx, batch, Position{
-			Kind: "BinanceUM", Venue: "BinanceUM", Category: "Perp", ExchTicker: "BTCUSDT", PositionSide: "LONG",
+			Kind: "BinanceUM", Venue: "BinanceUM", ExchTicker: "BTCUSDT", PositionSide: "LONG",
 			PositionAmt: "0", EntryPrice: "1", MarkPrice: "1", UnrealizedProfit: "0",
 			IsolatedMargin: "0", InitialMargin: "0", PositionInitialMargin: "0", IsolatedWallet: "0",
 		})
@@ -254,6 +150,14 @@ func TestPositionLookupAndBalance(t *testing.T) {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
 		t.Fatalf("zero position_amt err = %v, want check_violation", err)
+	}
+	_, err = db.Exec(ctx, `
+		INSERT INTO ledger.position_snapshot (
+			batch_id, kind, venue, category, exch_ticker, position_side, position_amt, entry_price, mark_price,
+			unrealized_profit, isolated_margin, initial_margin, position_initial_margin, isolated_wallet)
+		VALUES ($1, 'BinanceUM', 'BinanceUM', '', 'XRPUSDT', 'BOTH', 1, 0, 0, 0, 0, 0, 0, 0)`, batch)
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		t.Fatalf("empty category err = %v, want check_violation", err)
 	}
 }
 

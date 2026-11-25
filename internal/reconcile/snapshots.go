@@ -13,6 +13,10 @@ import (
 // kind passes that kind to Snapshots; this package does not name venues.
 const SnapshotKind = "snapshot"
 
+// SnapshotRetryAfter is how long a failed snapshot run of a key blocks the next insert
+// of that key (C6-D006). A failure early in the hour is tried again within StaleAfter.
+const SnapshotRetryAfter = 2 * time.Minute
+
 // SnapshotDedup is the unfinished-job key for one account and one UTC hour (C3-D002).
 func SnapshotDedup(accountID int64, bucket time.Time) string {
 	return fmt.Sprintf("bucket:snapshot:account:%d:%s", accountID, bucket.UTC().Format(time.RFC3339))
@@ -23,8 +27,9 @@ func SnapshotDedup(accountID int64, bucket time.Time) string {
 // has an active read credential, and has an enabled kind in kinds. kinds is the
 // list the worker can snapshot; an empty list inserts nothing.
 //
-// A batch already stored for that hour, an unfinished job, or a succeeded run of
-// the same key (including a run that refused a late capture) blocks another insert.
+// A batch already stored for that hour, an unfinished job, a succeeded run of
+// the same key (including a run that refused a late capture), or a failed run of
+// the same key that finished less than SnapshotRetryAfter ago blocks another insert.
 func Snapshots(kinds []string) Rule {
 	if kinds == nil {
 		kinds = []string{}
@@ -76,9 +81,14 @@ func Snapshots(kinds []string) Rule {
 			    SELECT 1 FROM ingest.job_run r
 			    WHERE r.dedup_key = due.dedup_key AND r.status = 'succeeded'
 			  )
+			  AND NOT EXISTS (
+			    SELECT 1 FROM ingest.job_run r
+			    WHERE r.dedup_key = due.dedup_key AND r.status = 'failed'
+			      AND r.finished_at > $2::timestamptz - $4::interval
+			  )
 			ORDER BY due.account_id
 			ON CONFLICT (dedup_key) DO NOTHING`,
-			kinds, now, SnapshotKind)
+			kinds, now, SnapshotKind, SnapshotRetryAfter)
 		if err != nil {
 			return 0, err
 		}

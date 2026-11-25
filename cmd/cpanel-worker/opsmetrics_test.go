@@ -264,11 +264,37 @@ func TestSnapshotMetrics(t *testing.T) {
 	}
 	account := strconv.FormatInt(id, 10)
 	labels := map[string]string{"account": account}
-	if got := gauge(t, fams, "cpanel_snapshot_gaps_24h", labels); got != 3 {
-		t.Fatalf("gaps %v, want 3", got)
+	if got := gauge(t, fams, "cpanel_snapshot_gaps_24h", labels); got != 0 {
+		t.Fatalf("gaps %v before the first batch, want 0", got)
+	}
+	if got, ok := findGauge(fams, "cpanel_snapshot_batch_age_seconds", labels); ok {
+		t.Fatalf("age %v for an account never dispatched", got)
+	}
+
+	// The first snapshot job failed three hours ago, and one is pending now.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO ingest.job_run (
+			id, kind, dedup_key, lease_key, priority, attempt, params, enqueued_at, finished_at, status, error_class)
+		VALUES (1, 'snapshot', 'bucket:snapshot:first', 'account:' || $1::bigint, 100, 0, '{}',
+		        (date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') - interval '3 hours' + interval '5 minutes',
+		        (date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') - interval '3 hours' + interval '5 minutes',
+		        'failed', 'auth')`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO ingest.job (kind, dedup_key, lease_key, params)
+		VALUES ('snapshot', 'bucket:snapshot:now', 'account:' || $1::bigint, '{}')`, id); err != nil {
+		t.Fatal(err)
+	}
+	fams, err = reg.Gather()
+	if err != nil {
+		t.Fatal(err)
 	}
 	if got := gauge(t, fams, "cpanel_snapshot_batch_age_seconds", labels); got < 3*3600 || got >= 4*3600 {
-		t.Fatalf("age %v, want between 3h and 4h", got)
+		t.Fatalf("age %v, want between 3h and 4h from the first job's hour", got)
+	}
+	if got := gauge(t, fams, "cpanel_snapshot_gaps_24h", labels); got != 0 {
+		t.Fatalf("gaps %v before the first batch, want 0", got)
 	}
 	quiet := prometheus.NewRegistry()
 	quiet.MustRegister(newOpsCollector(pool, zerolog.Nop(), nil))

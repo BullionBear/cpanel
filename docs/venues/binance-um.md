@@ -1,6 +1,6 @@
 # BinanceUM
 
-讀取日 2026-11-23。這一頁的數字都來自當天打開的端點頁。testnet host 於 2026-11-25 補上（C7-09）。
+讀取日 2026-11-23。這一頁的數字都來自當天打開的端點頁。testnet host 於 2026-11-25 補上（C7-09）。§5 的 limiter、§6 的 `-1022` 與 403、§9 的商品反查於 2026-11-25 依 C6-03 更新（C6-D007、C6-D008）。
 
 正式站 host：`https://fapi.binance.com`（[General Info](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info)）。testnet 的 USD-M host 是 `https://testnet.binancefuture.com`，spot testnet 是 `https://testnet.binance.vision`（[Spot Testnet](https://github.com/binance/binance-spot-api-docs/blob/master/testnet/general-info.md)）。testnet 的 weight 與回查期限不另抄；端點路徑與正式站相同。
 
@@ -150,7 +150,7 @@ v3 只回「有持倉或有掛單」的 symbol。欄位說明寫 `positionAmt` �
 
 每分鐘的 `REQUEST_WEIGHT` 數字，一般資訊只寫在 `GET /fapi/v1/exchangeInfo` 的 `rateLimits`。這份沒有打那支。common-definition 的範例物件寫 `REQUEST_WEIGHT`／`MINUTE`／`limit: 2400`，同一段也有 `ORDERS` 的 `1200`。那是格式範例，不當成上限。上限未確認。
 
-現行程式 `WeightLimit = 6000`、`WeightBudget = 4800` 是現貨的每分鐘預算，`noteWeight` 對 fapi 用同一組。C6-03 把 fapi 的預算分開，不要等用到 4800 才停。分開之後的數字仍等 `exchangeInfo` 的文件或另一次讀取，不在這份填。
+現行程式 `WeightLimit = 6000`、`WeightBudget = 4800` 是現貨的每分鐘預算，`noteWeight` 對 fapi 用同一組。這是定案（C6-D008）：不另訂 fapi 預算，不讀 `exchangeInfo`，這份不填上限。快照一個帳號一小時用 weight 10，失敗重試時 15 分鐘最多 8 次（C6-D006）。
 
 這份用到的 weight：
 
@@ -173,12 +173,12 @@ income 的 30 乘上 job 的請求預算會很大，而 IP 上限未確認。C7-
 
 HTTP 的預設在 [General Info](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info)。錯誤碼的文字在 [Error Codes](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/error-code)。錯誤碼頁沒有寫 HTTP status。
 
-`refine`（`internal/venue/binance`）現在只改四個碼：`-1003`、`-1015` → `rate_limited`，`-2014`、`-2015` → `auth`。HTTP 418 在 `refine` 之前就返回，維持 `ip_banned`。其餘沿 `classify.FromHTTP`。
+`refine`（`internal/venue/binance`）改五個碼與一個 HTTP status：`-1003`、`-1015` → `rate_limited`，`-1022`、`-2014`、`-2015` → `auth`，HTTP 403 不看 body 一律 `rate_limited`（C6-03）。HTTP 418 在 `refine` 之前就返回，維持 `ip_banned`。其餘沿 `classify.FromHTTP`。
 
 | 來源 | 文件 | 目標類別 | 與 `refine` |
 |---|---|---|---|
 | HTTP 401 | 一般資訊沒有單獨定義。`-2015` 常走這條 | `auth` | 一致（status 或碼） |
-| HTTP 403 | 「HTTP 403 return code is used when the WAF Limit has been violated.」 | 見下方。目標不是 `auth` | 不一致 |
+| HTTP 403 | 「HTTP 403 return code is used when the WAF Limit has been violated.」 | `rate_limited`，不看 body | 一致（C6-03） |
 | HTTP 429 | 打破 rate limit | `rate_limited` | 一致 |
 | HTTP 418 | 429 之後繼續打，IP 被封 | `ip_banned` | 一致 |
 | HTTP 408 | 後端等候逾時 | `unavailable` | 一致 |
@@ -188,18 +188,18 @@ HTTP 的預設在 [General Info](https://developers.binance.com/en/docs/products
 | `-2014` BAD_API_KEY_FMT | API-key format invalid | `auth` | 一致 |
 | `-2015` REJECTED_MBX_KEY | Invalid API-key, IP, or permissions for action | `auth` | 一致 |
 | `-2013` NO_SUCH_ORDER | Order does not exist | `not_found` | 不一致，C7-04 |
-| `-1022` INVALID_SIGNATURE | Signature for this request is not valid | `auth` | 不一致，C6-03 |
+| `-1022` INVALID_SIGNATURE | Signature for this request is not valid | `auth` | 一致（C6-03） |
 | `-1021` INVALID_TIMESTAMP | timestamp 在 `recvWindow` 外，或超前伺服器 1000ms | `bad_request` | 一致（HTTP 400 的預設） |
 | `-1127` | startTime 與 endTime 相距超過若干小時 | `bad_request` | 一致。小時數未確認 |
 | 其他碼 | 頁面有碼，這份沒逐條改類別 | HTTP status 的預設 | 一致 |
 
 `auth` 的後果是 C6-D001：`account:<id>` 上任何 job 的 `auth` 都計入 credential，連續 2 次轉 `auth_failed`。`global:*` 只記錄（C4-D008）。`credential.verify` 時某個 kind 讀不到，仍只記在 kind 上（C5-D003）。計數的程式在 C6-06。在那之前，`internal/credential.ApplyAuth` 只計 `credential.verify` 與 `credential.probe`。
 
-不一致的三處：
+原本不一致的三處，C6-03 改了後兩處：
 
 1. **`-2013`。** ARCHITECTURE §4.4 要 venue client 標成 `not_found`。`refine` 沒有這個 case。若 HTTP 是 400，現況是 `bad_request`，stream 會被暫停，`order.resolve` 不會走到 `unresolved`。C7-04 在 `refine` 加上 `-2013` → `not_found`。
-2. **`-1022`。** 簽章無效應計入 credential，與 `-2014`、`-2015` 同一類。現況 HTTP 400 是 `bad_request`，會把 stream 暫停。C6-03 在 `refine` 加上 `-1022` → `auth`。
-3. **HTTP 403。** 文件是 WAF，不是 key 無效。`classify.classOf` 與 ARCHITECTURE §4.4 的例子把 403 當 `auth`。WAF 若計入 C6-D001，會把 credential 打成 `auth_failed`。目標類別是 `rate_limited`（退避、不計 credential、不暫停成 bug）。C6-03 只在 Binance client 改這條，並改 ARCHITECTURE §4.4 的 403 例子。mftiko 的 403 → `auth`（C4-D008）不動。
+2. **`-1022`（已改）。** 簽章無效應計入 credential，與 `-2014`、`-2015` 同一類。原本 HTTP 400 是 `bad_request`，會把 stream 暫停。C6-03 在 `refine` 加上 `-1022` → `auth`。
+3. **HTTP 403（已改）。** 文件是 WAF，不是 key 無效。`classify.classOf` 把 403 當 `auth`。WAF 若計入 C6-D001，會把 credential 打成 `auth_failed`。C6-03 在 Binance client 把 403 改成 `rate_limited`（退避、不計 credential、不暫停成 bug），並改了 ARCHITECTURE §4.4 的例子。`classify` 的預設與 mftiko 的 403 → `auth`（C4-D008）不動。
 
 ## 7. 訂單終態
 
@@ -244,7 +244,7 @@ HTTP 的預設在 [General Info](https://developers.binance.com/en/docs/products
 
 - `venue` 固定 `BinanceUM`。
 - `exch_ticker` 是端點的 `symbol`（範例 `BTCUSDT`）。
-- `category` 這些帳號端點都沒有。用 SYM 寫進 `mirror.symbol` 的值（C4-D010）。對不到就不編 UID。
+- `category` 這些帳號端點都沒有。快照用 `(venue, exch_ticker)` 在 `mirror.symbol` 找 category 與 UID（`mirror.LookupTicker`，活躍列優先，C6-D007）。對不到兩個都存 null，不編 UID。
 
 交割合約的 category、以及 `pair` 與 `symbol` 何時不同，這幾頁沒寫。未確認。
 
@@ -254,10 +254,10 @@ HTTP 的預設在 [General Info](https://developers.binance.com/en/docs/products
 |---|---|---|
 | `-1003`、`-1015`、`-2014`、`-2015`、HTTP 418／429 | 與本檔目標類別一致 | 不改 |
 | `-2013` → `not_found` | `refine` 沒有這個 case | C7-04，`internal/venue/binance` 的 `refine` |
-| `-1022` → `auth` | HTTP 400 維持 `bad_request` | C6-03，`refine` |
-| HTTP 403 是 WAF，目標 `rate_limited` | `classify` 與 ARCHITECTURE §4.4 當 `auth` | C6-03，只改 Binance 這條，並改 §4.4 的例子 |
+| `-1022` → `auth` | 一致（C6-03，`refine`） | 不改 |
+| HTTP 403 是 WAF，目標 `rate_limited` | 一致：Binance client 不看 body 改成 `rate_limited`；`classify` 的預設仍是 `auth`（mftiko，C4-D008） | 不改 |
 | C6-D001 任何 `account:<id>` job 的 `auth` 都計數 | `ApplyAuth` 只計 verify 與 probe | C6-06 |
-| fapi 的 weight 預算 | 程式用現貨的 6000／4800；fapi 上限未確認 | C6-03 分開預算，數字仍待文件 |
+| fapi 的 weight 預算 | 程式用現貨的 6000／4800；fapi 上限未確認 | 不改（C6-D008：維持現行 limiter，不填上限） |
 | `orderId` 依 symbol 唯一 | raw 的 native id 已帶 symbol（C7-D003）。`pending_order` 的鍵還沒有 | C7-03／C7-04 |
 
 C6-03、C7-03～C7-05 加端點時照第 2、3 節，不在這張票加 client。

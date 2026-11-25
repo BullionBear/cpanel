@@ -152,31 +152,63 @@ func TestSucceededSnapshotRunIsNotReinserted(t *testing.T) {
 	}
 }
 
+func TestFailedSnapshotRunWaitsBeforeRetry(t *testing.T) {
+	ctx, _, conn := testDB(t)
+	verified := t0
+	id := addSnapshotAccount(t, ctx, conn, "binance", "failing", []string{"BinanceUM"}, "active", &verified)
+	key := SnapshotDedup(id, t0)
+	failedAt := func(runID int64, at time.Time) {
+		t.Helper()
+		exec(t, ctx, conn, `
+			INSERT INTO ingest.job_run (
+				id, kind, dedup_key, lease_key, priority, attempt, params, enqueued_at, finished_at, status, error_class)
+			VALUES ($1, 'snapshot', $2, $3, 100, 0, '{}', $4, $4, 'failed', 'auth')`,
+			runID, key, AccountLease(id), at)
+	}
+	failedAt(1, t0.Add(30*time.Second))
+	failedAt(2, t0.Add(4*time.Minute))
+
+	if n := run(t, ctx, conn, Snapshots([]string{"BinanceUM"}), t0.Add(5*time.Minute)); n != 0 {
+		t.Fatalf("inserted %d a minute after the latest failure", n)
+	}
+	if n := run(t, ctx, conn, Snapshots([]string{"BinanceUM"}), t0.Add(4*time.Minute+SnapshotRetryAfter-time.Second)); n != 0 {
+		t.Fatalf("inserted %d inside %s of the latest failure", n, SnapshotRetryAfter)
+	}
+	if n := run(t, ctx, conn, Snapshots([]string{"BinanceUM"}), t0.Add(4*time.Minute+SnapshotRetryAfter)); n != 1 {
+		t.Fatalf("inserted %d once %s had passed", n, SnapshotRetryAfter)
+	}
+	if _, ok := jobs(t, ctx, conn)[key]; !ok {
+		t.Fatalf("jobs %+v", jobs(t, ctx, conn))
+	}
+}
+
 func TestSnapshotGaps(t *testing.T) {
 	ctx, _, conn := testDB(t)
-	verified := t0.Add(5 * time.Minute)
+	verified := t0.Add(-5 * time.Hour)
 	covered := addSnapshotAccount(t, ctx, conn, "binance", "covered", []string{"BinanceUM"}, "active", &verified)
-	addSnapshotAccount(t, ctx, conn, "binance", "spot", []string{"Binance"}, "active", &verified)
-	gone := t0.Add(-time.Hour)
-	addSnapshotAccount(t, ctx, conn, "binance", "no-key", []string{"BinanceUM"}, "auth_failed", &gone)
-	asOf := t0.Add(time.Hour + 10*time.Minute)
+	spot := addSnapshotAccount(t, ctx, conn, "binance", "spot", []string{"Binance"}, "active", &verified)
+	gone := addSnapshotAccount(t, ctx, conn, "binance", "no-key", []string{"BinanceUM"}, "auth_failed", &verified)
+	asOf := t0.Add(2*time.Hour + 10*time.Minute)
 
-	if got := gapBuckets(t, ctx, conn, []string{"BinanceUM"}, asOf); len(got) != 1 || !got[0].Equal(t0) {
-		t.Fatalf("gaps %v, want only %s", got, t0)
+	if got := gapBuckets(t, ctx, conn, []string{"BinanceUM"}, asOf); len(got) != 0 {
+		t.Fatalf("gaps %v before the first batch", got)
+	}
+	for _, id := range []int64{covered, spot, gone} {
+		exec(t, ctx, conn, `
+			INSERT INTO ledger.snapshot_batch (exchange_account_id, bucket, captured_at)
+			VALUES ($1, $2, $3)`, id, t0, t0.Add(10*time.Minute))
+	}
+	if got := gapBuckets(t, ctx, conn, []string{"BinanceUM"}, asOf); len(got) != 1 || !got[0].Equal(t0.Add(time.Hour)) {
+		t.Fatalf("gaps %v, want only %s: hours before the first batch and the current hour are not gaps", got, t0.Add(time.Hour))
 	}
 	if got := gapBuckets(t, ctx, conn, nil, asOf); len(got) != 0 {
 		t.Fatalf("gaps with no implemented kind %v", got)
 	}
-	fresh := asOf
-	onlyNow := addSnapshotAccount(t, ctx, conn, "binance", "just-verified", []string{"BinanceUM"}, "active", &fresh)
-	if got := gapBuckets(t, ctx, conn, []string{"BinanceUM"}, asOf); len(got) != 1 || !got[0].Equal(t0) {
-		t.Fatalf("gaps %v after an account verified in the current hour", got)
-	}
 	exec(t, ctx, conn, `
 		INSERT INTO ledger.snapshot_batch (exchange_account_id, bucket, captured_at)
-		VALUES ($1, $2, $3)`, covered, t0, t0.Add(10*time.Minute))
+		VALUES ($1, $2, $3)`, covered, t0.Add(time.Hour), t0.Add(time.Hour+10*time.Minute))
 	if got := gapBuckets(t, ctx, conn, []string{"BinanceUM"}, asOf); len(got) != 0 {
-		t.Fatalf("gaps %v after the batch, account %d should not add one", got, onlyNow)
+		t.Fatalf("gaps %v after the missing hour was written", got)
 	}
 }
 

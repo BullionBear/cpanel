@@ -7,6 +7,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
+
+	"github.com/BullionBear/cpanel/internal/reconcile"
 )
 
 // opsCollector reads stream and job health from the database on each scrape (C3-D005).
@@ -117,7 +119,7 @@ func newOpsCollector(db *pgxpool.Pool, log zerolog.Logger, snapshotKinds []strin
 			nil, nil),
 		batchAge: prometheus.NewDesc(
 			"cpanel_snapshot_batch_age_seconds",
-			"Age of an account's latest snapshot batch, or of the hour coverage started when it has none.",
+			"Age of an account's latest snapshot batch, or of the hour of its first snapshot job when it has none.",
 			[]string{"account"}, nil),
 		gaps24h: prometheus.NewDesc(
 			"cpanel_snapshot_gaps_24h",
@@ -408,14 +410,14 @@ func (c *opsCollector) collect(ctx context.Context, ch chan<- prometheus.Metric)
 	}
 	ch <- prometheus.MustNewConstMetric(c.kindErrors, prometheus.GaugeValue, float64(kindErrors))
 
+	// Age runs from the newest batch. An account with none counts from the hour of its
+	// first snapshot job, so a key that has failed since it was added still goes stale;
+	// one that was never dispatched has no age. Gaps start at the first batch (C6-D009).
 	snapRows, err := c.db.Query(ctx, `
 		WITH covered AS (
 			SELECT a.id,
-			       (date_trunc('hour', min(c.verified_at) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') AS start_hour,
 			       (SELECT max(b.captured_at) FROM ledger.snapshot_batch b WHERE b.exchange_account_id = a.id) AS last_at
 			FROM pms.exchange_account a
-			JOIN pms.credential c
-			  ON c.exchange_account_id = a.id AND c.purpose = 'read' AND c.verified_at IS NOT NULL
 			WHERE a.deleted_at IS NULL
 			  AND EXISTS (
 			      SELECT 1 FROM pms.credential live
@@ -426,10 +428,17 @@ func (c *opsCollector) collect(ctx context.Context, ch chan<- prometheus.Metric)
 			      SELECT 1 FROM pms.exchange_account_kind k
 			      WHERE k.exchange_account_id = a.id AND k.disabled_at IS NULL AND k.kind = ANY($1::text[])
 			  )
-			GROUP BY a.id
 		)
 		SELECT covered.id::text,
-		       EXTRACT(EPOCH FROM (now() - COALESCE(covered.last_at, covered.start_hour)))::float8,
+		       EXTRACT(EPOCH FROM (now() - COALESCE(covered.last_at, (
+		           SELECT date_trunc('hour', min(j.enqueued_at) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+		           FROM (
+		               SELECT enqueued_at FROM ingest.job
+		               WHERE kind = $2 AND lease_key = 'account:' || covered.id
+		               UNION ALL
+		               SELECT enqueued_at FROM ingest.job_run
+		               WHERE kind = $2 AND lease_key = 'account:' || covered.id
+		           ) j))))::float8,
 		       COALESCE(g.n, 0)
 		FROM covered
 		LEFT JOIN (
@@ -437,18 +446,21 @@ func (c *opsCollector) collect(ctx context.Context, ch chan<- prometheus.Metric)
 			FROM ledger.snapshot_gaps($1::text[], now())
 			WHERE bucket >= (date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') - interval '24 hours'
 			GROUP BY exchange_account_id
-		) g ON g.exchange_account_id = covered.id`, c.snapshotKinds)
+		) g ON g.exchange_account_id = covered.id`, c.snapshotKinds, reconcile.SnapshotKind)
 	if err != nil {
 		return err
 	}
 	defer snapRows.Close()
 	for snapRows.Next() {
 		var account string
-		var age, gaps float64
+		var age *float64
+		var gaps float64
 		if err := snapRows.Scan(&account, &age, &gaps); err != nil {
 			return err
 		}
-		ch <- prometheus.MustNewConstMetric(c.batchAge, prometheus.GaugeValue, age, account)
+		if age != nil {
+			ch <- prometheus.MustNewConstMetric(c.batchAge, prometheus.GaugeValue, *age, account)
+		}
 		ch <- prometheus.MustNewConstMetric(c.gaps24h, prometheus.GaugeValue, gaps, account)
 	}
 	return snapRows.Err()

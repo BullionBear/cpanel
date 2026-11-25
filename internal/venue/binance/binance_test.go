@@ -97,7 +97,12 @@ func TestErrorClasses(t *testing.T) {
 		{http.StatusUnauthorized, `{"code":-2015,"msg":"Invalid API-key"}`, classify.Auth},
 		{http.StatusBadRequest, `{"code":-2015,"msg":"Invalid API-key"}`, classify.Auth},
 		{http.StatusBadRequest, `{"code":-1003,"msg":"Too many requests"}`, classify.RateLimited},
+		{http.StatusBadRequest, `{"code":-1022,"msg":"Signature for this request is not valid."}`, classify.Auth},
+		{http.StatusForbidden, ``, classify.RateLimited},
+		{http.StatusForbidden, `<html>403 Forbidden</html>`, classify.RateLimited},
+		{http.StatusForbidden, `{"code":-2015,"msg":"Invalid API-key"}`, classify.RateLimited},
 		{http.StatusTeapot, `{"code":-1003}`, classify.IPBanned},
+		{http.StatusTeapot, `{"code":-2015}`, classify.IPBanned},
 		{http.StatusTooManyRequests, `{}`, classify.RateLimited},
 		{http.StatusInternalServerError, `{}`, classify.Unavailable},
 		{http.StatusBadRequest, `{"code":-1100}`, classify.BadRequest},
@@ -114,6 +119,89 @@ func TestErrorClasses(t *testing.T) {
 		if !classify.Is(err, c.want) {
 			t.Errorf("status %d body %s: %v, want %s", c.status, c.body, err, c.want)
 		}
+	}
+}
+
+// The bodies follow the response examples of Futures Account Balance V3 and Position
+// Information V3 (docs/venues/binance-um.md §2), with fields this package does not read.
+const (
+	umBalanceExample = `[{"accountAlias":"SgsR","asset":"USDT","balance":"122607.35137903",
+		"crossWalletBalance":"23.72469206","crossUnPnl":"0.00000000","availableBalance":"23.72469206",
+		"maxWithdrawAmount":"23.72469206","marginAvailable":true,"updateTime":1617939110373}]`
+	umPositionExample = `[{"symbol":"ADAUSDT","positionSide":"BOTH","positionAmt":"30","entryPrice":"0.385",
+		"breakEvenPrice":"0.385077","markPrice":"0.41047590","unRealizedProfit":"0.76427700","liquidationPrice":"0",
+		"isolatedMargin":"0","notional":"12.31427700","marginAsset":"USDT","isolatedWallet":"0",
+		"initialMargin":"0.61571385","maintMargin":"0.08004280","positionInitialMargin":"0.61571385",
+		"openOrderInitialMargin":"0","adl":2,"bidNotional":"0","askNotional":"0","updateTime":1720736417660}]`
+)
+
+func TestUMSnapshotEndpoints(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method %s", r.Method)
+		}
+		paths = append(paths, r.URL.Path)
+		q := r.URL.Query()
+		if q.Has("symbol") {
+			t.Errorf("%s sent symbol", r.URL.Path)
+		}
+		signed := "recvWindow=" + q.Get("recvWindow") + "&timestamp=" + q.Get("timestamp")
+		if r.Header.Get("X-MBX-APIKEY") != "fake-key" || q.Get("signature") != SignQuery("fake-secret", signed) {
+			t.Errorf("unsigned request %s", r.URL.RawQuery)
+		}
+		switch r.URL.Path {
+		case UMBalancePath:
+			_, _ = w.Write([]byte(umBalanceExample))
+		case UMPositionRiskPath:
+			_, _ = w.Write([]byte(umPositionExample))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := &Client{Spot: "http://spot.invalid", Futures: srv.URL, Key: "fake-key", Secret: "fake-secret"}
+	balances, body, err := c.UMBalance(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != umBalanceExample || len(balances) != 1 {
+		t.Fatalf("balance %d rows, body %q", len(balances), body)
+	}
+	b := balances[0]
+	if b.Asset != "USDT" || b.Balance != "122607.35137903" || b.AvailableBalance != "23.72469206" ||
+		b.CrossWalletBalance != "23.72469206" || b.MaxWithdrawAmount != "23.72469206" {
+		t.Fatalf("balance %+v", b)
+	}
+	positions, body, err := c.UMPositionRisk(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != umPositionExample || len(positions) != 1 {
+		t.Fatalf("positions %d rows, body %q", len(positions), body)
+	}
+	p := positions[0]
+	if p.Symbol != "ADAUSDT" || p.PositionSide != "BOTH" || p.PositionAmt != "30" || p.EntryPrice != "0.385" ||
+		p.MarkPrice != "0.41047590" || p.UnRealizedProfit != "0.76427700" || p.IsolatedMargin != "0" ||
+		p.InitialMargin != "0.61571385" || p.PositionInitialMargin != "0.61571385" || p.IsolatedWallet != "0" {
+		t.Fatalf("position %+v", p)
+	}
+	if strings.Join(paths, ",") != UMBalancePath+","+UMPositionRiskPath || c.Calls() != 2 {
+		t.Fatalf("paths %v calls %d", paths, c.Calls())
+	}
+}
+
+func TestUMSnapshotBadBody(t *testing.T) {
+	for _, body := range []string{`{"code":0}`, `not json`, `[{"asset":"USDT","balance":"abc"}]`} {
+		if _, err := ParseUMBalance([]byte(body)); !classify.Is(err, classify.BadRequest) {
+			t.Errorf("balance %s: %v", body, err)
+		}
+	}
+	if _, err := ParseUMPositions([]byte(`[{"symbol":"BTCUSDT","positionAmt":""}]`)); !classify.Is(err, classify.BadRequest) {
+		t.Errorf("empty positionAmt: %v", err)
+	}
+	if rows, err := ParseUMPositions([]byte(`[]`)); err != nil || len(rows) != 0 {
+		t.Fatalf("empty account %v %v", rows, err)
 	}
 }
 

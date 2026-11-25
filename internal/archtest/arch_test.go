@@ -31,6 +31,12 @@ const symConnect = mftiko + "/contract/gen/mftiko/sym/v1/symv1connect"
 // mirrorOnly is what cpanel-api reads with SQL instead of linking (C4-D002).
 var mirrorOnly = []string{"internal/mftiko", "internal/sym", "internal/mirror"}
 
+// snapshotKinds lists the kinds the worker can snapshot. The worker, the ReconcileLoop and
+// cpanel-api all read it, so it links none of workerSide (C6-03).
+const snapshotKinds = "internal/snapshotkind"
+
+var workerSide = []string{"internal/worker", "internal/mirror", "internal/venue"}
+
 // netCarriers are the only packages through which the ReconcileLoop may reach net (I5): the Postgres driver, which
 // dials the database, and zerolog, which uses only net's IP types.
 var netCarriers = []string{"github.com/jackc/pgx", "github.com/rs/zerolog"}
@@ -198,6 +204,13 @@ func check(pkgs []pkg) []string {
 				}
 			}
 		}
+		if under(from, snapshotKinds) {
+			for _, d := range p.Deps {
+				if r, own := rel(d); own && under(r, workerSide...) {
+					bad(d, "the snapshot kind list is shared with cpanel-api and the ReconcileLoop (C6-03)")
+				}
+			}
+		}
 	}
 	return out
 }
@@ -251,7 +264,8 @@ func TestDependencyRules(t *testing.T) {
 		}
 	}
 	// The rules key on paths; if a package moved, they would pass by matching nothing.
-	for _, want := range []string{"cmd/cpanel-api", "internal/reconcile", "internal/mftiko", "internal/sym", "internal/mirror", sealboxOpen, "internal/venue"} {
+	for _, want := range []string{"cmd/cpanel-api", "internal/reconcile", "internal/mftiko", "internal/sym", "internal/mirror", sealboxOpen, "internal/venue",
+		snapshotKinds, "internal/worker"} {
 		if !slices.Contains(own, want) {
 			t.Fatalf("package %s not found: update the rules in this package to the new layout", want)
 		}
@@ -306,6 +320,11 @@ func TestCheckReportsViolations(t *testing.T) {
 		{ImportPath: m("internal/mftiko"), Imports: []string{mf("contract/gen/api/v1")}},
 		{ImportPath: m("internal/sym"), Imports: []string{mf("contract/gen/mftiko/sym/v1/symv1connect")}},
 		{ImportPath: m("internal/doctor"), Imports: []string{mf("contract/gen/api/v1"), mf("contract/gen/mftiko/sym/v1/symv1connect")}},
+
+		// C6-03: the snapshot kind list links no worker-side package.
+		{ImportPath: m("internal/snapshotkind"), Deps: []string{m("internal/worker"), m("internal/mirror"), m("internal/venue/binance"),
+			m("internal/classify"), "slices"}},
+		{ImportPath: m("internal/snapshot"), Deps: []string{m("internal/snapshotkind"), m("internal/worker"), m("internal/venue/binance")}}, // the handler: free
 	}
 	got := check(pkgs)
 	want := []string{
@@ -338,6 +357,9 @@ func TestCheckReportsViolations(t *testing.T) {
 		"cmd/cpanel-api links " + mf("contract/gen/mftiko/sym/v1/symv1connect"),
 		"internal/doctor links " + mf("contract/gen/api/v1"),
 		"internal/doctor links " + mf("contract/gen/mftiko/sym/v1/symv1connect"),
+		"internal/snapshotkind links internal/worker",
+		"internal/snapshotkind links internal/mirror",
+		"internal/snapshotkind links internal/venue/binance",
 	}
 	if len(got) != len(want) {
 		t.Errorf("%d violations, want %d:\n%s", len(got), len(want), strings.Join(got, "\n"))

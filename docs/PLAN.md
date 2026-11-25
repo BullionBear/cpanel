@@ -109,16 +109,16 @@ C2 骨架 ──► C3 Job 系統 ──┬─► C4 Mirror ──┐
 
 ## C6 快照（BinanceUM 起步）
 
-決策 C6-D001–D003 見 [DECISIONS.md](DECISIONS.md)。
+決策 C6-D001–C6-D009 見 [DECISIONS.md](DECISIONS.md)。
 
 | Ticket | 內容 | 驗收 | 依賴 |
 |---|---|---|---|
 | C6-01 #99 | venue profile 範本＋BinanceUM：快照與歷史用到的端點、分頁、限速與 weight、錯誤碼對照錯誤類別、終態對照、去重鍵、查詢期限 | 文件 review 過；之後每個 venue 照這份寫 | C5-03 |
 | C6-02 #100 | 快照表（`snapshot_batch`、`balance_snapshot`、`position_snapshot`、`raw.venue_snapshot`）；ReconcileLoop 的整點規則，唯一鍵 `(exchange_account_id, bucket)`；只派給有 `active` credential 的帳號（C6-D002）；缺口的計算與告警 | 停掉 worker 一小時，該時間點顯示為缺口 | C3-02、C4-02 |
-| C6-03 | BinanceUM 快照 job：各錢包餘額、持倉（數量、方向、開倉價、mark、未實現損益、保證金）；空帳號也寫 batch | 結果與 Binance 網頁一致；清空的帳號讀到空的最新快照 | C6-01、C6-02、C5-03 |
-| C6-04 | 快照 API（`/snapshots`、`/balances?at=`、`/positions?at=`）＋ UI | | C6-03 |
-| C6-05 | 驗收：key 失效演練。撤銷一把正式站上專用的唯讀 key（C6-D003），一小時內轉 `auth_failed`、歷史與快照 job 停派、只剩 probe；重新登記後恢復 | 演練紀錄附在 ticket | C6-03、C6-06 |
-| C6-06 | credential 斷路（C6-D001、C6-D002）：`account:<id>` 上任何 job 的 `auth` 都計數；`credential.probe` 讀帳號層與每個啟用的 kind；`Streams` 規則排除沒有 `active` credential 的帳號 | 缺 `fapi` 權限的 key：第一次快照之後兩輪內轉 `auth_failed`，之後只剩 probe，不會自己跳回 `active`；補上權限後恢復 | C5-04、C6-02 |
+| C6-03 #110 | BinanceUM 快照 job：`GET /fapi/v3/balance`、`GET /fapi/v3/positionRisk`，餘額與持倉（數量、方向、開倉價、mark、未實現損益、保證金）；空帳號也寫 batch；失敗不寫 batch、同一整點 2 分鐘後再派（C6-D006）；持倉的 category 用 ticker 查（C6-D007）；缺口從第一筆 batch 起算（C6-D009）；`-1022` 是 `auth`、Binance 的 403 是 `rate_limited`；限速器不動（C6-D008） | httptest 用 profile 的回應範例：單向、雙向、`positionAmt` 為 0、空帳號；清空的帳號讀到空的最新快照；401／`-2015`、5xx 沒有 batch，job 分別是 `auth`、`unavailable` | C6-01、C6-02、C5-03 |
+| C6-04 #112 | 快照 API（`/snapshots`、`/balances?at=`、`/positions?at=`）＋ UI | | C6-03 |
+| C6-05 #113 | 正式站驗收：快照與 Binance 網頁核對、缺口、key 失效演練。撤銷一把正式站上專用的唯讀 key（C6-D003），撤銷後的下一個整點起 5 分鐘內轉 `auth_failed`、歷史與快照 job 停派、只剩 probe；重新登記後恢復 | 演練紀錄附在 ticket；快照與 Binance 網頁一致 | C6-03、C6-06，並已部署 |
+| C6-06 #111 | credential 斷路（C6-D001、C6-D002）：`account:<id>` 上任何 job 的 `auth` 都計數；`credential.probe` 讀帳號層與每個啟用的 kind；`Streams` 規則排除沒有 `active` credential 的帳號 | 缺 `fapi` 權限的 key：第一次快照之後兩輪內轉 `auth_failed`，之後只剩 probe，不會自己跳回 `active`；補上權限後恢復 | C5-04、C6-02 |
 
 ## C7 History（BinanceUM 起步）
 

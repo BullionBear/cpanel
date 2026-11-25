@@ -277,7 +277,7 @@ C5-D001–C5-D007 於 2026-11-10 定在 epic #36，原文照錄。同時確認�
 
 ## C6 快照（#37）
 
-C6-D001–C6-D003 於 2026-11-20 定在 epic #37。C6-D004、C6-D005 於 2026-11-23 定在 C6-02。
+C6-D001–C6-D003 於 2026-11-20 定在 epic #37。C6-D004、C6-D005 於 2026-11-23 定在 C6-02。C6-D006–C6-D009 於 2026-11-25 定，由 C6-03（#110）實作；C6-D007、C6-D009 修訂 C6-D005。
 
 ### C6-D001 任何 job 的 `auth` 失敗都計數（修訂 C5-D003 對資料 job 的部分）
 
@@ -304,12 +304,36 @@ C6-D001–C6-D003 於 2026-11-20 定在 epic #37。C6-D004、C6-D005 於 2026-11
 - 過去的整點不另插 job。同一把 `dedup_key` 已經成功結束（含這次放棄）就不再插，避免空轉；失敗的同一小時還可以再試。
 - 理由：晚到的餘額與持倉不是那個整點的快照。補抓會把晚的資料記成當時的狀態。
 
-### C6-D005 欄位、錢包代碼與缺口
+### C6-D005 欄位、錢包代碼與缺口（持倉的 category 由 C6-D007、缺口起點由 C6-D009 修訂）
 
 - 餘額欄位對 `docs/venues/binance-um.md`：`balance`、`available_balance`、`cross_wallet_balance`、`max_withdraw_amount`。沒有 `locked`。BinanceUM 的錢包代碼是 `um`。
-- 持倉保留 `position_amt`（不取絕對值；0 不寫）、`position_side`、`entry_price`、`mark_price`、`unrealized_profit`，以及 `isolated_margin`、`initial_margin`、`position_initial_margin`、`isolated_wallet`。`(venue, category, exch_ticker)` 對不到 UID 就存 null，ticker 仍留著。明細帶 `norm_version`。
+- 持倉保留 `position_amt`（不取絕對值；0 不寫）、`position_side`、`entry_price`、`mark_price`、`unrealized_profit`，以及 `isolated_margin`、`initial_margin`、`position_initial_margin`、`isolated_wallet`。`(venue, category, exch_ticker)` 對不到 UID 就存 null，ticker 仍留著。明細帶 `norm_version`。**已修訂：** 查法與 category 可為 null 見 C6-D007。
 - kind 的結果是 `succeeded`、`failed`、`unimplemented`。
-- 缺口從該帳號最早的 `verified_at` 所在整點算到當前整點之前。只含現在仍有 active read credential、而且有啟用的 kind 落在 worker 傳入清單裡的帳號。清單不寫死在 SQL。正式 worker 在 C6-03 登記 handler 之前傳空清單，所以不派工、也不報缺口。
+- 缺口從該帳號最早的 `verified_at` 所在整點算到當前整點之前。只含現在仍有 active read credential、而且有啟用的 kind 落在 worker 傳入清單裡的帳號。清單不寫死在 SQL。正式 worker 在 C6-03 登記 handler 之前傳空清單，所以不派工、也不報缺口。**已修訂：** 起點改成第一筆 batch，見 C6-D009。
+
+### C6-D006 快照失敗不寫 batch，同一整點 2 分鐘後再派
+
+- 任一支端點失敗：不寫 batch，`snapshot_batch_kind` 不寫 `failed`，job 以原錯誤類別結束（`auth` 交給 credential hook）。
+- 整點規則看同一 `dedup_key` 最近一次 `failed` 的 `job_run`：結束未滿 2 分鐘就不插（`reconcile.SnapshotRetryAfter`）。過了 15 分鐘，handler 照 C6-D004 放棄，這個整點就是缺口。
+- `failed` 這個值留給 C8：一個帳號有多個可快照的 kind、其中一個失敗時再定。
+- 理由：缺口的意思是「這一小時沒有可信的快照」。撤銷 key 之後，下一個整點兩次嘗試（約 2 分鐘）就能轉 `auth_failed`（C6-D001，C6-06）。15 分鐘內最多 8 次，每次 weight 10。沒有這條，一次失敗之後下一輪（5 秒）就再插一次。
+
+### C6-D007 持倉的 category 用 ticker 查
+
+- `positionRisk` 沒有 category。用 `(venue, exch_ticker)` 在 `mirror.symbol` 找 category 與 UID（`mirror.LookupTicker`），活躍列優先，其次 `sym_updated_at` 較新、`uid` 較大（同 C4-D011）。找不到就兩個都存 null，ticker 留著。
+- `ledger.position_snapshot.category` 可空（有值時不得為空字串），主鍵改成 `(batch_id, kind, venue, exch_ticker, position_side)`（migration 0016）。C6-04 的回應裡 `category` 可為 null。
+- 不採用：找不到時存固定字串（SYM 裡不存在的 category，之後的 join 都要排除）；從 ticker 的樣子猜（profile 寫交割合約的 category 未確認）。
+
+### C6-D008 fapi 的 weight 不調，維持現行 limiter
+
+- fapi 與現貨照舊共用 `noteWeight` 的 6000／4800。不讀 `exchangeInfo`，不另訂 fapi 預算，profile §5 不填上限。
+- 理由：快照一個帳號一小時用 weight 10，失敗重試時 15 分鐘最多 8 次（C6-D006），離共用的 4800 很遠。
+
+### C6-D009 缺口從帳號的第一筆 batch 起算
+
+- `ledger.snapshot_gaps` 的起點是帳號的第一筆 batch（migration 0016）。還沒有 batch 的帳號不列缺口。
+- 這樣的帳號，`cpanel_snapshot_batch_age_seconds` 從第一次為它派 snapshot（`ingest.job` 或 `ingest.job_run`）的整點起算；從沒派過就不輸出。一直抓不到的 key 由 `CpanelSnapshotStale` 在兩小時後告警。
+- 理由：從 `verified_at` 起算的話，C6-03 一上線所有已驗證帳號的每一小時都是缺口，`CpanelSnapshotGap` 會連續觸發 24 小時；C8 每加一種可快照的 kind、或之後才啟用 `BinanceUM` 的舊帳號也一樣。代價是第一筆 batch 之前的整點不算缺口，那一段由年齡告警負責。
 
 ## C7 History（#38）
 
