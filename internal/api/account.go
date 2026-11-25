@@ -735,7 +735,7 @@ func loadCredentials(ctx context.Context, q accountDB, ids []int64) (map[int64][
 		return out, nil
 	}
 	rows, err := q.Query(ctx, `
-		SELECT id, exchange_account_id, status, api_key_last4, failure_reason, verified_at
+		SELECT id, exchange_account_id, status, api_key_last4, failure_reason, verified_at, exchange_env, key_type
 		FROM pms.credential
 		WHERE exchange_account_id = ANY($1)
 		ORDER BY id`, ids)
@@ -746,11 +746,13 @@ func loadCredentials(ctx context.Context, q accountDB, ids []int64) (map[int64][
 	for rows.Next() {
 		var accountID int64
 		var cred cpanelv1.Credential
-		var status string
-		if err := rows.Scan(&cred.Id, &accountID, &status, &cred.ApiKeyLast4, &cred.FailureReason, &cred.VerifiedAt); err != nil {
+		var status, env, keyType string
+		if err := rows.Scan(&cred.Id, &accountID, &status, &cred.ApiKeyLast4, &cred.FailureReason, &cred.VerifiedAt, &env, &keyType); err != nil {
 			return nil, err
 		}
 		cred.Status = cpanelv1.CredentialStatus(status)
+		cred.ExchangeEnv = cpanelv1.CredentialExchangeEnv(env)
+		cred.KeyType = cpanelv1.CredentialKeyType(keyType)
 		out[accountID] = append(out[accountID], cred)
 	}
 	return out, rows.Err()

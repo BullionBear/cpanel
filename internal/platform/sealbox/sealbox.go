@@ -95,10 +95,12 @@ func ParsePublicKey(s string) (PublicKey, error) {
 }
 
 // Credentials are an account's exchange key once opened. They print REDACTED.
+// KeyType empty means hmac, including every box sealed before the field existed.
 type Credentials struct {
 	APIKey     string
 	APISecret  string
 	Passphrase string
+	KeyType    string
 }
 
 const redactedCreds = "sealbox.Credentials{REDACTED}"
@@ -134,6 +136,7 @@ func SealCredentials(pub PublicKey, exchangeAccountID, credentialID int64, c Cre
 		ApiKey:            c.APIKey,
 		ApiSecret:         c.APISecret,
 		Passphrase:        c.Passphrase,
+		KeyType:           c.KeyType,
 	})
 	if err != nil {
 		return nil, errors.New("sealbox: credentials do not marshal")

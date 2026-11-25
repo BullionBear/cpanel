@@ -7,6 +7,42 @@ import (
 	"time"
 )
 
+// Defines values for CredentialExchangeEnv.
+const (
+	Prod    CredentialExchangeEnv = "prod"
+	Testnet CredentialExchangeEnv = "testnet"
+)
+
+// Valid indicates whether the value is a known member of the CredentialExchangeEnv enum.
+func (e CredentialExchangeEnv) Valid() bool {
+	switch e {
+	case Prod:
+		return true
+	case Testnet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CredentialKeyType.
+const (
+	CredentialKeyTypeEd25519 CredentialKeyType = "ed25519"
+	CredentialKeyTypeHmac    CredentialKeyType = "hmac"
+)
+
+// Valid indicates whether the value is a known member of the CredentialKeyType enum.
+func (e CredentialKeyType) Valid() bool {
+	switch e {
+	case CredentialKeyTypeEd25519:
+		return true
+	case CredentialKeyTypeHmac:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CredentialStatus.
 const (
 	Active     CredentialStatus = "active"
@@ -28,6 +64,24 @@ func (e CredentialStatus) Valid() bool {
 	case Rejected:
 		return true
 	case Unverified:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CredentialCreateKeyType.
+const (
+	CredentialCreateKeyTypeEd25519 CredentialCreateKeyType = "ed25519"
+	CredentialCreateKeyTypeHmac    CredentialCreateKeyType = "hmac"
+)
+
+// Valid indicates whether the value is a known member of the CredentialCreateKeyType enum.
+func (e CredentialCreateKeyType) Valid() bool {
+	switch e {
+	case CredentialCreateKeyTypeEd25519:
+		return true
+	case CredentialCreateKeyTypeHmac:
 		return true
 	default:
 		return false
@@ -195,12 +249,24 @@ type Credential struct {
 	// ApiKeyLast4 api key 的末四碼。不是 secret。
 	ApiKeyLast4 string `json:"api_key_last4"`
 
+	// ExchangeEnv 建立這把 credential 的部署。worker 拒絕另一個環境的。
+	ExchangeEnv CredentialExchangeEnv `json:"exchange_env"`
+
 	// FailureReason rejected 時看得到原因。不含 secret。
-	FailureReason *string          `json:"failure_reason"`
-	Id            int64            `json:"id"`
-	Status        CredentialStatus `json:"status"`
-	VerifiedAt    *time.Time       `json:"verified_at"`
+	FailureReason *string `json:"failure_reason"`
+	Id            int64   `json:"id"`
+
+	// KeyType 省略登記時是 hmac。ed25519 的 secret 是未加密的 PKCS#8 PEM，不在這個回應裡。
+	KeyType    CredentialKeyType `json:"key_type"`
+	Status     CredentialStatus  `json:"status"`
+	VerifiedAt *time.Time        `json:"verified_at"`
 }
+
+// CredentialExchangeEnv 建立這把 credential 的部署。worker 拒絕另一個環境的。
+type CredentialExchangeEnv string
+
+// CredentialKeyType 省略登記時是 hmac。ed25519 的 secret 是未加密的 PKCS#8 PEM，不在這個回應裡。
+type CredentialKeyType string
 
 // CredentialStatus defines model for Credential.Status.
 type CredentialStatus string
@@ -210,9 +276,15 @@ type CredentialCreate struct {
 	ApiKey    string `json:"api_key"`
 	ApiSecret string `json:"api_secret"`
 
+	// KeyType 省略是 hmac。ed25519 只給 binance，api_secret 是未加密的 PKCS#8 PEM。
+	KeyType *CredentialCreateKeyType `json:"key_type,omitempty"`
+
 	// Passphrase OKX 必填。Binance、Bybit 不可帶。
 	Passphrase *string `json:"passphrase,omitempty"`
 }
+
+// CredentialCreateKeyType 省略是 hmac。ed25519 只給 binance，api_secret 是未加密的 PKCS#8 PEM。
+type CredentialCreateKeyType string
 
 // ErrorClass 錯誤類別（C3-04）。
 type ErrorClass string

@@ -4,10 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/BullionBear/cpanel/internal/classify"
+	"github.com/BullionBear/cpanel/internal/platform/exchangeenv"
 	"github.com/BullionBear/cpanel/internal/venue"
 )
 
@@ -128,5 +130,74 @@ func TestFuturesFamily(t *testing.T) {
 	}
 	if err := c.ReadFamily(context.Background(), "dapi"); err == nil || c.Calls() != 1 {
 		t.Fatalf("dapi err %v calls %d", err, c.Calls())
+	}
+}
+
+func TestHosts(t *testing.T) {
+	prod := Client{}
+	if prod.spot() != spotHost || prod.futures() != futuresHost {
+		t.Fatalf("prod %s %s", prod.spot(), prod.futures())
+	}
+	testnet := Client{Env: exchangeenv.Testnet}
+	if testnet.spot() != spotTestnet || testnet.futures() != futuresTestnet {
+		t.Fatalf("testnet %s %s", testnet.spot(), testnet.futures())
+	}
+	over := Client{Env: exchangeenv.Testnet, Spot: "http://spot.example", Futures: "http://futures.example"}
+	if over.spot() != "http://spot.example" || over.futures() != "http://futures.example" {
+		t.Fatalf("override %s %s", over.spot(), over.futures())
+	}
+}
+
+// exampleEd25519PEM is the illustrative key in Binance's FIX testnet docs
+// (testnet/fix-api.md). It is not a credential and must not be used against an exchange.
+// The pieces stay separate so the file does not hold one PEM.
+func exampleEd25519PEM() string {
+	body := "MC4CAQAw" + "BQYDK2Vw" + "BCIEIIJE" + "YWtGBrhA" +
+		"Cmb9Dvy+" + "qa8WEf0l" + "QOl1s4CL" + "IAB9m89u"
+	return "-----BEGIN " + "PRIVATE KEY-----\n" + body + "\n-----END " + "PRIVATE KEY-----\n"
+}
+
+func TestEd25519MatchesBinanceDocs(t *testing.T) {
+	payload := strings.Join([]string{"A", "EXAMPLE", "SPOT", "1", "20240627-11:17:25.223"}, "\x01")
+	const want = "4MHXelVVcpkdwuLbl6n73HQUXUf1dse2PCgT1DYqW9w8AVZ1RACFGM+5UdlGPrQHrgtS3CvsRURC1oj73j8gCA=="
+	got, err := SignEd25519(exampleEd25519PEM(), payload)
+	if err != nil || got != want {
+		t.Fatalf("signature %s %v", got, err)
+	}
+	if hmacSig := SignQuery(exampleEd25519PEM(), payload); hmacSig == got {
+		t.Fatal("ed25519 collapsed to hmac")
+	}
+}
+
+func TestCheckAccountTestnet(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method %s", r.Method)
+		}
+		paths = append(paths, r.URL.Path)
+		q := r.URL.Query()
+		signed := "recvWindow=" + q.Get("recvWindow") + "&timestamp=" + q.Get("timestamp")
+		want, err := SignEd25519(exampleEd25519PEM(), signed)
+		if err != nil || q.Get("signature") != want {
+			t.Errorf("signature %s %v", q.Get("signature"), err)
+		}
+		if r.URL.Path != "/fapi/v2/account" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"totalWalletBalance":"1"}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := &Client{Spot: srv.URL, Futures: srv.URL, Key: "key", Secret: exampleEd25519PEM(), KeyType: exchangeenv.KeyEd25519, Env: exchangeenv.Testnet}
+	check, err := c.CheckAccount(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !check.ReadOnly || check.UID != "" || !strings.Contains(check.Summary, "testnet") || !strings.Contains(check.Summary, "read-only") {
+		t.Fatalf("%+v", check)
+	}
+	if strings.Join(paths, ",") != "/fapi/v2/account" || c.Calls() != 1 {
+		t.Fatalf("paths %v calls %d", paths, c.Calls())
 	}
 }

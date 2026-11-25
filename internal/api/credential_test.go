@@ -2,7 +2,11 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/BullionBear/cpanel/internal/auth"
+	"github.com/BullionBear/cpanel/internal/platform/exchangeenv"
 	"github.com/BullionBear/cpanel/internal/platform/pgtest"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox/open"
 	"github.com/BullionBear/cpanel/internal/reconcile"
@@ -70,8 +75,15 @@ func TestRegisterCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opened.APIKey != "key-1234" || opened.APISecret != secret || opened.Passphrase != "" {
+	if opened.APIKey != "key-1234" || opened.APISecret != secret || opened.Passphrase != "" || opened.KeyType != "hmac" {
 		t.Fatal("opened credentials do not match")
+	}
+	var storedEnv, storedType string
+	if err := pool.QueryRow(ctx, `SELECT exchange_env, key_type FROM pms.credential WHERE id = $1`, got.ID).Scan(&storedEnv, &storedType); err != nil {
+		t.Fatal(err)
+	}
+	if storedEnv != "prod" || storedType != "hmac" || !strings.Contains(rec.Body.String(), `"exchange_env":"prod"`) || !strings.Contains(rec.Body.String(), `"key_type":"hmac"`) {
+		t.Fatalf("stored %s %s body %s", storedEnv, storedType, rec.Body.String())
 	}
 	var kind, dedup, lease string
 	var credID int64
@@ -142,6 +154,77 @@ func TestRegisterCredential(t *testing.T) {
 	if n := credentialCount(t, ctx, pool, bybit.ID); n != 0 {
 		t.Fatalf("rows without a key %d", n)
 	}
+}
+
+func TestRegisterEd25519(t *testing.T) {
+	db := pgtest.Start(t)
+	ctx := context.Background()
+	if _, err := migrations.Up(ctx, db.DSN()); err != nil {
+		t.Fatal(err)
+	}
+	pool := poolFor(t, db.DSN())
+	key, err := open.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := Handler(Config{Log: zerolog.Nop(), Pool: pool, Auth: testAuthSettings(), Sealbox: key.Public(), HasSealbox: true, ExchangeEnv: exchangeenv.Testnet})
+	raw := "cpanel_ed25519_test"
+	if _, err := (&auth.Store{Pool: pool}).CreateToken(ctx, "90", "ada", "ed25519", raw); err != nil {
+		t.Fatal(err)
+	}
+	authz := bearerHeader(raw)
+	pemText := strings.TrimSpace(testEd25519PEM(t))
+	binance := decodeAccount(t, call(h, http.MethodPost, "/exchange-accounts", `{"exchange":"binance","exch_account_uid":"accept-pms","label":"testnet","kinds":["BinanceUM"]}`, authz))
+	body, err := json.Marshal(map[string]string{"api_key": "ed-key-1234", "api_secret": pemText, "key_type": "ed25519"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := call(h, http.MethodPost, "/exchange-accounts/"+strconv.FormatInt(binance.ID, 10)+"/credentials", string(body), authz)
+	if rec.Code != http.StatusAccepted || strings.Contains(rec.Body.String(), pemText) || !strings.Contains(rec.Body.String(), `"key_type":"ed25519"`) || !strings.Contains(rec.Body.String(), `"exchange_env":"testnet"`) {
+		t.Fatalf("register %d %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	var sealed []byte
+	if err := pool.QueryRow(ctx, `SELECT ciphertext FROM pms.credential WHERE id = $1`, got.ID).Scan(&sealed); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := open.OpenCredentials(key, sealed, binance.ID, got.ID)
+	if err != nil || opened.KeyType != "ed25519" || opened.APISecret != pemText {
+		t.Fatal("opened ed25519 credentials do not match")
+	}
+	var params string
+	if err := pool.QueryRow(ctx, `SELECT params::text FROM meta.audit WHERE action = $1 AND target = $2`, credentialCreate, "credential:"+strconv.FormatInt(got.ID, 10)).Scan(&params); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(params, pemText) || strings.Contains(params, "BEGIN PRIVATE KEY") {
+		t.Fatal("audit contains the private key")
+	}
+
+	bybit := decodeAccount(t, call(h, http.MethodPost, "/exchange-accounts", `{"exchange":"bybit","exch_account_uid":"bybit-ed","label":"bybit"}`, authz))
+	bybitBody, err := json.Marshal(map[string]string{"api_key": "bybit-key", "api_secret": pemText, "key_type": "ed25519"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	problemOf(t, call(h, http.MethodPost, "/exchange-accounts/"+strconv.FormatInt(bybit.ID, 10)+"/credentials", string(bybitBody), authz), http.StatusBadRequest, "bad_request")
+	problemOf(t, call(h, http.MethodPost, "/exchange-accounts/"+strconv.FormatInt(binance.ID, 10)+"/credentials", `{"api_key":"abcd","api_secret":"not-a-pem","key_type":"ed25519"}`, authz), http.StatusBadRequest, "bad_request")
+}
+
+func testEd25519PEM(t *testing.T) string {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: raw}))
 }
 
 func TestCredentialLifecycle(t *testing.T) {

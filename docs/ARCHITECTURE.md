@@ -150,7 +150,7 @@ archtest 另外擋（C4-D002、C4-D006）：cpanel-api 不連結 `internal/mftik
 
      兩件事都通過後，再對每個啟用的 kind 確認讀得到那組 API，結果記在 kind 那一列。kind 讀不到不讓 credential 失敗（C5-D003）；之後那個 kind 的資料 job 失敗，走 §4.4 的 `auth`（C6-D001）。
   3. 通過就轉 `active`。驗證從 worker 發出，用的正是之後拉歷史的出口 IP，所以 key 的 IP 白名單設錯會在這一步就被發現。
-  - testnet（C7-D002，C7-09）：沒有 spot 的 `uid` 與 `sapi` 的 `apiRestrictions`，改成讀 `fapi` 的帳號確認 key 可用；uid 以登記時填的為準；不驗唯讀。credential 記下所屬環境，worker 拒絕其他環境的 credential。
+  - testnet（C7-D002，C7-09）：沒有 spot 的 `uid` 與 `sapi` 的 `apiRestrictions`，改成讀 `fapi` 的帳號確認 key 可用；uid 以登記時填的為準；不驗唯讀。credential 記下所屬環境，worker 拒絕其他環境的 credential，也不打交易所。`permission_summary` 寫明是 testnet、沒有驗唯讀。
 - **key 是 write-only：** 登記後不回傳 secret（比照 mftiko E10-D063）。唯讀 key 沒有 reveal 的需要；要換就重新登記。
 - `pms.credential.purpose` 一期只有 `read`。
 - **key 不離開 cpanel（D11）：** 不與 mftiko 共享，也不供 mftiko 使用；vault 沒有把 key 交給 mftiko 的 API。
@@ -363,7 +363,7 @@ archtest 另外擋（C4-D002、C4-D006）：cpanel-api 不連結 `internal/mftik
 - **secret**：主機上的檔案，compose `secrets` 掛進容器；環境變數只放路徑。
 - **部署**：GitHub Actions 只 build 與發布 image（C2-06）。主機上的 `deploy.sh <digest>`：拉 image → migrate（失敗即停）→ 換版 → 等 `/readyz` → 不過就換回上一個 digest。
 - **cpanel-api 與 worker 同機（C2-D015）：** 運維上的取捨，不是程式的約束。I6 在程式層由 archtest 擋，私鑰只掛進 worker 容器；拿到主機 root 就同時拿到私鑰。key 都是唯讀、綁出口 IP，外洩的後果是帳務資料被讀。要拆開時把 worker 移到不對公網的主機，程式不用改。
-- **testnet（C7-D002）：** 另一套部署與自己的 database，不和正式資料混用；正式環境的設定不能打開 testnet。
+- **testnet（C7-D002）：** 另一套部署與自己的 database，不和正式資料混用。`-exchange-env testnet` 還要 `-allow-testnet`（`$CPANEL_ALLOW_TESTNET=1`）；正式環境的設定不帶這面旗標，只改環境會拒絕啟動。Binance 的 host 是 `https://testnet.binancefuture.com` 與 `https://testnet.binance.vision`。
 - §4.9 給 mftiko 的內部 API 之後是另一個只聽私網的 listener，不掛在 Traefik 上。
 
 ---

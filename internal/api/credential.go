@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	cpanelv1 "github.com/BullionBear/cpanel/contract/gen/cpanel/v1"
+	"github.com/BullionBear/cpanel/internal/platform/ed25519pem"
+	"github.com/BullionBear/cpanel/internal/platform/exchangeenv"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox"
 	"github.com/BullionBear/cpanel/internal/reconcile"
 )
@@ -57,6 +59,13 @@ func (s *server) createCredential(ctx context.Context, actor string, accountID i
 	if len(apiKey) < 4 {
 		return cpanelv1.Credential{}, badAccount("api_key must have at least 4 characters")
 	}
+	keyType := exchangeenv.KeyHMAC
+	if in.KeyType != nil {
+		keyType = string(*in.KeyType)
+	}
+	if keyType != exchangeenv.KeyHMAC && keyType != exchangeenv.KeyEd25519 {
+		return cpanelv1.Credential{}, badAccount("key_type must be hmac or ed25519")
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return cpanelv1.Credential{}, err
@@ -85,12 +94,21 @@ func (s *server) createCredential(ctx context.Context, actor string, accountID i
 	if exchange != "okx" && passphrase != "" {
 		return cpanelv1.Credential{}, badAccount("passphrase is only used for okx")
 	}
+	if keyType == exchangeenv.KeyEd25519 {
+		if exchange != "binance" {
+			return cpanelv1.Credential{}, badAccount("ed25519 is only used for binance")
+		}
+		if _, err := ed25519pem.PrivateKey(secret); err != nil {
+			return cpanelv1.Credential{}, badAccount(err.Error())
+		}
+	}
+	env := s.exchangeEnvironment()
 	last4 := apiKey[len(apiKey)-4:]
 	var id int64
 	err = tx.QueryRow(ctx, `
-		INSERT INTO pms.credential (exchange_account_id, purpose, status, ciphertext, api_key_last4)
-		VALUES ($1, 'read', 'unverified', '\x01', $2)
-		RETURNING id`, accountID, last4).Scan(&id)
+		INSERT INTO pms.credential (exchange_account_id, purpose, status, ciphertext, api_key_last4, exchange_env, key_type)
+		VALUES ($1, 'read', 'unverified', '\x01', $2, $3, $4)
+		RETURNING id`, accountID, last4, env, keyType).Scan(&id)
 	if err != nil {
 		if pgCode(err) == "23505" {
 			return cpanelv1.Credential{}, conflictAccount("an unverified credential already exists")
@@ -100,7 +118,7 @@ func (s *server) createCredential(ctx context.Context, actor string, accountID i
 	// s.sealbox is the current recipient. A rotation points it at the new public key;
 	// credential.rekey moves rows that are still sealed to the previous one.
 	sealed, err := sealbox.SealCredentials(s.sealbox, accountID, id, sealbox.Credentials{
-		APIKey: apiKey, APISecret: secret, Passphrase: passphrase,
+		APIKey: apiKey, APISecret: secret, Passphrase: passphrase, KeyType: keyType,
 	})
 	if err != nil {
 		return cpanelv1.Credential{}, err
@@ -119,13 +137,17 @@ func (s *server) createCredential(ctx context.Context, actor string, accountID i
 	}
 	if err := insertAudit(ctx, tx, actor, credentialCreate, "credential:"+strconv.FormatInt(id, 10), map[string]any{
 		"exchange_account_id": accountID, "credential_id": id, "api_key_last4": last4, "status": "unverified",
+		"exchange_env": env, "key_type": keyType,
 	}, map[string]any{"status": http.StatusAccepted}); err != nil {
 		return cpanelv1.Credential{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return cpanelv1.Credential{}, err
 	}
-	return cpanelv1.Credential{Id: id, Status: cpanelv1.Unverified, ApiKeyLast4: last4}, nil
+	return cpanelv1.Credential{
+		Id: id, Status: cpanelv1.Unverified, ApiKeyLast4: last4,
+		ExchangeEnv: cpanelv1.CredentialExchangeEnv(env), KeyType: cpanelv1.CredentialKeyType(keyType),
+	}, nil
 }
 
 func createCredentialErr(err error) (cpanelv1.CreateExchangeAccountCredentialResponseObject, bool) {

@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/BullionBear/cpanel/internal/platform/exchangeenv"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox/open"
 	"github.com/BullionBear/cpanel/internal/reconcile"
@@ -23,6 +24,7 @@ type Probe struct {
 	Key       *open.PrivateKey
 	Previous  *open.PrivateKey
 	Endpoints Endpoints
+	Env       string
 	Open      func(exchange string, cred sealbox.Credentials) (Checker, error)
 }
 
@@ -41,6 +43,14 @@ func (p Probe) Handle(ctx context.Context, job *worker.Job) (worker.Result, erro
 	if row.deleted || (row.status != "auth_failed" && row.status != "active") || len(row.ciphertext) == 0 {
 		return worker.Result{}, nil
 	}
+	if !exchangeenv.Same(p.Env, row.exchangeEnv) {
+		if row.status == "auth_failed" {
+			if err := p.deferProbe(ctx, row.id, environmentMismatch(p.Env, row.exchangeEnv)); err != nil {
+				return worker.Result{}, err
+			}
+		}
+		return worker.Result{}, nil
+	}
 	cred, err := openRow(p.Key, p.Previous, row.ciphertext, row.accountID, row.id)
 	if err != nil {
 		if row.status == "auth_failed" {
@@ -50,7 +60,9 @@ func (p Probe) Handle(ctx context.Context, job *worker.Job) (worker.Result, erro
 		}
 		return worker.Result{}, nil
 	}
-	client, err := openChecker(p.Endpoints, p.Open, row.exchange, cred)
+	endpoints := p.Endpoints
+	endpoints.Env = exchangeenv.Normalize(p.Env)
+	client, err := openChecker(endpoints, p.Open, row.exchange, cred)
 	if err != nil {
 		return worker.Result{}, err
 	}
@@ -63,6 +75,7 @@ func (p Probe) Handle(ctx context.Context, job *worker.Job) (worker.Result, erro
 		}
 		return worker.Result{Requests: client.Calls()}, err
 	}
+	check = alignCheck(p.Env, row, check)
 	if !check.ReadOnly || check.UID != row.uid {
 		if row.status == "auth_failed" {
 			reason := check.Reason
@@ -87,10 +100,10 @@ func (p Probe) Handle(ctx context.Context, job *worker.Job) (worker.Result, erro
 func (p Probe) load(ctx context.Context, id int64) (credRow, error) {
 	var row credRow
 	err := p.DB.QueryRow(ctx, `
-		SELECT c.id, c.exchange_account_id, a.exchange, a.exch_account_uid, c.status, c.ciphertext, a.deleted_at IS NOT NULL
+		SELECT c.id, c.exchange_account_id, a.exchange, a.exch_account_uid, c.status, c.ciphertext, c.exchange_env, a.deleted_at IS NOT NULL
 		FROM pms.credential c
 		JOIN pms.exchange_account a ON a.id = c.exchange_account_id
-		WHERE c.id = $1`, id).Scan(&row.id, &row.accountID, &row.exchange, &row.uid, &row.status, &row.ciphertext, &row.deleted)
+		WHERE c.id = $1`, id).Scan(&row.id, &row.accountID, &row.exchange, &row.uid, &row.status, &row.ciphertext, &row.exchangeEnv, &row.deleted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return credRow{}, fmt.Errorf("credential.probe: credential %d not found", id)
 	}

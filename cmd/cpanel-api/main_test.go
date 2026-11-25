@@ -17,6 +17,7 @@ import (
 
 	"github.com/BullionBear/cpanel/internal/auth"
 	"github.com/BullionBear/cpanel/internal/cmdtest"
+	"github.com/BullionBear/cpanel/internal/platform/exchangeenv"
 	"github.com/BullionBear/cpanel/internal/platform/logger"
 	"github.com/BullionBear/cpanel/internal/platform/pgtest"
 	"github.com/BullionBear/cpanel/migrations"
@@ -30,16 +31,16 @@ func TestParseArgs(t *testing.T) {
 		args []string
 		want options
 	}{
-		{"defaults", nil, nil, options{listen: ":8080", logLevel: logger.DefaultLevel, shutdownTimeout: 10 * time.Second, requestTimeout: 30 * time.Second, sessionTTL: auth.DefaultSessionTTL, roleRecheck: auth.DefaultRoleRecheck}},
+		{"defaults", nil, nil, options{listen: ":8080", logLevel: logger.DefaultLevel, shutdownTimeout: 10 * time.Second, requestTimeout: 30 * time.Second, sessionTTL: auth.DefaultSessionTTL, roleRecheck: auth.DefaultRoleRecheck, exchangeEnv: exchangeenv.Prod}},
 		{"environment", map[string]string{
 			"CPANEL_API_LISTEN": ":9000", "CPANEL_LOG_LEVEL": "debug", "CPANEL_SHUTDOWN_TIMEOUT": "3s", "CPANEL_REQUEST_TIMEOUT": "2s",
 			"CPANEL_DATABASE_URL": "postgres://db/cpanel", "CPANEL_PUBLIC_ORIGIN": "https://cpanel.example",
 			"CPANEL_DISCORD_CLIENT_ID": "cid", "CPANEL_DISCORD_CLIENT_SECRET": "sec", "CPANEL_SESSION_TTL": "2h",
 			"CPANEL_WORKER_LISTEN": ":1", // the worker's, not ours
-		}, nil, options{listen: ":9000", database: "postgres://db/cpanel", logLevel: logger.Level(zerolog.DebugLevel), shutdownTimeout: 3 * time.Second, requestTimeout: 2 * time.Second, publicOrigin: "https://cpanel.example", discordClientID: "cid", discordClientSecret: "sec", sessionTTL: 2 * time.Hour, roleRecheck: auth.DefaultRoleRecheck}},
+		}, nil, options{listen: ":9000", database: "postgres://db/cpanel", logLevel: logger.Level(zerolog.DebugLevel), shutdownTimeout: 3 * time.Second, requestTimeout: 2 * time.Second, publicOrigin: "https://cpanel.example", discordClientID: "cid", discordClientSecret: "sec", sessionTTL: 2 * time.Hour, roleRecheck: auth.DefaultRoleRecheck, exchangeEnv: exchangeenv.Prod}},
 		{"flags over environment", map[string]string{"CPANEL_API_LISTEN": ":9000", "CPANEL_LOG_LEVEL": "debug", "CPANEL_DATABASE_URL": "postgres://env/cpanel", "CPANEL_REQUEST_TIMEOUT": "2s", "CPANEL_DISCORD_CLIENT_SECRET": "env-secret"},
 			[]string{"-listen=:7000", "-log-level=warn", "-shutdown-timeout=1m", "-request-timeout=1s", "-database=postgres://flag/cpanel", "-discord-client-secret=flag-secret", "-session-ttl=1h"},
-			options{listen: ":7000", database: "postgres://flag/cpanel", logLevel: logger.Level(zerolog.WarnLevel), shutdownTimeout: time.Minute, requestTimeout: time.Second, discordClientSecret: "flag-secret", sessionTTL: time.Hour, roleRecheck: auth.DefaultRoleRecheck}},
+			options{listen: ":7000", database: "postgres://flag/cpanel", logLevel: logger.Level(zerolog.WarnLevel), shutdownTimeout: time.Minute, requestTimeout: time.Second, discordClientSecret: "flag-secret", sessionTTL: time.Hour, roleRecheck: auth.DefaultRoleRecheck, exchangeEnv: exchangeenv.Prod}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -54,6 +55,15 @@ func TestParseArgs(t *testing.T) {
 	}
 	if _, _, err := parseArgs(nil, func(k string) string { return map[string]string{"CPANEL_LOG_LEVEL": "loud"}[k] }); err == nil {
 		t.Error("accepted CPANEL_LOG_LEVEL=loud")
+	}
+	if _, _, err := parseArgs(nil, func(k string) string { return map[string]string{"CPANEL_EXCHANGE_ENV": "testnet"}[k] }); err == nil {
+		t.Error("accepted testnet without the allow flag")
+	}
+	got, _, err := parseArgs(nil, func(k string) string {
+		return map[string]string{"CPANEL_EXCHANGE_ENV": "testnet", "CPANEL_ALLOW_TESTNET": "1"}[k]
+	})
+	if err != nil || got.exchangeEnv != exchangeenv.Testnet || got.allowTestnet != "1" {
+		t.Fatalf("testnet: %+v %v", got, err)
 	}
 }
 

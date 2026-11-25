@@ -19,6 +19,7 @@ import (
 
 	"github.com/BullionBear/cpanel/internal/cmdtest"
 	"github.com/BullionBear/cpanel/internal/history"
+	"github.com/BullionBear/cpanel/internal/platform/exchangeenv"
 	"github.com/BullionBear/cpanel/internal/platform/logger"
 	"github.com/BullionBear/cpanel/internal/platform/pgtest"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox"
@@ -33,16 +34,16 @@ func TestParseArgs(t *testing.T) {
 		args []string
 		want options
 	}{
-		{"defaults", nil, nil, options{listen: ":8081", logLevel: logger.DefaultLevel, shutdownTimeout: 10 * time.Second, reconcileInterval: 5 * time.Second, jobSlots: 4}},
+		{"defaults", nil, nil, options{listen: ":8081", logLevel: logger.DefaultLevel, shutdownTimeout: 10 * time.Second, reconcileInterval: 5 * time.Second, jobSlots: 4, exchangeEnv: exchangeenv.Prod}},
 		{"environment", map[string]string{
 			"CPANEL_WORKER_LISTEN": ":9001", "CPANEL_LOG_LEVEL": "debug", "CPANEL_SHUTDOWN_TIMEOUT": "3s",
 			"CPANEL_DATABASE_URL": "postgres://db/cpanel", "CPANEL_RECONCILE_INTERVAL": "2s", "CPANEL_JOB_SLOTS": "2",
 			"CPANEL_EGRESS":     "172.237.19.123",
 			"CPANEL_API_LISTEN": ":1", // the API's, not ours
-		}, nil, options{listen: ":9001", database: "postgres://db/cpanel", logLevel: logger.Level(zerolog.DebugLevel), shutdownTimeout: 3 * time.Second, reconcileInterval: 2 * time.Second, jobSlots: 2, egress: "172.237.19.123"}},
+		}, nil, options{listen: ":9001", database: "postgres://db/cpanel", logLevel: logger.Level(zerolog.DebugLevel), shutdownTimeout: 3 * time.Second, reconcileInterval: 2 * time.Second, jobSlots: 2, egress: "172.237.19.123", exchangeEnv: exchangeenv.Prod}},
 		{"flags over environment", map[string]string{"CPANEL_WORKER_LISTEN": ":9001", "CPANEL_LOG_LEVEL": "debug", "CPANEL_DATABASE_URL": "postgres://env/cpanel", "CPANEL_RECONCILE_INTERVAL": "2s", "CPANEL_JOB_SLOTS": "2", "CPANEL_EGRESS": "env"},
 			[]string{"-listen=:7001", "-log-level=warn", "-shutdown-timeout=1m", "-database=postgres://flag/cpanel", "-reconcile-interval=1s", "-job-slots=8", "-egress=flag"},
-			options{listen: ":7001", database: "postgres://flag/cpanel", logLevel: logger.Level(zerolog.WarnLevel), shutdownTimeout: time.Minute, reconcileInterval: time.Second, jobSlots: 8, egress: "flag"}},
+			options{listen: ":7001", database: "postgres://flag/cpanel", logLevel: logger.Level(zerolog.WarnLevel), shutdownTimeout: time.Minute, reconcileInterval: time.Second, jobSlots: 8, egress: "flag", exchangeEnv: exchangeenv.Prod}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -57,6 +58,15 @@ func TestParseArgs(t *testing.T) {
 	}
 	if _, _, err := parseArgs(nil, func(k string) string { return map[string]string{"CPANEL_LOG_LEVEL": "loud"}[k] }); err == nil {
 		t.Error("accepted CPANEL_LOG_LEVEL=loud")
+	}
+	if _, _, err := parseArgs(nil, func(k string) string { return map[string]string{"CPANEL_EXCHANGE_ENV": "testnet"}[k] }); err == nil {
+		t.Error("accepted testnet without the allow flag")
+	}
+	gotEnv, _, err := parseArgs(nil, func(k string) string {
+		return map[string]string{"CPANEL_EXCHANGE_ENV": "testnet", "CPANEL_ALLOW_TESTNET": "1"}[k]
+	})
+	if err != nil || gotEnv.exchangeEnv != exchangeenv.Testnet || gotEnv.allowTestnet != "1" {
+		t.Fatalf("testnet: %+v %v", gotEnv, err)
 	}
 	if got, _, err := parseArgs([]string{"-sym-url=http://sym", "doctor"}, nil); err != nil || !got.doctor || got.symURL != "http://sym" {
 		t.Errorf("doctor: %+v, %v", got, err)

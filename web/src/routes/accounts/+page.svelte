@@ -21,7 +21,7 @@
 		type KindChoice
 	} from '#lib/accounts.ts';
 
-	type Draft = { apiKey: string; apiSecret: string; passphrase: string };
+	type Draft = { apiKey: string; apiSecret: string; passphrase: string; keyType: 'hmac' | 'ed25519' };
 
 	const reasonLabels: Record<UnmatchedReason, string> = {
 		no_exchange_account: '沒有 vault 帳號',
@@ -54,7 +54,7 @@
 	}
 
 	function emptyDraft(): Draft {
-		return { apiKey: '', apiSecret: '', passphrase: '' };
+		return { apiKey: '', apiSecret: '', passphrase: '', keyType: 'hmac' };
 	}
 
 	function rememberDrafts(list: ExchangeAccount[]): void {
@@ -164,7 +164,9 @@
 				body:
 					account.exchange === 'okx'
 						? { api_key: draft.apiKey, api_secret: draft.apiSecret, passphrase: draft.passphrase }
-						: { api_key: draft.apiKey, api_secret: draft.apiSecret }
+						: account.exchange === 'binance'
+							? { api_key: draft.apiKey, api_secret: draft.apiSecret, key_type: draft.keyType }
+							: { api_key: draft.apiKey, api_secret: draft.apiSecret }
 			});
 			const message = failed(result, '沒有內容');
 			if (message || !result.data) {
@@ -376,6 +378,7 @@
 					<thead>
 						<tr>
 							<th>末四碼</th>
+							<th>類型</th>
 							<th>狀態</th>
 							<th>原因</th>
 							<th></th>
@@ -385,6 +388,7 @@
 						{#each account.credentials as credential (credential.id)}
 							<tr>
 								<td class="last4">····{credential.api_key_last4}</td>
+								<td>{credential.key_type}</td>
 								<td>{credential.status}</td>
 								<td class="wrap">{credential.failure_reason ?? ''}</td>
 								<td class="actions">
@@ -419,6 +423,15 @@
 						secret
 						<input type="password" bind:value={drafts[account.id].apiSecret} autocomplete="new-password" required />
 					</label>
+					{#if account.exchange === 'binance'}
+						<label>
+							key type
+							<select bind:value={drafts[account.id].keyType}>
+								<option value="hmac">hmac</option>
+								<option value="ed25519">ed25519</option>
+							</select>
+						</label>
+					{/if}
 					{#if account.exchange === 'okx'}
 						<label>
 							passphrase

@@ -183,7 +183,7 @@ func OpenCredentials(k *PrivateKey, sealed []byte, exchangeAccountID, credential
 	if msg.ApiKey == "" || msg.ApiSecret == "" {
 		return sealbox.Credentials{}, sealbox.ErrUnreadable
 	}
-	return sealbox.Credentials{APIKey: msg.ApiKey, APISecret: msg.ApiSecret, Passphrase: msg.Passphrase}, nil
+	return sealbox.Credentials{APIKey: msg.ApiKey, APISecret: msg.ApiSecret, Passphrase: msg.Passphrase, KeyType: msg.KeyType}, nil
 }
 
 func sealboxHeaderLen() int { return 1 + len(sealbox.PublicKey{}.Fingerprint()) }
