@@ -76,6 +76,8 @@ import (
 	"github.com/BullionBear/cpanel/internal/platform/logger"
 	"github.com/BullionBear/cpanel/internal/platform/sealbox/open"
 	"github.com/BullionBear/cpanel/internal/reconcile"
+	"github.com/BullionBear/cpanel/internal/snapshot"
+	"github.com/BullionBear/cpanel/internal/snapshotkind"
 	"github.com/BullionBear/cpanel/internal/sym"
 	"github.com/BullionBear/cpanel/internal/worker"
 	"github.com/BullionBear/cpanel/migrations"
@@ -272,9 +274,7 @@ func main() {
 	}
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
-	// C6-02 dispatches only a kind this worker can snapshot. C6-03 adds the first
-	// handler and its kind here. Empty inserts no snapshot jobs.
-	var snapshotKinds []string
+	snapshotKinds := snapshotKindsFor(key)
 	reg.MustRegister(newOpsCollector(pool, log, snapshotKinds))
 	rules := reconcile.Rules(snapshotKinds)
 	loop := &reconcile.Loop{
@@ -308,6 +308,7 @@ func main() {
 		handlers[reconcile.CredentialVerifyKind] = credential.Verify{DB: pool, Key: key, Previous: prev, Endpoints: endpoints, Env: opt.exchangeEnv}.Handle
 		handlers[reconcile.CredentialProbeKind] = credential.Probe{DB: pool, Key: key, Previous: prev, Endpoints: endpoints, Env: opt.exchangeEnv}.Handle
 		handlers[reconcile.CredentialRekey.Name] = credential.Rekey{DB: pool, Current: key, Previous: prev}.Handle
+		handlers[snapshot.JobKind] = snapshot.Fetch{DB: pool, Key: key, Previous: prev, Env: opt.exchangeEnv}.Handle
 	}
 	jobs := &worker.Worker{
 		DB: pool, Slots: opt.jobSlots, Grace: opt.shutdownTimeout, Egress: opt.egress, Log: log,
@@ -345,6 +346,16 @@ func keygen(path string) error {
 	}
 	fmt.Println(k.Public().String())
 	return nil
+}
+
+// snapshotKindsFor is the kind list the ReconcileLoop dispatches snapshot jobs for and the ops
+// collector covers. A worker without the sealbox key opens no credential: it registers no
+// snapshot handler and dispatches no snapshot job.
+func snapshotKindsFor(key *open.PrivateKey) []string {
+	if key == nil {
+		return nil
+	}
+	return snapshotkind.Implemented()
 }
 
 // loadSealboxPrivate parses the worker private key when a database URL is set, and the previous

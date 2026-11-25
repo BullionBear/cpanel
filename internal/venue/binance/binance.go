@@ -242,6 +242,10 @@ func readOnly(body []byte) (bool, string, string) {
 	return true, "enableReading=true", ""
 }
 
+// refine maps Binance's own codes onto the error classes (docs/venues/binance-um.md §6).
+// HTTP 403 is Binance's WAF limit, not a bad key, so it backs off and does not count
+// against the credential, whatever the body says. classify's default for 403 stays auth
+// for the other callers (C4-D008).
 func refine(status int, body []byte, err error) error {
 	if err == nil || status == http.StatusTeapot {
 		return err
@@ -249,6 +253,10 @@ func refine(status int, body []byte, err error) error {
 	ce, ok := err.(*classify.ClassifiedError)
 	if !ok || status == 0 {
 		return err
+	}
+	if status == http.StatusForbidden {
+		ce.Class = classify.RateLimited
+		return ce
 	}
 	var payload struct {
 		Code int `json:"code"`
@@ -259,7 +267,7 @@ func refine(status int, body []byte, err error) error {
 	switch payload.Code {
 	case -1003, -1015:
 		ce.Class = classify.RateLimited
-	case -2014, -2015:
+	case -1022, -2014, -2015:
 		ce.Class = classify.Auth
 	}
 	return ce

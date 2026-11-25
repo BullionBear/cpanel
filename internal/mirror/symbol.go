@@ -329,6 +329,25 @@ func LookupUID(ctx context.Context, tx pgx.Tx, venue, category, exchTicker strin
 	return uint32(uid), true, nil
 }
 
+// LookupTicker resolves an exchange spelling that has no category, such as a BinanceUM
+// position (C6-D007), to the category and UID of its mirror row. The row is chosen as in
+// LookupUID: an active row wins; otherwise the newest sym_updated_at, then the largest uid.
+func LookupTicker(ctx context.Context, tx pgx.Tx, venue, exchTicker string) (category string, uid uint32, ok bool, err error) {
+	var id int64
+	err = tx.QueryRow(ctx, `
+		SELECT category, uid FROM mirror.symbol
+		WHERE venue = $1 AND exch_ticker = $2
+		ORDER BY active DESC, sym_updated_at DESC NULLS LAST, uid DESC
+		LIMIT 1`, venue, exchTicker).Scan(&category, &id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, err
+	}
+	return category, uint32(id), true, nil
+}
+
 func upsertSymbol(ctx context.Context, tx pgx.Tx, inst sym.Instrument) error {
 	filters, err := json.Marshal(inst.Filters)
 	if err != nil {

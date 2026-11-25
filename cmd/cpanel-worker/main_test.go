@@ -427,6 +427,19 @@ func TestBinary(t *testing.T) {
 	})
 }
 
+func TestSnapshotKindsNeedTheKey(t *testing.T) {
+	if kinds := snapshotKindsFor(nil); len(kinds) != 0 {
+		t.Fatalf("a worker without the sealbox key dispatches %v", kinds)
+	}
+	k, err := open.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kinds := snapshotKindsFor(k); strings.Join(kinds, ",") != "BinanceUM" {
+		t.Fatalf("kinds %v", kinds)
+	}
+}
+
 func TestKeygen(t *testing.T) {
 	bin := cmdtest.Build(t)
 	dir := t.TempDir()
