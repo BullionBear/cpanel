@@ -14,7 +14,7 @@ import (
 // Replicas run the same statements at the same time. Each rule takes its keys in one fixed order, so a replica
 // that hits another's uncommitted key waits for it instead of deadlocking.
 func Rules(snapshotKinds []string) []Rule {
-	return []Rule{MaintPartitions, MftikoSync, SymSync, CredentialRekey, Credentials, Streams, Snapshots(snapshotKinds), Periodics}
+	return []Rule{MaintPartitions, MftikoSync, SymSync, CredentialRekey, Credentials, Persist, Streams, Snapshots(snapshotKinds), Periodics}
 }
 
 // CredentialVerifyKind is the job that opens one unverified credential and checks it

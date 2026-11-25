@@ -192,7 +192,7 @@ archtest 另外擋（C4-D002、C4-D006）：cpanel-api 不連結 `internal/mftik
 2. **落庫清單與 stream 規劃**（C7-02；upsert，不刪）：
    - 落庫清單 `ingest.persist_symbol` 只有兩個來源（C5-D007、C7-D001）：mftiko 的 scope（`source = mftiko`）與手動新增（`source = manual`，C7-06）。要擴展另開票。
    - scope 投影：`api_id` → `mirror.account` 的 `(exchange, exch_account_uid)` → `pms.exchange_account`，而且 `api_id` 的 kind 要在帳號上啟用（C4-D016）；對不到的計入 §4.1 的 unmatched，不建列。UID → `mirror.symbol` → `(venue, exch_ticker)`；scope 的 venue 要在 kind 的 `venues` 裡（C4-D015）。同一個 exchange_account 內同一個 UID 取各 `api_id` 最早的 `since`，往前多讀 1 分鐘（TD 主機與交易所的時鐘差，E21-D085）。列不刪、`since` 只往小改。
-   - 清單的每一列對到該 venue 需要的 stream，upsert 進 `ingest.stream`。帳號層級的 stream（funding）的 `source` 是 `system`。
+   - 清單的每一列對到該 venue 需要的 stream，upsert 進 `ingest.stream`，不刪、不寫 cursor（形狀在 C7-03、C7-05）。`Binance`、`BinanceUM`、`BinanceCM` 的成交是每個 UID 一條 `trade.history`（key `venue:uid`）。`Bybit`、`Okx` 是每個 category 一條（key `venue:category`）。有 funding 的 venue（現貨沒有）每個帳號一條 `funding.history`（key `venue`，`source = system`，間隔 1 小時）。hot／cold 只改成交 stream。同一商品兩個來源都有時，stream 的 `source` 跟較早的 `since`。
    - 不在清單的商品不建 stream，只告警：income 出現 `COMMISSION`、或持倉快照出現、卻不在清單裡的商品（C7-D001，C7-06）。Binance 現貨沒有帳號層級的成交端點，手動現貨交易只能靠操作者加進清單，UI 上明講。
 3. **stream 派工：** `next_due_at ≤ now`、沒有暫停（`paused_reason IS NULL`）、而且沒有未完成 job 的 stream 派一個 job；帳號沒有 `active` credential 的不派（C6-D002，C6-06）。`next_due_at` 由 worker 在 job 結束時更新（C3-03）：上一個 job 回報 `more = true`（還沒追上現在）的，`next_due_at = now`。
 4. **待查訂單：** `ingest.pending_order` 裡到期的，依 `(exchange_account, venue)` 批次派 `order.resolve`（§4.5）。
@@ -317,7 +317,7 @@ archtest 另外擋（C4-D002、C4-D006）：cpanel-api 不連結 `internal/mftik
 |---|---|---|
 | `pms` | `exchange_account(id)`，`UNIQUE(exchange, exch_account_uid)`（含軟刪除的列）；`account_kind(kind)`；`exchange_account_kind(exchange_account_id, kind)`；`credential(id)`；view `coverage`、`unmatched` | `exchange_account.label`、`revision`、`deleted_at`；`exchange_account_kind.disabled_at`、`verified_at`、`last_error`；`credential.status`、`reported_uid`、`permission_summary`、`failure_reason`、`consecutive_auth_failures`；每個帳號最多一把 `active`、一把 `unverified`（partial unique，C5-D001） |
 | `mirror` | `account(api_id)`、`scope(api_id, uid)`、`symbol(uid)`、`uid_lookup(uid)`、`sync_state(source)` | 只有 mirror job 寫，列不刪（C4-D010）；二期加 `session_record`、`session_account` |
-| `ingest` | `stream(id)`，`UNIQUE(kind, lease_key, key)` | `source`（`mftiko`／`manual`／`system`，C7-D001；C7-02 merge 前 migration 裡仍是 `scope／discovered／manual／system`）、`tier`、`period`、`cursor jsonb`、`cursor_version`、`next_due_at`、`paused_reason`、健康欄位 |
+| `ingest` | `stream(id)`，`UNIQUE(kind, lease_key, key)` | `source`（`mftiko`／`manual`／`system`，C7-D001）、`tier`、`period`、`cursor jsonb`、`cursor_version`、`next_due_at`、`paused_reason`、健康欄位 |
 | | `persist_symbol(exchange_account_id, venue, uid, source)` | 落庫清單（C7-02）：`source` 是 `mftiko` 或 `manual`，`since` 只往小改 |
 | | `job(id)`，不分區，只放未完成的 job | `dedup_key UNIQUE`：`stream:<id>`、`periodic:<name>`、`bucket:<kind>:<lease_key>:<時間點>`（C3-D001、D002） |
 | | `job_run`，按 UTC 日分區加 default 分區；`job_failure` | 完成的 job；分區由 `ingest.ensure_job_run_partition`、`ingest.expire_job_runs` 維護 |
